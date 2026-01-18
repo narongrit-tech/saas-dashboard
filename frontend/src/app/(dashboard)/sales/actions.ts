@@ -1,0 +1,110 @@
+'use server'
+
+import { createClient } from '@/lib/supabase/server'
+import { CreateOrderInput } from '@/types/sales'
+
+interface ActionResult {
+  success: boolean
+  error?: string
+  data?: any
+}
+
+export async function createManualOrder(input: CreateOrderInput): Promise<ActionResult> {
+  try {
+    // 1. Create Supabase server client and get user
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+    }
+
+    // 2. Validate input
+    if (!input.product_name || input.product_name.trim() === '') {
+      return { success: false, error: 'กรุณากระอกชื่อสินค้า' }
+    }
+
+    if (input.quantity <= 0) {
+      return { success: false, error: 'จำนวนต้องมากกว่า 0' }
+    }
+
+    if (input.unit_price < 0) {
+      return { success: false, error: 'ราคาต่อหน่วยต้องไม่ติดลบ' }
+    }
+
+    if (!input.order_date) {
+      return { success: false, error: 'กรุณาระบุวันที่สั่งซื้อ' }
+    }
+
+    // 3. Calculate total_amount (server-side, cannot be trusted from client)
+    let totalAmount: number
+
+    // Business rule: If cancelled, total must be 0
+    if (input.status.toLowerCase() === 'cancelled') {
+      totalAmount = 0
+    } else {
+      totalAmount = input.quantity * input.unit_price
+    }
+
+    // 4. Generate order_id in format: MAN-YYYYMMDD-XXX
+    const orderDate = new Date(input.order_date)
+    const dateStr = orderDate.toISOString().split('T')[0].replace(/-/g, '')
+    const prefix = `MAN-${dateStr}`
+
+    // Query existing manual orders for today to get counter
+    const { data: existingOrders, error: queryError } = await supabase
+      .from('sales_orders')
+      .select('order_id')
+      .ilike('order_id', `${prefix}%`)
+      .order('order_id', { ascending: false })
+      .limit(1)
+
+    if (queryError) {
+      console.error('Error querying existing orders:', queryError)
+      return { success: false, error: 'เกิดข้อผิดพลาดในการตรวจสอบ order id' }
+    }
+
+    let counter = 1
+    if (existingOrders && existingOrders.length > 0) {
+      const lastOrderId = existingOrders[0].order_id
+      const lastCounter = parseInt(lastOrderId.split('-')[2] || '0')
+      counter = lastCounter + 1
+    }
+
+    const orderId = `${prefix}-${counter.toString().padStart(3, '0')}`
+
+    // 5. Insert order into database
+    const { data: insertedOrder, error: insertError } = await supabase
+      .from('sales_orders')
+      .insert({
+        order_id: orderId,
+        marketplace: input.marketplace,
+        product_name: input.product_name.trim(),
+        quantity: input.quantity,
+        unit_price: input.unit_price,
+        total_amount: totalAmount,
+        order_date: input.order_date,
+        status: input.status,
+        source: 'manual',
+        created_by: user.id,
+      })
+      .select()
+      .single()
+
+    if (insertError) {
+      console.error('Error inserting order:', insertError)
+      return { success: false, error: `เกิดข้อผิดพลาด: ${insertError.message}` }
+    }
+
+    return { success: true, data: insertedOrder }
+  } catch (error) {
+    console.error('Unexpected error in createManualOrder:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}

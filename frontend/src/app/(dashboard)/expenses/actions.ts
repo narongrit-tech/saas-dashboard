@@ -1,0 +1,72 @@
+'use server'
+
+import { createClient } from '@/lib/supabase/server'
+import { CreateExpenseInput, ExpenseCategory } from '@/types/expenses'
+
+interface ActionResult {
+  success: boolean
+  error?: string
+  data?: any
+}
+
+const VALID_CATEGORIES: ExpenseCategory[] = ['Advertising', 'COGS', 'Operating']
+
+export async function createManualExpense(input: CreateExpenseInput): Promise<ActionResult> {
+  try {
+    // 1. Create Supabase server client and get user
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+    }
+
+    // 2. Validate input
+    if (!input.expense_date || input.expense_date.trim() === '') {
+      return { success: false, error: 'กรุณาระบุวันที่รายจ่าย' }
+    }
+
+    if (!VALID_CATEGORIES.includes(input.category)) {
+      return { success: false, error: 'หมวดหมู่รายจ่ายไม่ถูกต้อง' }
+    }
+
+    if (input.amount <= 0) {
+      return { success: false, error: 'จำนวนเงินต้องมากกว่า 0' }
+    }
+
+    // 3. Prepare description (use note or default)
+    const description = input.note && input.note.trim() !== ''
+      ? input.note.trim()
+      : 'รายจ่ายทั่วไป'
+
+    // 4. Insert expense into database
+    const { data: insertedExpense, error: insertError } = await supabase
+      .from('expenses')
+      .insert({
+        category: input.category,
+        amount: input.amount,
+        expense_date: input.expense_date,
+        description: description,
+        source: 'manual',
+        created_by: user.id,
+      })
+      .select()
+      .single()
+
+    if (insertError) {
+      console.error('Error inserting expense:', insertError)
+      return { success: false, error: `เกิดข้อผิดพลาด: ${insertError.message}` }
+    }
+
+    return { success: true, data: insertedExpense }
+  } catch (error) {
+    console.error('Unexpected error in createManualExpense:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
