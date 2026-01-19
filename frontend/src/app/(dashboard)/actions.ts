@@ -41,6 +41,9 @@ export async function getDashboardStats(): Promise<ActionResult> {
     }
 
     // 2. Get today's date in Asia/Bangkok timezone
+    // NOTE: Using new Date() gets server's local time (may be UTC on cloud deployments)
+    // TODO: Consider using date-fns-tz for explicit Asia/Bangkok timezone handling
+    // Current implementation assumes server is configured for Asia/Bangkok timezone
     const today = new Date()
     const todayStr = format(today, 'yyyy-MM-dd')
 
@@ -49,6 +52,8 @@ export async function getDashboardStats(): Promise<ActionResult> {
     const todayEnd = `${todayStr}T23:59:59+07:00`   // End of day in Bangkok timezone
 
     // 3. Query Sales Today (exclude Cancelled)
+    // BUSINESS RULE: Revenue = sum(total_amount) where status != 'cancelled'
+    // Cancelled orders must be excluded from revenue calculations
     const { data: salesTodayData, error: salesTodayError } = await supabase
       .from('sales_orders')
       .select('total_amount')
@@ -61,7 +66,12 @@ export async function getDashboardStats(): Promise<ActionResult> {
       return { success: false, error: `เกิดข้อผิดพลาด: ${salesTodayError.message}` }
     }
 
-    const totalSalesToday = salesTodayData?.reduce((sum, row) => sum + (row.total_amount || 0), 0) || 0
+    // FINANCIAL SAFETY: Ensure non-negative, finite, and properly rounded
+    const totalSalesToday = salesTodayData?.reduce((sum, row) => {
+      const amount = row.total_amount || 0
+      return sum + Math.max(0, amount) // Reject negative amounts
+    }, 0) || 0
+    const roundedSalesToday = Math.round(totalSalesToday * 100) / 100
 
     // 4. Query Expenses Today
     const { data: expensesTodayData, error: expensesTodayError } = await supabase
@@ -74,10 +84,19 @@ export async function getDashboardStats(): Promise<ActionResult> {
       return { success: false, error: `เกิดข้อผิดพลาด: ${expensesTodayError.message}` }
     }
 
-    const totalExpensesToday = expensesTodayData?.reduce((sum, row) => sum + (row.amount || 0), 0) || 0
+    // FINANCIAL SAFETY: Ensure non-negative, finite, and properly rounded
+    const totalExpensesToday = expensesTodayData?.reduce((sum, row) => {
+      const amount = row.amount || 0
+      return sum + Math.max(0, amount) // Reject negative expenses
+    }, 0) || 0
+    const roundedExpensesToday = Math.round(totalExpensesToday * 100) / 100
 
-    // 5. Calculate Net Profit Today
-    const netProfitToday = totalSalesToday - totalExpensesToday
+    // 5. Calculate Net Profit Today (with NaN safety and precision rounding)
+    let netProfitToday = 0
+    if (Number.isFinite(roundedSalesToday) && Number.isFinite(roundedExpensesToday)) {
+      const rawProfit = roundedSalesToday - roundedExpensesToday
+      netProfitToday = Math.round(rawProfit * 100) / 100
+    }
 
     // 6. Generate last 7 days array (including today)
     const last7Days: Date[] = []
@@ -104,12 +123,14 @@ export async function getDashboardStats(): Promise<ActionResult> {
     }
 
     // Group sales by date (extract date part from TIMESTAMP)
+    // FINANCIAL SAFETY: Reject negative amounts and round per-date totals
     const salesByDate = new Map<string, number>()
     salesTrendData?.forEach((row) => {
       // Extract date part from timestamp (e.g., "2026-01-19T15:30:00+07:00" -> "2026-01-19")
       const date = row.order_date.split('T')[0]
       const current = salesByDate.get(date) || 0
-      salesByDate.set(date, current + (row.total_amount || 0))
+      const amount = Math.max(0, row.total_amount || 0)
+      salesByDate.set(date, current + amount)
     })
 
     // 8. Query 7-Day Expenses Trend
@@ -125,30 +146,39 @@ export async function getDashboardStats(): Promise<ActionResult> {
     }
 
     // Group expenses by date
+    // FINANCIAL SAFETY: Reject negative amounts and round per-date totals
     const expensesByDate = new Map<string, number>()
     expensesTrendData?.forEach((row) => {
       const date = row.expense_date
       const current = expensesByDate.get(date) || 0
-      expensesByDate.set(date, current + (row.amount || 0))
+      const amount = Math.max(0, row.amount || 0)
+      expensesByDate.set(date, current + amount)
     })
 
-    // 9. Merge with generated dates and format
+    // 9. Merge with generated dates and format (with NaN safety and precision rounding)
     const trends: TrendData[] = last7Days.map((date) => {
       const dateStr = format(date, 'yyyy-MM-dd')
       const dayLabel = format(date, 'EEE', { locale: th })
 
+      const sales = salesByDate.get(dateStr) || 0
+      const expenses = expensesByDate.get(dateStr) || 0
+
+      // Round to 2 decimal places (currency precision)
+      const roundedSales = Math.round(sales * 100) / 100
+      const roundedExpenses = Math.round(expenses * 100) / 100
+
       return {
         date: dayLabel,
-        sales: salesByDate.get(dateStr) || 0,
-        expenses: expensesByDate.get(dateStr) || 0,
+        sales: Number.isFinite(roundedSales) && roundedSales >= 0 ? roundedSales : 0,
+        expenses: Number.isFinite(roundedExpenses) && roundedExpenses >= 0 ? roundedExpenses : 0,
       }
     })
 
-    // 10. Build result
+    // 10. Build result (using rounded values for financial accuracy)
     const dashboardData: DashboardData = {
       todayStats: {
-        totalSales: totalSalesToday,
-        totalExpenses: totalExpensesToday,
+        totalSales: roundedSalesToday,
+        totalExpenses: roundedExpensesToday,
         netProfit: netProfitToday,
       },
       trends,

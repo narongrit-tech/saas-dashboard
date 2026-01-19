@@ -10,6 +10,7 @@ import {
   Package,
   CreditCard,
   BarChart3,
+  Wallet,
   Settings,
 } from 'lucide-react'
 
@@ -30,6 +31,16 @@ const menuItems = [
     icon: Receipt,
   },
   {
+    title: 'Daily P&L',
+    href: '/daily-pl',
+    icon: BarChart3,
+  },
+  {
+    title: 'Cashflow',
+    href: '/cashflow',
+    icon: Wallet,
+  },
+  {
     title: 'Inventory',
     href: '/inventory',
     icon: Package,
@@ -38,11 +49,6 @@ const menuItems = [
     title: 'Payables',
     href: '/payables',
     icon: CreditCard,
-  },
-  {
-    title: 'Reports',
-    href: '/reports',
-    icon: BarChart3,
   },
   {
     title: 'Settings',
