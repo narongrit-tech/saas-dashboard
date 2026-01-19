@@ -20,7 +20,8 @@
       "Bash(if exist .next rmdir /s /q .next)",
       "mcp__ide__getDiagnostics",
       "Bash(dir:*)",
-      "Bash(npm run lint:*)"
+      "Bash(npm run lint:*)",
+      "Bash(npx next build:*)"
     ]
   },
   "approvalMode": "auto",

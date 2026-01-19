@@ -204,3 +204,174 @@ export async function getNext7DaysForecast() {
     return { success: false, error: 'Internal server error' }
   }
 }
+
+/**
+ * Get Settled Transactions Summary for date range
+ */
+export async function getSettledSummary(startDate: Date, endDate: Date) {
+  try {
+    const supabase = await createClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) {
+      return { success: false, error: 'Unauthorized' }
+    }
+
+    const { data, error } = await supabase
+      .from('settlement_transactions')
+      .select('settlement_amount')
+      .eq('created_by', user.id)
+      .gte('settled_time', startDate.toISOString())
+      .lte('settled_time', endDate.toISOString())
+
+    if (error) {
+      console.error('Error fetching settled summary:', error)
+      return { success: false, error: error.message }
+    }
+
+    const settledAmount =
+      data?.reduce((sum, txn) => sum + (txn.settlement_amount || 0), 0) || 0
+
+    return {
+      success: true,
+      data: {
+        settled_amount: settledAmount,
+        transaction_count: data?.length || 0,
+      },
+    }
+  } catch (err) {
+    console.error('Error in getSettledSummary:', err)
+    return { success: false, error: 'Internal server error' }
+  }
+}
+
+/**
+ * Get Settled Transactions for date range
+ */
+export async function getSettledTransactions(startDate: Date, endDate: Date) {
+  try {
+    const supabase = await createClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) {
+      return { success: false, error: 'Unauthorized' }
+    }
+
+    const { data, error } = await supabase
+      .from('settlement_transactions')
+      .select('*')
+      .eq('created_by', user.id)
+      .gte('settled_time', startDate.toISOString())
+      .lte('settled_time', endDate.toISOString())
+      .order('settled_time', { ascending: false })
+
+    if (error) {
+      console.error('Error fetching settled transactions:', error)
+      return { success: false, error: error.message }
+    }
+
+    return {
+      success: true,
+      data: data || [],
+    }
+  } catch (err) {
+    console.error('Error in getSettledTransactions:', err)
+    return { success: false, error: 'Internal server error' }
+  }
+}
+
+/**
+ * Get Overdue Forecast (unsettled past estimated_settle_time)
+ */
+export async function getOverdueForecast() {
+  try {
+    const supabase = await createClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) {
+      return { success: false, error: 'Unauthorized' }
+    }
+
+    const now = new Date()
+
+    const { data, error } = await supabase
+      .from('unsettled_transactions')
+      .select('*')
+      .eq('created_by', user.id)
+      .eq('status', 'unsettled')
+      .lt('estimated_settle_time', now.toISOString())
+      .order('estimated_settle_time', { ascending: true })
+
+    if (error) {
+      console.error('Error fetching overdue forecast:', error)
+      return { success: false, error: error.message }
+    }
+
+    return {
+      success: true,
+      data: data || [],
+    }
+  } catch (err) {
+    console.error('Error in getOverdueForecast:', err)
+    return { success: false, error: 'Internal server error' }
+  }
+}
+
+/**
+ * Get Settled Without Forecast (settled but no matching unsettled record)
+ */
+export async function getSettledWithoutForecast(startDate: Date, endDate: Date) {
+  try {
+    const supabase = await createClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) {
+      return { success: false, error: 'Unauthorized' }
+    }
+
+    // Get all settled transactions in range
+    const { data: settled, error: settledError } = await supabase
+      .from('settlement_transactions')
+      .select('*')
+      .eq('created_by', user.id)
+      .gte('settled_time', startDate.toISOString())
+      .lte('settled_time', endDate.toISOString())
+
+    if (settledError) {
+      console.error('Error fetching settled transactions:', settledError)
+      return { success: false, error: settledError.message }
+    }
+
+    // Filter those without matching unsettled record
+    const withoutForecast = []
+    for (const settlement of settled || []) {
+      const { data: unsettled } = await supabase
+        .from('unsettled_transactions')
+        .select('id')
+        .eq('marketplace', settlement.marketplace)
+        .eq('txn_id', settlement.txn_id)
+        .eq('created_by', user.id)
+        .single()
+
+      if (!unsettled) {
+        withoutForecast.push(settlement)
+      }
+    }
+
+    return {
+      success: true,
+      data: withoutForecast,
+    }
+  } catch (err) {
+    console.error('Error in getSettledWithoutForecast:', err)
+    return { success: false, error: 'Internal server error' }
+  }
+}
