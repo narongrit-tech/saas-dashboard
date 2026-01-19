@@ -11,6 +11,7 @@ import {
   CreditCard,
   BarChart3,
   Wallet,
+  TrendingUp,
   Settings,
 } from 'lucide-react'
 
@@ -39,6 +40,11 @@ const menuItems = [
     title: 'Cashflow',
     href: '/cashflow',
     icon: Wallet,
+  },
+  {
+    title: 'Ads',
+    href: '/ads',
+    icon: TrendingUp,
   },
   {
     title: 'Inventory',

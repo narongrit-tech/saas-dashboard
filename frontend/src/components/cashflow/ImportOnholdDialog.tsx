@@ -1,0 +1,184 @@
+'use client';
+
+import { useState } from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+
+interface ImportOnholdDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSuccess: () => void;
+}
+
+export function ImportOnholdDialog({ open, onOpenChange, onSuccess }: ImportOnholdDialogProps) {
+  const [file, setFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+  const [result, setResult] = useState<{
+    rowCount: number;
+    insertedCount: number;
+    updatedCount: number;
+    errorCount: number;
+    warnings: string[];
+  } | null>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0];
+    if (selectedFile) {
+      setFile(selectedFile);
+      setError(null);
+      setSuccess(false);
+      setResult(null);
+    }
+  };
+
+  const handleUpload = async () => {
+    if (!file) {
+      setError('กรุณาเลือกไฟล์');
+      return;
+    }
+
+    try {
+      setUploading(true);
+      setError(null);
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await fetch('/api/import/tiktok/onhold', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        setError(data.error || data.message || 'การนำเข้าข้อมูลล้มเหลว');
+        return;
+      }
+
+      setSuccess(true);
+      setResult(data);
+
+      // Call onSuccess after a short delay
+      setTimeout(() => {
+        onSuccess();
+        handleClose();
+      }, 2000);
+    } catch (err) {
+      console.error('Upload error:', err);
+      setError('เกิดข้อผิดพลาดในการนำเข้าข้อมูล');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleClose = () => {
+    setFile(null);
+    setError(null);
+    setSuccess(false);
+    setResult(null);
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[500px]">
+        <DialogHeader>
+          <DialogTitle>Import TikTok Onhold Data</DialogTitle>
+          <DialogDescription>
+            อัปโหลดไฟล์ Excel ที่ส่งออกจาก TikTok Onhold/Unsettled Orders
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-4">
+          {/* File Input */}
+          <div className="space-y-2">
+            <Label htmlFor="file">เลือกไฟล์ Excel (.xlsx)</Label>
+            <Input
+              id="file"
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={handleFileChange}
+              disabled={uploading || success}
+            />
+            {file && (
+              <p className="text-sm text-muted-foreground">
+                ไฟล์ที่เลือก: {file.name} ({(file.size / 1024).toFixed(2)} KB)
+              </p>
+            )}
+          </div>
+
+          {/* Error Alert */}
+          {error && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+
+          {/* Success Alert */}
+          {success && result && (
+            <Alert className="border-green-200 bg-green-50">
+              <CheckCircle className="h-4 w-4 text-green-600" />
+              <AlertDescription>
+                <div className="text-green-600">
+                  <div className="font-semibold mb-1">นำเข้าข้อมูลสำเร็จ!</div>
+                  <div className="text-sm space-y-1">
+                    <div>• ทั้งหมด: {result.rowCount} รายการ</div>
+                    <div>• เพิ่มใหม่: {result.insertedCount} รายการ</div>
+                    <div>• อัปเดต: {result.updatedCount} รายการ</div>
+                    {result.errorCount > 0 && (
+                      <div className="text-red-600">• ข้อผิดพลาด: {result.errorCount} รายการ</div>
+                    )}
+                  </div>
+                </div>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Warnings */}
+          {result && result.warnings && result.warnings.length > 0 && (
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                <div className="text-sm">
+                  <div className="font-semibold mb-1">คำเตือน:</div>
+                  <ul className="list-disc list-inside space-y-1">
+                    {result.warnings.slice(0, 5).map((warning: string, i: number) => (
+                      <li key={i}>{warning}</li>
+                    ))}
+                    {result.warnings.length > 5 && (
+                      <li>... และอีก {result.warnings.length - 5} รายการ</li>
+                    )}
+                  </ul>
+                </div>
+              </AlertDescription>
+            </Alert>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={handleClose} disabled={uploading}>
+            ยกเลิก
+          </Button>
+          <Button onClick={handleUpload} disabled={!file || uploading || success}>
+            {uploading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            {uploading ? 'กำลังนำเข้า...' : 'นำเข้าข้อมูล'}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
