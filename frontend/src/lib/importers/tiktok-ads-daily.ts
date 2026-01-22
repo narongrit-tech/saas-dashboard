@@ -70,7 +70,7 @@ function findColumn(headers: string[], variants: string[]): number {
 /**
  * Safe parse numeric value
  */
-function parseNumeric(value: any): number {
+function parseNumeric(value: unknown): number {
   if (value === null || value === undefined || value === '') return 0;
   const num = typeof value === 'number' ? value : parseFloat(String(value).replace(/,/g, ''));
   return isNaN(num) ? 0 : num;
@@ -79,7 +79,7 @@ function parseNumeric(value: any): number {
 /**
  * Safe parse date value
  */
-function parseDate(value: any): Date | null {
+function parseDate(value: unknown): Date | null {
   if (!value) return null;
 
   // Excel serial date number
@@ -147,7 +147,7 @@ export function parseAdsExcel(buffer: Buffer): {
   }
 
   const worksheet = workbook.Sheets[sheetName];
-  const data = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+  const data = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as unknown[][];
 
   if (data.length < 2) {
     throw new Error('Excel file is empty or has no data rows');

@@ -62,33 +62,49 @@ Later: CSV import, inventory, payables, reports, tax, APIs
 
 ---
 
-# Current System State (Updated: 2026-01-19)
+# Current System State (Updated: 2026-01-23)
 
 ## ✅ Completed Features
 
-### Sales Orders (Partial MVP)
+### Sales Orders (COMPLETE - MVP Core Feature)
 - ✅ View: Paginated list with filters (marketplace, date range, search)
 - ✅ Add: Manual order entry with validation
-- ❌ Edit: NOT YET IMPLEMENTED
-- ❌ Delete: NOT YET IMPLEMENTED
-- ❌ Export: NOT YET IMPLEMENTED
+- ✅ Edit: Update existing orders with server-side validation
+- ✅ Delete: Hard delete with confirmation dialog
+- ✅ Export: CSV export respecting all filters (Asia/Bangkok timezone)
 
 **Location:**
 - Page: `frontend/src/app/(dashboard)/sales/page.tsx`
 - Actions: `frontend/src/app/(dashboard)/sales/actions.ts`
-- Component: `frontend/src/components/sales/AddOrderDialog.tsx`
+- Components:
+  - `frontend/src/components/sales/AddOrderDialog.tsx`
+  - `frontend/src/components/sales/EditOrderDialog.tsx`
+  - `frontend/src/components/shared/DeleteConfirmDialog.tsx`
 
-### Expenses (Partial MVP)
+**CSV Export:**
+- Filename format: `sales-orders-YYYYMMDD-HHmmss.csv`
+- Headers: Order ID, Marketplace, Product Name, Quantity, Unit Price, Total Amount, Status, Order Date, Created At
+- Server-side generation, respects filters (marketplace, date range, search)
+
+### Expenses (COMPLETE - MVP Core Feature)
 - ✅ View: Paginated list with filters (category, date range, search)
 - ✅ Add: Manual expense entry with category validation
-- ❌ Edit: NOT YET IMPLEMENTED
-- ❌ Delete: NOT YET IMPLEMENTED
-- ❌ Export: NOT YET IMPLEMENTED
+- ✅ Edit: Update existing expenses with server-side validation
+- ✅ Delete: Hard delete with confirmation dialog
+- ✅ Export: CSV export respecting all filters (Asia/Bangkok timezone)
 
 **Location:**
 - Page: `frontend/src/app/(dashboard)/expenses/page.tsx`
 - Actions: `frontend/src/app/(dashboard)/expenses/actions.ts`
-- Component: `frontend/src/components/expenses/AddExpenseDialog.tsx`
+- Components:
+  - `frontend/src/components/expenses/AddExpenseDialog.tsx`
+  - `frontend/src/components/expenses/EditExpenseDialog.tsx`
+  - `frontend/src/components/shared/DeleteConfirmDialog.tsx`
+
+**CSV Export:**
+- Filename format: `expenses-YYYYMMDD-HHmmss.csv`
+- Headers: Expense Date, Category, Amount, Description, Notes, Created At
+- Server-side generation, respects filters (category, date range, search)
 
 ### Dashboard (Complete)
 - ✅ Total Sales Today (excludes cancelled)
@@ -138,41 +154,106 @@ Later: CSV import, inventory, payables, reports, tax, APIs
 - Net Change = Cash In - Cash Out
 - Running Balance = Cumulative sum (simple version, no bank API)
 
+### Multi-Wallet System (COMPLETE - Phase 3)
+- ✅ 2 wallets: TikTok Ads, Foreign Subscriptions
+- ✅ Future-proof design (scalable to more wallets)
+- ✅ Wallet ledger with CRUD operations
+- ✅ Balance calculation (opening, in, out, closing)
+- ✅ CSV export with filters
+- ✅ **STRICT business rules enforcement**
+
+**Location:**
+- Page: `frontend/src/app/(dashboard)/wallets/page.tsx`
+- Actions: `frontend/src/app/(dashboard)/wallets/actions.ts`
+- Balance Utility: `frontend/src/lib/wallet-balance.ts`
+- Types: `frontend/src/types/wallets.ts`
+- Components:
+  - `frontend/src/components/wallets/AddLedgerDialog.tsx`
+  - `frontend/src/components/wallets/EditLedgerDialog.tsx`
+- Database:
+  - Migration: `database-scripts/migration-005-wallets.sql`
+  - Seed: `database-scripts/migration-005-wallets-seed.sql`
+
+**⚠️ CRITICAL Business Rules (Server-Side Enforced):**
+
+1. **ADS Wallet - SPEND Source Lock** 🔒
+   - Ad Spend MUST come from Ads Report ONLY (`source=IMPORTED`)
+   - Manual SPEND creation is BLOCKED
+   - Error: "❌ ห้ามสร้าง SPEND แบบ Manual สำหรับ ADS Wallet"
+
+2. **Top-up is NOT an Expense**
+   - Wallet top-up is a cash transfer, NOT a P&L expense
+   - Only actual Ad Spend (from report) affects P&L
+   - Prevents double-counting
+
+3. **SUBSCRIPTION Wallet Rules**
+   - Manual SPEND entries ALLOWED (for SaaS subscriptions)
+   - Monthly recurring charges tracked manually
+
+4. **Immutable IMPORTED Entries**
+   - Cannot edit or delete `source=IMPORTED` entries
+   - Must update source file and re-import
+
+5. **Entry Type + Direction Validation**
+   - TOP_UP → must be IN
+   - SPEND → must be OUT
+   - REFUND → must be IN
+   - ADJUSTMENT → can be IN or OUT
+
+**Two Views Concept:**
+- **Accrual P&L** (Performance): Revenue - Ad Spend (from report) - COGS - Operating
+- **Cashflow Summary** (Liquidity): Cash In/Out + Wallet movements
+
+**See:** `WALLET_BUSINESS_RULES.md` for detailed explanation
+
+**CSV Export:**
+- Filename format: `wallet-{name}-YYYYMMDD-HHmmss.csv`
+- Headers: Date, Entry Type, Direction, Amount, Source, Reference ID, Note, Created At
+- Respects filters (wallet, date range, entry_type, source)
+
 ---
 
-## 🚀 Safe to Extend Next
+## 🚀 Future Enhancements (Not in Current MVP)
 
-### Immediate Next Steps (No Breaking Changes)
-1. **Edit/Delete for Sales Orders**
-   - Create `EditOrderDialog.tsx` component
-   - Add `updateOrder()` and `deleteOrder()` server actions
-   - Pattern: Follow `AddOrderDialog.tsx` structure
-
-2. **Edit/Delete for Expenses**
-   - Create `EditExpenseDialog.tsx` component
-   - Add `updateExpense()` and `deleteExpense()` server actions
-   - Pattern: Follow `AddExpenseDialog.tsx` structure
-
-3. **Export to CSV**
-   - Add server actions to generate CSV
-   - Use existing filtered data
-   - No DB schema changes needed
-
-4. **CSV Import**
-   - Add upload component
+### Phase 3 - Data Import & Automation
+1. **CSV Import for Sales Orders**
+   - Upload component with drag-and-drop
    - Server-side parsing and validation
-   - Reuse existing `createManualOrder()` / `createManualExpense()`
+   - Reuse existing `createManualOrder()` logic
+   - Duplicate detection
 
-5. **Daily P&L Page**
-   - Create new page: `frontend/src/app/(dashboard)/daily-pl/page.tsx`
-   - Use existing utilities from `lib/daily-pl.ts`
-   - Display date range + P&L breakdown table
+2. **CSV Import for Expenses**
+   - Upload component
+   - Server-side parsing and validation
+   - Reuse existing `createManualExpense()` logic
+
+### Phase 4 - Advanced Features
+3. **Inventory Management**
+   - Product master data
+   - Stock tracking
+   - Low stock alerts
+
+4. **Payables/Receivables Tracking**
+   - Supplier payment tracking
+   - Customer payment status
+   - Aging reports
+
+5. **Tax Calculation & Reports**
+   - VAT calculation
+   - Withholding tax
+   - Monthly/Quarterly reports
+
+6. **CEO Commission Flow (TikTok)**
+   - Personal income tracking
+   - Director's Loan tracking
+   - Separation of personal vs company funds
 
 ### Safe Extension Principles
 - Current features are well-isolated
 - Server actions pattern is established
 - Business rules are documented
 - No refactoring required for extensions
+- All core CRUD + Export operations complete
 
 ---
 
@@ -210,9 +291,22 @@ These files contain critical business logic. Changes require careful review:
    - Expense creation logic
    - Audit trail: source='manual', created_by
 
+6. **`frontend/src/app/(dashboard)/wallets/actions.ts`** ⭐ CORE
+   - **STRICT validation of wallet business rules**
+   - ADS wallet: SPEND must be IMPORTED only (blocks manual)
+   - Validation: entry_type + direction + source combinations
+   - Prevents editing/deleting IMPORTED entries
+   - DO NOT MODIFY without understanding business rules
+
+7. **`frontend/src/lib/wallet-balance.ts`** ⭐ CORE
+   - Wallet balance calculation (opening, in, out, closing)
+   - Breakdown by entry type (top-up, spend, refund, adjustment)
+   - Used for wallet summary cards
+   - DO NOT CHANGE without approval
+
 ### Database Schema Files
-- Supabase migrations (if any)
-- RLS policies
+- Supabase migrations (especially `migration-005-wallets.sql`)
+- RLS policies (wallet access control)
 
 ### What CAN be modified safely:
 - UI components (pages, dialogs, cards)
@@ -224,27 +318,17 @@ These files contain critical business logic. Changes require careful review:
 
 ## ⚠️ Known Issues & Technical Debt
 
-### 🔴 HIGH PRIORITY - Timezone Handling
-**Issue:**
-- Code uses `new Date()` which gets server's local timezone
-- Business requires Asia/Bangkok (UTC+7)
-- If deployed to cloud (UTC), dates will be wrong by 7 hours
+### 🟢 RESOLVED - Timezone Handling
+**Status:** ✅ FIXED (Phase 2B - 2026-01-23)
+- Implemented `frontend/src/lib/bangkok-time.ts` utility
+- All date operations now use Asia/Bangkok timezone consistently
+- Export filenames include Bangkok timezone timestamp
+- No more timezone-related bugs
 
-**Impact:**
-- Daily reports may count wrong day's data
-- Order/expense dates may display incorrectly
-
-**Location:**
-- `frontend/src/app/(dashboard)/actions.ts:47`
-- `frontend/src/app/(dashboard)/sales/actions.ts:54`
-- All date-related code
-
-**Fix Required:**
-- Install `date-fns-tz` package
-- Use `toZonedTime(new Date(), 'Asia/Bangkok')` consistently
-- OR configure server timezone to Asia/Bangkok
-
-**Documented in:** `BUSINESS_RULES_AUDIT.md`
+**Solution:**
+- Centralized timezone utilities using `date-fns-tz`
+- All new code uses `getBangkokNow()`, `formatBangkok()`, etc.
+- Export actions properly handle date filtering with Bangkok timezone
 
 ---
 
@@ -299,11 +383,24 @@ Read these for context before making changes:
    - Edge cases and safety verification
    - Created: Phase E (MVP Completion)
 
-4. **`CLAUDE.md`** (this file)
+4. **`WALLET_BUSINESS_RULES.md`** ⭐ CRITICAL
+   - **WHY 2 views: Accrual P&L vs Cashflow Summary**
+   - **ADS Wallet rules: Top-up ≠ Expense, Spend = Report ONLY**
+   - Common mistakes prevented by system
+   - Validation matrix for all wallet types
+   - Created: Phase 3 (Multi-Wallet Foundation)
+
+5. **`WALLET_VERIFICATION.md`**
+   - Manual test checklist for wallet system
+   - Business rules verification
+   - Edge cases and error scenarios
+   - Created: Phase 3 (Multi-Wallet Foundation)
+
+6. **`CLAUDE.md`** (this file)
    - Project rules and guidelines
    - Current system state
    - Extension guide
-   - Updated: 2026-01-19 (MVP Completion)
+   - Updated: 2026-01-23 (Phase 3: Multi-Wallet Complete)
 
 ---
 

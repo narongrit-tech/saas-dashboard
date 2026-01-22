@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -20,37 +20,52 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { CreateExpenseInput, ExpenseCategory } from '@/types/expenses'
+import { Expense, UpdateExpenseInput, ExpenseCategory } from '@/types/expenses'
 import { Loader2 } from 'lucide-react'
-import { createManualExpense } from '@/app/(dashboard)/expenses/actions'
+import { updateExpense } from '@/app/(dashboard)/expenses/actions'
 
-interface AddExpenseDialogProps {
+interface EditExpenseDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSuccess: () => void
+  expense: Expense | null
 }
 
 const CATEGORIES: ExpenseCategory[] = ['Advertising', 'COGS', 'Operating']
 
-function getTodayDate(): string {
-  return new Date().toISOString().split('T')[0]
-}
-
-export function AddExpenseDialog({ open, onOpenChange, onSuccess }: AddExpenseDialogProps) {
+export function EditExpenseDialog({
+  open,
+  onOpenChange,
+  onSuccess,
+  expense,
+}: EditExpenseDialogProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Form state with defaults
-  const [formData, setFormData] = useState<CreateExpenseInput>({
-    expense_date: getTodayDate(),
+  // Form state
+  const [formData, setFormData] = useState<UpdateExpenseInput>({
+    expense_date: '',
     category: 'Advertising',
     amount: 0,
     note: '',
   })
 
-  const handleChange = (field: keyof CreateExpenseInput, value: string | number | ExpenseCategory) => {
+  // Populate form when expense changes
+  useEffect(() => {
+    if (expense) {
+      setFormData({
+        expense_date: expense.expense_date.split('T')[0], // Extract YYYY-MM-DD
+        category: expense.category,
+        amount: expense.amount,
+        note: expense.description || '',
+      })
+      setError(null)
+    }
+  }, [expense])
+
+  const handleChange = (field: keyof UpdateExpenseInput, value: string | number | ExpenseCategory) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
-    setError(null) // Clear error when user makes changes
+    setError(null)
   }
 
   const validateForm = (): string | null => {
@@ -67,6 +82,11 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess }: AddExpenseDi
     e.preventDefault()
     setError(null)
 
+    if (!expense) {
+      setError('ไม่พบข้อมูลรายจ่าย')
+      return
+    }
+
     // Client-side validation
     const validationError = validateForm()
     if (validationError) {
@@ -77,39 +97,25 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess }: AddExpenseDi
     setLoading(true)
 
     try {
-      // Call Server Action
-      const result = await createManualExpense(formData)
+      const result = await updateExpense(expense.id, formData)
 
       if (!result.success) {
-        setError(result.error || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล')
+        setError(result.error || 'เกิดข้อผิดพลาดในการอัปเดตข้อมูล')
         return
       }
 
-      // Success - reset form and close dialog
-      setFormData({
-        expense_date: getTodayDate(),
-        category: 'Advertising',
-        amount: 0,
-        note: '',
-      })
+      // Success - close dialog and refresh
       onOpenChange(false)
       onSuccess()
     } catch (err) {
-      console.error('Error submitting expense:', err)
-      setError('เกิดข้อผิดพลาดในการบันทึกข้อมูล')
+      console.error('Error updating expense:', err)
+      setError('เกิดข้อผิดพลาดในการอัปเดตข้อมูล')
     } finally {
       setLoading(false)
     }
   }
 
   const handleCancel = () => {
-    // Reset form when closing
-    setFormData({
-      expense_date: getTodayDate(),
-      category: 'Advertising',
-      amount: 0,
-      note: '',
-    })
     setError(null)
     onOpenChange(false)
   }
@@ -128,9 +134,9 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess }: AddExpenseDi
       <DialogContent className="sm:max-w-[500px]">
         <form onSubmit={handleSubmit}>
           <DialogHeader>
-            <DialogTitle>เพิ่มรายการค่าใช้จ่าย</DialogTitle>
+            <DialogTitle>แก้ไขรายการค่าใช้จ่าย</DialogTitle>
             <DialogDescription>
-              บันทึกค่าใช้จ่ายรายวันเพื่อคำนวณ P&L ให้แม่นยำ
+              แก้ไขข้อมูลรายจ่ายที่เลือก
             </DialogDescription>
           </DialogHeader>
 

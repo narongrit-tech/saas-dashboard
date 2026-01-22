@@ -28,3 +28,10 @@ export interface CreateExpenseInput {
   amount: number
   note?: string
 }
+
+export interface UpdateExpenseInput {
+  expense_date: string
+  category: ExpenseCategory
+  amount: number
+  note?: string
+}

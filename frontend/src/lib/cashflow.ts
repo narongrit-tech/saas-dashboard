@@ -23,6 +23,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { toBangkokTime, formatBangkok } from '@/lib/bangkok-time'
 
 /**
  * Daily Cashflow Data Structure
@@ -112,9 +113,9 @@ async function getDailyCashOut(
 /**
  * Calculate complete Daily Cashflow for a specific date
  *
- * NOTE: Uses server's local time for date. If server is UTC, may need date-fns-tz.
+ * NOTE: Uses Bangkok timezone for all date calculations.
  *
- * @param date - Date in YYYY-MM-DD format
+ * @param date - Date in YYYY-MM-DD format (Bangkok timezone)
  * @returns Complete cashflow data with cash in/out and net change
  */
 export async function getDailyCashflow(date: string): Promise<DailyCashflowData | null> {
@@ -172,13 +173,13 @@ export async function getDailyCashflowRange(
   endDate: string
 ): Promise<(DailyCashflowData & { running_balance: number })[]> {
   try {
-    // Generate array of dates
-    const start = new Date(startDate)
-    const end = new Date(endDate)
+    // Generate array of dates using Bangkok timezone
+    const start = toBangkokTime(startDate)
+    const end = toBangkokTime(endDate)
     const dates: string[] = []
 
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      dates.push(d.toISOString().split('T')[0])
+      dates.push(formatBangkok(d, 'yyyy-MM-dd'))
     }
 
     // Fetch cashflow for each date in parallel

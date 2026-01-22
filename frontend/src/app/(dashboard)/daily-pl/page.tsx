@@ -7,9 +7,13 @@ import { Label } from '@/components/ui/label'
 import { TrendingUp, DollarSign, AlertCircle } from 'lucide-react'
 import { getDailyPLForDate } from './actions'
 import { DailyPLData } from '@/lib/daily-pl'
+import { toZonedTime } from 'date-fns-tz'
+import { format } from 'date-fns'
 
 function getTodayDate(): string {
-  return new Date().toISOString().split('T')[0]
+  // Get today's date in Bangkok timezone
+  const bangkokNow = toZonedTime(new Date(), 'Asia/Bangkok')
+  return format(bangkokNow, 'yyyy-MM-dd')
 }
 
 function formatCurrency(amount: number): string {
@@ -20,8 +24,9 @@ function formatCurrency(amount: number): string {
 }
 
 function formatDateThai(dateStr: string): string {
-  const date = new Date(dateStr)
-  return date.toLocaleDateString('th-TH', {
+  // Use Bangkok timezone for date formatting
+  const bangkokDate = toZonedTime(new Date(dateStr), 'Asia/Bangkok')
+  return bangkokDate.toLocaleDateString('th-TH', {
     year: 'numeric',
     month: 'long',
     day: 'numeric',

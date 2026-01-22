@@ -10,6 +10,7 @@ import { ImportOnholdDialog } from '@/components/cashflow/ImportOnholdDialog';
 import { ImportIncomeDialog } from '@/components/cashflow/ImportIncomeDialog';
 import { TrendingUp, DollarSign, AlertCircle, Upload, CheckCircle2, XCircle } from 'lucide-react';
 import { type DateRangeResult } from '@/lib/date-range';
+import { toZonedTime } from 'date-fns-tz';
 import {
   getUnsettledSummary,
   getUnsettledTransactions,
@@ -29,8 +30,9 @@ function formatCurrency(amount: number): string {
 
 function formatDateTime(dateStr: string | null): string {
   if (!dateStr) return '-';
-  const date = new Date(dateStr);
-  return date.toLocaleString('th-TH', {
+  // Use Bangkok timezone for date formatting
+  const bangkokDate = toZonedTime(new Date(dateStr), 'Asia/Bangkok');
+  return bangkokDate.toLocaleString('th-TH', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
@@ -41,8 +43,9 @@ function formatDateTime(dateStr: string | null): string {
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return '-';
-  const date = new Date(dateStr);
-  return date.toLocaleDateString('th-TH', {
+  // Use Bangkok timezone for date formatting
+  const bangkokDate = toZonedTime(new Date(dateStr), 'Asia/Bangkok');
+  return bangkokDate.toLocaleDateString('th-TH', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',

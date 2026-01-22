@@ -1,8 +1,9 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
-import { format, subDays, startOfDay } from 'date-fns'
+import { format, subDays } from 'date-fns'
 import { th } from 'date-fns/locale'
+import { getBangkokNow, startOfDayBangkok } from '@/lib/bangkok-time'
 
 export interface TodayStats {
   totalSales: number
@@ -41,10 +42,8 @@ export async function getDashboardStats(): Promise<ActionResult> {
     }
 
     // 2. Get today's date in Asia/Bangkok timezone
-    // NOTE: Using new Date() gets server's local time (may be UTC on cloud deployments)
-    // TODO: Consider using date-fns-tz for explicit Asia/Bangkok timezone handling
-    // Current implementation assumes server is configured for Asia/Bangkok timezone
-    const today = new Date()
+    // Using explicit Bangkok timezone to prevent date boundary issues
+    const today = getBangkokNow()
     const todayStr = format(today, 'yyyy-MM-dd')
 
     // For TIMESTAMP columns, use date range instead of equality
@@ -101,7 +100,7 @@ export async function getDashboardStats(): Promise<ActionResult> {
     // 6. Generate last 7 days array (including today)
     const last7Days: Date[] = []
     for (let i = 6; i >= 0; i--) {
-      last7Days.push(startOfDay(subDays(today, i)))
+      last7Days.push(startOfDayBangkok(subDays(today, i)))
     }
 
     // 7. Query 7-Day Sales Trend (exclude Cancelled)

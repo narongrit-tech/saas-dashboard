@@ -1,12 +1,13 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
-import { CreateOrderInput } from '@/types/sales'
+import { CreateOrderInput, UpdateOrderInput } from '@/types/sales'
+import { toBangkokTime, formatBangkok, getBangkokNow } from '@/lib/bangkok-time'
 
 interface ActionResult {
   success: boolean
   error?: string
-  data?: any
+  data?: unknown
 }
 
 export async function createManualOrder(input: CreateOrderInput): Promise<ActionResult> {
@@ -54,8 +55,8 @@ export async function createManualOrder(input: CreateOrderInput): Promise<Action
     }
 
     // 4. Generate order_id in format: MAN-YYYYMMDD-XXX
-    const orderDate = new Date(input.order_date)
-    const dateStr = orderDate.toISOString().split('T')[0].replace(/-/g, '')
+    const orderDate = toBangkokTime(input.order_date)
+    const dateStr = formatBangkok(orderDate, 'yyyyMMdd')
     const prefix = `MAN-${dateStr}`
 
     // Query existing manual orders for today to get counter
@@ -111,6 +112,288 @@ export async function createManualOrder(input: CreateOrderInput): Promise<Action
     return { success: true, data: insertedOrder }
   } catch (error) {
     console.error('Unexpected error in createManualOrder:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
+
+export async function updateOrder(
+  orderId: string,
+  input: UpdateOrderInput
+): Promise<ActionResult> {
+  try {
+    // 1. Create Supabase server client and get user
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+    }
+
+    // 2. Validate input
+    if (!input.product_name || input.product_name.trim() === '') {
+      return { success: false, error: 'กรุณากรอกชื่อสินค้า' }
+    }
+
+    if (input.quantity <= 0) {
+      return { success: false, error: 'จำนวนต้องมากกว่า 0' }
+    }
+
+    if (input.unit_price < 0) {
+      return { success: false, error: 'ราคาต่อหน่วยต้องไม่ติดลบ' }
+    }
+
+    if (!input.order_date) {
+      return { success: false, error: 'กรุณาระบุวันที่สั่งซื้อ' }
+    }
+
+    // 3. Check if order exists and belongs to user (RLS will also enforce this)
+    const { data: existingOrder, error: fetchError } = await supabase
+      .from('sales_orders')
+      .select('id, created_by')
+      .eq('id', orderId)
+      .single()
+
+    if (fetchError || !existingOrder) {
+      return { success: false, error: 'ไม่พบรายการ order ที่ต้องการแก้ไข' }
+    }
+
+    // Check ownership (defensive - RLS should also prevent this)
+    if (existingOrder.created_by !== user.id) {
+      return { success: false, error: 'คุณไม่มีสิทธิ์แก้ไข order นี้' }
+    }
+
+    // 4. Calculate total_amount (server-side, cannot be trusted from client)
+    let totalAmount: number
+
+    if (input.status.toLowerCase() === 'cancelled') {
+      totalAmount = 0
+    } else {
+      const rawAmount = input.quantity * input.unit_price
+      totalAmount = Math.round(rawAmount * 100) / 100
+    }
+
+    // 5. Update order in database
+    const { data: updatedOrder, error: updateError } = await supabase
+      .from('sales_orders')
+      .update({
+        marketplace: input.marketplace,
+        product_name: input.product_name.trim(),
+        quantity: input.quantity,
+        unit_price: input.unit_price,
+        total_amount: totalAmount,
+        order_date: input.order_date,
+        status: input.status,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', orderId)
+      .select()
+      .single()
+
+    if (updateError) {
+      console.error('Error updating order:', updateError)
+      return { success: false, error: `เกิดข้อผิดพลาด: ${updateError.message}` }
+    }
+
+    return { success: true, data: updatedOrder }
+  } catch (error) {
+    console.error('Unexpected error in updateOrder:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
+
+export async function deleteOrder(orderId: string): Promise<ActionResult> {
+  try {
+    // 1. Create Supabase server client and get user
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+    }
+
+    // 2. Check if order exists and belongs to user (RLS will also enforce this)
+    const { data: existingOrder, error: fetchError } = await supabase
+      .from('sales_orders')
+      .select('id, created_by, order_id')
+      .eq('id', orderId)
+      .single()
+
+    if (fetchError || !existingOrder) {
+      return { success: false, error: 'ไม่พบรายการ order ที่ต้องการลบ' }
+    }
+
+    // Check ownership (defensive - RLS should also prevent this)
+    if (existingOrder.created_by !== user.id) {
+      return { success: false, error: 'คุณไม่มีสิทธิ์ลบ order นี้' }
+    }
+
+    // 3. Hard delete from database
+    const { error: deleteError } = await supabase
+      .from('sales_orders')
+      .delete()
+      .eq('id', orderId)
+
+    if (deleteError) {
+      console.error('Error deleting order:', deleteError)
+      return { success: false, error: `เกิดข้อผิดพลาด: ${deleteError.message}` }
+    }
+
+    return { success: true, data: { deletedId: orderId } }
+  } catch (error) {
+    console.error('Unexpected error in deleteOrder:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
+
+interface ExportFilters {
+  marketplace?: string
+  startDate?: string
+  endDate?: string
+  search?: string
+}
+
+interface ExportResult {
+  success: boolean
+  error?: string
+  csv?: string
+  filename?: string
+}
+
+/**
+ * Export Sales Orders to CSV
+ * Respects all filters (marketplace, date range, search)
+ * Returns CSV content and filename with Bangkok timezone
+ */
+export async function exportSalesOrders(filters: ExportFilters): Promise<ExportResult> {
+  try {
+    // 1. Authenticate user
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+    }
+
+    // 2. Build query with filters (same logic as page query)
+    let query = supabase
+      .from('sales_orders')
+      .select('*')
+      .order('order_date', { ascending: false })
+
+    // Apply marketplace filter
+    if (filters.marketplace && filters.marketplace !== 'All') {
+      query = query.eq('marketplace', filters.marketplace)
+    }
+
+    // Apply date filters
+    if (filters.startDate) {
+      query = query.gte('order_date', filters.startDate)
+    }
+
+    if (filters.endDate) {
+      // Use Bangkok timezone for end of day
+      const { toZonedTime } = await import('date-fns-tz')
+      const { endOfDay } = await import('date-fns')
+      const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
+      const endOfDayBangkok = endOfDay(bangkokDate)
+      query = query.lte('order_date', endOfDayBangkok.toISOString())
+    }
+
+    // Apply search filter
+    if (filters.search && filters.search.trim()) {
+      query = query.or(
+        `order_id.ilike.%${filters.search}%,product_name.ilike.%${filters.search}%`
+      )
+    }
+
+    // No pagination - export all matching records
+    // Add reasonable limit to prevent memory issues
+    query = query.limit(10000)
+
+    const { data: orders, error: fetchError } = await query
+
+    if (fetchError) {
+      console.error('Error fetching orders for export:', fetchError)
+      return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+    }
+
+    if (!orders || orders.length === 0) {
+      return { success: false, error: 'ไม่พบข้อมูลที่จะ export' }
+    }
+
+    // 3. Generate CSV content
+    // CSV Headers (English for Excel compatibility)
+    const headers = [
+      'Order ID',
+      'Marketplace',
+      'Product Name',
+      'Quantity',
+      'Unit Price',
+      'Total Amount',
+      'Status',
+      'Order Date',
+      'Created At',
+    ]
+
+    // Escape CSV field (handle commas, quotes, newlines)
+    const escapeCSV = (value: any): string => {
+      if (value === null || value === undefined) return ''
+      const str = String(value)
+      // If contains comma, quote, or newline, wrap in quotes and escape quotes
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return `"${str.replace(/"/g, '""')}"`
+      }
+      return str
+    }
+
+    // Build CSV rows
+    const rows = orders.map((order) => {
+      return [
+        escapeCSV(order.order_id),
+        escapeCSV(order.marketplace),
+        escapeCSV(order.product_name),
+        escapeCSV(order.quantity),
+        escapeCSV(order.unit_price),
+        escapeCSV(order.total_amount),
+        escapeCSV(order.status),
+        escapeCSV(order.order_date),
+        escapeCSV(order.created_at),
+      ].join(',')
+    })
+
+    // Combine headers and rows
+    const csvContent = [headers.join(','), ...rows].join('\n')
+
+    // 4. Generate filename with Bangkok timezone
+    const now = getBangkokNow()
+    const dateStr = formatBangkok(now, 'yyyyMMdd-HHmmss')
+    const filename = `sales-orders-${dateStr}.csv`
+
+    return {
+      success: true,
+      csv: csvContent,
+      filename,
+    }
+  } catch (error) {
+    console.error('Unexpected error in exportSalesOrders:', error)
     return {
       success: false,
       error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',

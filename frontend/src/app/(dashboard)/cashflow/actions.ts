@@ -3,6 +3,7 @@
 import { getDailyCashflow, getDailyCashflowRange, DailyCashflowData } from '@/lib/cashflow'
 import { createClient } from '@/lib/supabase/server'
 import { addDays } from 'date-fns'
+import { getBangkokNow, toBangkokTime, formatBangkok } from '@/lib/bangkok-time'
 
 interface CashflowResult {
   success: boolean
@@ -156,7 +157,7 @@ export async function getNext7DaysForecast() {
       return { success: false, error: 'Unauthorized' }
     }
 
-    const now = new Date()
+    const now = getBangkokNow()
     const sevenDaysLater = addDays(now, 7)
 
     const { data, error } = await supabase
@@ -179,7 +180,8 @@ export async function getNext7DaysForecast() {
     data?.forEach((txn) => {
       if (!txn.estimated_settle_time) return
 
-      const date = new Date(txn.estimated_settle_time).toISOString().split('T')[0]
+      const bangkokDate = toBangkokTime(txn.estimated_settle_time)
+      const date = formatBangkok(bangkokDate, 'yyyy-MM-dd')
       const existing = grouped.get(date) || { amount: 0, count: 0 }
       grouped.set(date, {
         amount: existing.amount + (txn.estimated_settlement_amount || 0),
@@ -298,7 +300,7 @@ export async function getOverdueForecast() {
       return { success: false, error: 'Unauthorized' }
     }
 
-    const now = new Date()
+    const now = getBangkokNow()
 
     const { data, error } = await supabase
       .from('unsettled_transactions')

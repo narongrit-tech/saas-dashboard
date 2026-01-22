@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Expense, ExpenseFilters, ExpenseCategory } from '@/types/expenses'
+import { toZonedTime } from 'date-fns-tz'
+import { endOfDay } from 'date-fns'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -21,10 +23,12 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { ChevronLeft, ChevronRight, Plus } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Download } from 'lucide-react'
 import { AddExpenseDialog } from '@/components/expenses/AddExpenseDialog'
+import { EditExpenseDialog } from '@/components/expenses/EditExpenseDialog'
+import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
+import { deleteExpense, exportExpenses } from '@/app/(dashboard)/expenses/actions'
 
-const CATEGORIES: (ExpenseCategory | 'All')[] = ['All', 'Advertising', 'COGS', 'Operating']
 const PER_PAGE = 20
 
 export default function ExpensesPage() {
@@ -33,6 +37,11 @@ export default function ExpensesPage() {
   const [error, setError] = useState<string | null>(null)
   const [totalCount, setTotalCount] = useState(0)
   const [showAddDialog, setShowAddDialog] = useState(false)
+  const [showEditDialog, setShowEditDialog] = useState(false)
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null)
+  const [deleteLoading, setDeleteLoading] = useState(false)
+  const [exportLoading, setExportLoading] = useState(false)
 
   const [filters, setFilters] = useState<ExpenseFilters>({
     category: undefined,
@@ -68,9 +77,10 @@ export default function ExpensesPage() {
       }
 
       if (filters.endDate) {
-        const endOfDay = new Date(filters.endDate)
-        endOfDay.setHours(23, 59, 59, 999)
-        query = query.lte('expense_date', endOfDay.toISOString())
+        // Use Bangkok timezone for end of day
+        const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
+        const endOfDayBangkok = endOfDay(bangkokDate)
+        query = query.lte('expense_date', endOfDayBangkok.toISOString())
       }
 
       if (filters.search && filters.search.trim()) {
@@ -98,7 +108,7 @@ export default function ExpensesPage() {
     }
   }
 
-  const handleFilterChange = (key: keyof ExpenseFilters, value: any) => {
+  const handleFilterChange = (key: keyof ExpenseFilters, value: string | undefined) => {
     setFilters((prev) => ({ ...prev, [key]: value, page: 1 }))
   }
 
@@ -142,6 +152,79 @@ export default function ExpensesPage() {
   }
 
   const totalPages = Math.ceil(totalCount / PER_PAGE)
+
+  const handleEdit = (expense: Expense) => {
+    setSelectedExpense(expense)
+    setShowEditDialog(true)
+  }
+
+  const handleDeleteClick = (expense: Expense) => {
+    setSelectedExpense(expense)
+    setShowDeleteDialog(true)
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!selectedExpense) return
+
+    setDeleteLoading(true)
+    setError(null)
+
+    try {
+      const result = await deleteExpense(selectedExpense.id)
+
+      if (!result.success) {
+        setError(result.error || 'เกิดข้อผิดพลาดในการลบข้อมูล')
+        setShowDeleteDialog(false)
+        return
+      }
+
+      // Success - close dialog and refresh
+      setShowDeleteDialog(false)
+      setSelectedExpense(null)
+      fetchExpenses()
+    } catch (err) {
+      console.error('Error deleting expense:', err)
+      setError('เกิดข้อผิดพลาดในการลบข้อมูล')
+      setShowDeleteDialog(false)
+    } finally {
+      setDeleteLoading(false)
+    }
+  }
+
+  const handleExport = async () => {
+    setExportLoading(true)
+    setError(null)
+
+    try {
+      const result = await exportExpenses({
+        category: filters.category,
+        startDate: filters.startDate,
+        endDate: filters.endDate,
+        search: filters.search,
+      })
+
+      if (!result.success || !result.csv || !result.filename) {
+        setError(result.error || 'เกิดข้อผิดพลาดในการ export')
+        return
+      }
+
+      // Create blob and download
+      const blob = new Blob([result.csv], { type: 'text/csv;charset=utf-8;' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = result.filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('Error exporting expenses:', err)
+      setError('เกิดข้อผิดพลาดในการ export')
+    } finally {
+      setExportLoading(false)
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -205,6 +288,14 @@ export default function ExpensesPage() {
           <Plus className="mr-2 h-4 w-4" />
           เพิ่มค่าใช้จ่าย
         </Button>
+        <Button
+          variant="outline"
+          onClick={handleExport}
+          disabled={exportLoading || loading || expenses.length === 0}
+        >
+          <Download className="mr-2 h-4 w-4" />
+          {exportLoading ? 'กำลัง Export...' : 'Export CSV'}
+        </Button>
       </div>
 
       {/* Error Message */}
@@ -224,6 +315,7 @@ export default function ExpensesPage() {
               <TableHead className="text-right">จำนวนเงิน</TableHead>
               <TableHead>รายละเอียด</TableHead>
               <TableHead>บันทึกเมื่อ</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -246,12 +338,15 @@ export default function ExpensesPage() {
                   <TableCell>
                     <div className="h-4 w-24 animate-pulse rounded bg-gray-200" />
                   </TableCell>
+                  <TableCell>
+                    <div className="h-4 w-16 animate-pulse rounded bg-gray-200" />
+                  </TableCell>
                 </TableRow>
               ))
             ) : expenses.length === 0 ? (
               // Empty state
               <TableRow>
-                <TableCell colSpan={5} className="h-32 text-center">
+                <TableCell colSpan={6} className="h-32 text-center">
                   <div className="flex flex-col items-center justify-center text-muted-foreground">
                     <p className="text-lg font-medium">ไม่พบข้อมูล</p>
                     <p className="text-sm">ยังไม่มีรายการค่าใช้จ่าย</p>
@@ -274,6 +369,27 @@ export default function ExpensesPage() {
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {formatDate(expense.created_at)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleEdit(expense)}
+                        title="แก้ไข"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDeleteClick(expense)}
+                        title="ลบ"
+                        className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
@@ -321,6 +437,24 @@ export default function ExpensesPage() {
         open={showAddDialog}
         onOpenChange={setShowAddDialog}
         onSuccess={fetchExpenses}
+      />
+
+      {/* Edit Expense Dialog */}
+      <EditExpenseDialog
+        open={showEditDialog}
+        onOpenChange={setShowEditDialog}
+        onSuccess={fetchExpenses}
+        expense={selectedExpense}
+      />
+
+      {/* Delete Confirmation Dialog */}
+      <DeleteConfirmDialog
+        open={showDeleteDialog}
+        onOpenChange={setShowDeleteDialog}
+        onConfirm={handleDeleteConfirm}
+        loading={deleteLoading}
+        title="ยืนยันการลบรายการค่าใช้จ่าย"
+        description="คุณต้องการลบรายการค่าใช้จ่ายนี้ใช่หรือไม่? การดำเนินการนี้ไม่สามารถย้อนกลับได้"
       />
     </div>
   )

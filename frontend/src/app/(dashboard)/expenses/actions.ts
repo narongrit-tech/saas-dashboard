@@ -1,12 +1,13 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
-import { CreateExpenseInput, ExpenseCategory } from '@/types/expenses'
+import { CreateExpenseInput, UpdateExpenseInput, ExpenseCategory } from '@/types/expenses'
+import { getBangkokNow, formatBangkok } from '@/lib/bangkok-time'
 
 interface ActionResult {
   success: boolean
   error?: string
-  data?: any
+  data?: unknown
 }
 
 // BUSINESS RULE: Expenses must be categorized into exactly 3 types
@@ -76,6 +77,273 @@ export async function createManualExpense(input: CreateExpenseInput): Promise<Ac
     return { success: true, data: insertedExpense }
   } catch (error) {
     console.error('Unexpected error in createManualExpense:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
+
+export async function updateExpense(
+  expenseId: string,
+  input: UpdateExpenseInput
+): Promise<ActionResult> {
+  try {
+    // 1. Create Supabase server client and get user
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+    }
+
+    // 2. Validate input
+    if (!input.expense_date || input.expense_date.trim() === '') {
+      return { success: false, error: 'กรุณาระบุวันที่รายจ่าย' }
+    }
+
+    if (!VALID_CATEGORIES.includes(input.category)) {
+      return { success: false, error: 'หมวดหมู่รายจ่ายไม่ถูกต้อง' }
+    }
+
+    if (input.amount <= 0) {
+      return { success: false, error: 'จำนวนเงินต้องมากกว่า 0' }
+    }
+
+    // 3. Check if expense exists and belongs to user (RLS will also enforce this)
+    const { data: existingExpense, error: fetchError } = await supabase
+      .from('expenses')
+      .select('id, created_by')
+      .eq('id', expenseId)
+      .single()
+
+    if (fetchError || !existingExpense) {
+      return { success: false, error: 'ไม่พบรายการค่าใช้จ่ายที่ต้องการแก้ไข' }
+    }
+
+    // Check ownership (defensive - RLS should also prevent this)
+    if (existingExpense.created_by !== user.id) {
+      return { success: false, error: 'คุณไม่มีสิทธิ์แก้ไขรายการนี้' }
+    }
+
+    // 4. Round amount for financial precision
+    const roundedAmount = Math.round(input.amount * 100) / 100
+
+    // 5. Prepare description
+    const description = input.note && input.note.trim() !== ''
+      ? input.note.trim()
+      : 'รายจ่ายทั่วไป'
+
+    // 6. Update expense in database
+    const { data: updatedExpense, error: updateError } = await supabase
+      .from('expenses')
+      .update({
+        category: input.category,
+        amount: roundedAmount,
+        expense_date: input.expense_date,
+        description: description,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', expenseId)
+      .select()
+      .single()
+
+    if (updateError) {
+      console.error('Error updating expense:', updateError)
+      return { success: false, error: `เกิดข้อผิดพลาด: ${updateError.message}` }
+    }
+
+    return { success: true, data: updatedExpense }
+  } catch (error) {
+    console.error('Unexpected error in updateExpense:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
+
+export async function deleteExpense(expenseId: string): Promise<ActionResult> {
+  try {
+    // 1. Create Supabase server client and get user
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+    }
+
+    // 2. Check if expense exists and belongs to user (RLS will also enforce this)
+    const { data: existingExpense, error: fetchError } = await supabase
+      .from('expenses')
+      .select('id, created_by')
+      .eq('id', expenseId)
+      .single()
+
+    if (fetchError || !existingExpense) {
+      return { success: false, error: 'ไม่พบรายการค่าใช้จ่ายที่ต้องการลบ' }
+    }
+
+    // Check ownership (defensive - RLS should also prevent this)
+    if (existingExpense.created_by !== user.id) {
+      return { success: false, error: 'คุณไม่มีสิทธิ์ลบรายการนี้' }
+    }
+
+    // 3. Hard delete from database
+    const { error: deleteError } = await supabase
+      .from('expenses')
+      .delete()
+      .eq('id', expenseId)
+
+    if (deleteError) {
+      console.error('Error deleting expense:', deleteError)
+      return { success: false, error: `เกิดข้อผิดพลาด: ${deleteError.message}` }
+    }
+
+    return { success: true, data: { deletedId: expenseId } }
+  } catch (error) {
+    console.error('Unexpected error in deleteExpense:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
+
+interface ExportFilters {
+  category?: string
+  startDate?: string
+  endDate?: string
+  search?: string
+}
+
+interface ExportResult {
+  success: boolean
+  error?: string
+  csv?: string
+  filename?: string
+}
+
+/**
+ * Export Expenses to CSV
+ * Respects all filters (category, date range, search)
+ * Returns CSV content and filename with Bangkok timezone
+ */
+export async function exportExpenses(filters: ExportFilters): Promise<ExportResult> {
+  try {
+    // 1. Authenticate user
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+    }
+
+    // 2. Build query with filters (same logic as page query)
+    let query = supabase
+      .from('expenses')
+      .select('*')
+      .order('expense_date', { ascending: false })
+
+    // Apply category filter
+    if (filters.category && filters.category !== 'All') {
+      query = query.eq('category', filters.category)
+    }
+
+    // Apply date filters
+    if (filters.startDate) {
+      query = query.gte('expense_date', filters.startDate)
+    }
+
+    if (filters.endDate) {
+      // Use Bangkok timezone for end of day
+      const { toZonedTime } = await import('date-fns-tz')
+      const { endOfDay } = await import('date-fns')
+      const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
+      const endOfDayBangkok = endOfDay(bangkokDate)
+      query = query.lte('expense_date', endOfDayBangkok.toISOString())
+    }
+
+    // Apply search filter
+    if (filters.search && filters.search.trim()) {
+      query = query.or(
+        `description.ilike.%${filters.search}%,notes.ilike.%${filters.search}%`
+      )
+    }
+
+    // No pagination - export all matching records
+    // Add reasonable limit to prevent memory issues
+    query = query.limit(10000)
+
+    const { data: expenses, error: fetchError } = await query
+
+    if (fetchError) {
+      console.error('Error fetching expenses for export:', fetchError)
+      return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+    }
+
+    if (!expenses || expenses.length === 0) {
+      return { success: false, error: 'ไม่พบข้อมูลที่จะ export' }
+    }
+
+    // 3. Generate CSV content
+    // CSV Headers (English for Excel compatibility)
+    const headers = [
+      'Expense Date',
+      'Category',
+      'Amount',
+      'Description',
+      'Notes',
+      'Created At',
+    ]
+
+    // Escape CSV field (handle commas, quotes, newlines)
+    const escapeCSV = (value: any): string => {
+      if (value === null || value === undefined) return ''
+      const str = String(value)
+      // If contains comma, quote, or newline, wrap in quotes and escape quotes
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return `"${str.replace(/"/g, '""')}"`
+      }
+      return str
+    }
+
+    // Build CSV rows
+    const rows = expenses.map((expense) => {
+      return [
+        escapeCSV(expense.expense_date),
+        escapeCSV(expense.category),
+        escapeCSV(expense.amount),
+        escapeCSV(expense.description),
+        escapeCSV(expense.notes || ''),
+        escapeCSV(expense.created_at),
+      ].join(',')
+    })
+
+    // Combine headers and rows
+    const csvContent = [headers.join(','), ...rows].join('\n')
+
+    // 4. Generate filename with Bangkok timezone
+    const now = getBangkokNow()
+    const dateStr = formatBangkok(now, 'yyyyMMdd-HHmmss')
+    const filename = `expenses-${dateStr}.csv`
+
+    return {
+      success: true,
+      csv: csvContent,
+      filename,
+    }
+  } catch (error) {
+    console.error('Unexpected error in exportExpenses:', error)
     return {
       success: false,
       error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',

@@ -20,6 +20,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { toBangkokTime, formatBangkok } from '@/lib/bangkok-time'
 
 /**
  * Daily P&L Data Structure
@@ -110,10 +111,9 @@ async function getDailyExpensesByCategory(
 /**
  * Calculate complete Daily P&L for a specific date
  *
- * NOTE: Uses server's local time for date. If server is UTC, may need date-fns-tz.
- * See TODO in dashboard actions.ts for timezone handling.
+ * NOTE: Uses Bangkok timezone for all date calculations.
  *
- * @param date - Date in YYYY-MM-DD format
+ * @param date - Date in YYYY-MM-DD format (Bangkok timezone)
  * @returns Complete P&L data with all components and net profit
  */
 export async function getDailyPL(date: string): Promise<DailyPLData | null> {
@@ -179,13 +179,13 @@ export async function getDailyPLRange(
   endDate: string
 ): Promise<DailyPLData[]> {
   try {
-    // Generate array of dates
-    const start = new Date(startDate)
-    const end = new Date(endDate)
+    // Generate array of dates using Bangkok timezone
+    const start = toBangkokTime(startDate)
+    const end = toBangkokTime(endDate)
     const dates: string[] = []
 
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      dates.push(d.toISOString().split('T')[0])
+      dates.push(formatBangkok(d, 'yyyy-MM-dd'))
     }
 
     // Fetch P&L for each date in parallel

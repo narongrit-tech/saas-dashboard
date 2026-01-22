@@ -40,3 +40,12 @@ export interface CreateOrderInput {
   unit_price: number
   status: SalesOrderStatus
 }
+
+export interface UpdateOrderInput {
+  order_date: string
+  marketplace: string
+  product_name: string
+  quantity: number
+  unit_price: number
+  status: SalesOrderStatus
+}

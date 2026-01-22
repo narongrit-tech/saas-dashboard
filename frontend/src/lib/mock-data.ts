@@ -53,7 +53,7 @@ export interface SalesTrendData {
 
 export const generateSalesTrend = (): SalesTrendData[] => {
   const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-  return days.map((day, index) => ({
+  return days.map((day) => ({
     date: day,
     sales: Math.floor(Math.random() * 8000) + 2000,
   }))

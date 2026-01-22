@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -19,29 +19,31 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { createManualOrder } from '@/app/(dashboard)/sales/actions'
-import { CreateOrderInput, SalesOrderStatus } from '@/types/sales'
+import { updateOrder } from '@/app/(dashboard)/sales/actions'
+import { SalesOrder, UpdateOrderInput, SalesOrderStatus } from '@/types/sales'
 import { Loader2 } from 'lucide-react'
 
-interface AddOrderDialogProps {
+interface EditOrderDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSuccess: () => void
+  order: SalesOrder | null
 }
 
 const MARKETPLACES = ['TikTok', 'Shopee', 'Lazada', 'Line', 'Facebook']
 
-function getTodayDate(): string {
-  return new Date().toISOString().split('T')[0]
-}
-
-export function AddOrderDialog({ open, onOpenChange, onSuccess }: AddOrderDialogProps) {
+export function EditOrderDialog({
+  open,
+  onOpenChange,
+  onSuccess,
+  order,
+}: EditOrderDialogProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Form state with defaults
-  const [formData, setFormData] = useState<CreateOrderInput>({
-    order_date: getTodayDate(),
+  // Form state
+  const [formData, setFormData] = useState<UpdateOrderInput>({
+    order_date: '',
     marketplace: 'TikTok',
     product_name: '',
     quantity: 1,
@@ -49,9 +51,24 @@ export function AddOrderDialog({ open, onOpenChange, onSuccess }: AddOrderDialog
     status: 'completed',
   })
 
-  const handleChange = (field: keyof CreateOrderInput, value: string | number | SalesOrderStatus) => {
+  // Populate form when order changes
+  useEffect(() => {
+    if (order) {
+      setFormData({
+        order_date: order.order_date.split('T')[0], // Extract YYYY-MM-DD
+        marketplace: order.marketplace,
+        product_name: order.product_name,
+        quantity: order.quantity,
+        unit_price: order.unit_price,
+        status: order.status,
+      })
+      setError(null)
+    }
+  }, [order])
+
+  const handleChange = (field: keyof UpdateOrderInput, value: string | number | SalesOrderStatus) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
-    setError(null) // Clear error when user makes changes
+    setError(null)
   }
 
   const validateForm = (): string | null => {
@@ -74,6 +91,11 @@ export function AddOrderDialog({ open, onOpenChange, onSuccess }: AddOrderDialog
     e.preventDefault()
     setError(null)
 
+    if (!order) {
+      setError('ไม่พบข้อมูล order')
+      return
+    }
+
     // Client-side validation
     const validationError = validateForm()
     if (validationError) {
@@ -84,42 +106,25 @@ export function AddOrderDialog({ open, onOpenChange, onSuccess }: AddOrderDialog
     setLoading(true)
 
     try {
-      const result = await createManualOrder(formData)
+      const result = await updateOrder(order.id, formData)
 
       if (!result.success) {
         setError(result.error || 'เกิดข้อผิดพลาด')
         return
       }
 
-      // Success - reset form and close dialog
-      setFormData({
-        order_date: getTodayDate(),
-        marketplace: 'TikTok',
-        product_name: '',
-        quantity: 1,
-        unit_price: 0,
-        status: 'completed',
-      })
+      // Success - close dialog and refresh
       onOpenChange(false)
       onSuccess()
     } catch (err) {
-      console.error('Error submitting order:', err)
-      setError('เกิดข้อผิดพลาดในการบันทึกข้อมูล')
+      console.error('Error updating order:', err)
+      setError('เกิดข้อผิดพลาดในการอัปเดตข้อมูล')
     } finally {
       setLoading(false)
     }
   }
 
   const handleCancel = () => {
-    // Reset form when closing
-    setFormData({
-      order_date: getTodayDate(),
-      marketplace: 'TikTok',
-      product_name: '',
-      quantity: 1,
-      unit_price: 0,
-      status: 'completed',
-    })
     setError(null)
     onOpenChange(false)
   }
@@ -133,9 +138,9 @@ export function AddOrderDialog({ open, onOpenChange, onSuccess }: AddOrderDialog
       <DialogContent className="sm:max-w-[500px]">
         <form onSubmit={handleSubmit}>
           <DialogHeader>
-            <DialogTitle>Quick Add Order</DialogTitle>
+            <DialogTitle>แก้ไข Order</DialogTitle>
             <DialogDescription>
-              เพิ่มรายการสั่งซื้อแบบ manual เพื่อบันทึกยอดขายทันที
+              แก้ไขรายการสั่งซื้อ {order?.order_id}
             </DialogDescription>
           </DialogHeader>
 
