@@ -303,6 +303,90 @@ Later: CSV import, inventory, payables, reports, tax, APIs
 
 ---
 
+### Manual Column Mapping Wizard (COMPLETE - Phase 5)
+
+**Purpose:** Fallback wizard for manual column mapping when auto-parse fails or file has non-standard columns
+
+**Key Characteristics:**
+- ✅ 4-step wizard: Report Type → Column Mapping → Preview → Confirm
+- ✅ Preset system (save/load column mappings per user + filename pattern)
+- ✅ Supports all report types (Product/Live/Tiger)
+- ✅ Server-side validation of business rules
+- ✅ Tiger date range picker (manual input when filename has no date range)
+- ✅ Preview with warnings/errors before import
+- ✅ Reuses existing import logic (no code duplication)
+
+**User Flow:**
+1. Upload file → Auto-parse fails → Click "Try Manual Mapping" button
+2. **Step 1**: Select report type (Product/Live/Tiger)
+3. **Step 2**: Map Excel columns to system fields
+   - Dropdown for each required field
+   - Load preset if available (matched by filename pattern)
+   - Tiger: Add date range picker (start/end date)
+4. **Step 3**: Preview parsed data (server-validated)
+   - Shows: date range, total spend, sample rows (first 5)
+   - Warnings/Errors displayed
+   - Blocks proceed if validation fails
+5. **Step 4**: Confirm import
+   - Checkbox: "Save this mapping as preset" (default: checked)
+   - Final summary before import
+
+**Preset System:**
+- Automatic matching: Exact → Fuzzy → Prefix (3-tier)
+- Stores: `filename_pattern`, `report_type`, `column_mapping` (JSON)
+- Tracks: `use_count`, `last_used_at`
+- RLS: User can only see own presets
+- Future imports with similar filenames → auto-apply preset
+
+**Business Rules Enforcement:**
+- **Tiger**: Must NOT have orders/revenue/roi data (server blocks)
+- **Product/Live**: MUST have orders/revenue data (server blocks)
+- **Date validation**: Product/Live require date column, Tiger requires manual date range
+- **Duplicate file hash check**: Same as auto-import
+- All validation server-side only (no complex client logic)
+
+**Database:**
+- New table: `user_column_mappings` (presets storage)
+- Migration: `database-scripts/migration-006-column-mappings.sql`
+
+**Location:**
+- Server Actions: `frontend/src/app/(dashboard)/wallets/manual-mapping-actions.ts`
+- Types: `frontend/src/types/manual-mapping.ts`
+- Preset Matching: `frontend/src/lib/preset-matching.ts`
+- Main Wizard: `frontend/src/components/wallets/ManualMappingWizard.tsx`
+- Wizard Steps:
+  - `frontend/src/components/wallets/wizard/WizardProgress.tsx`
+  - `frontend/src/components/wallets/wizard/Step1ReportType.tsx`
+  - `frontend/src/components/wallets/wizard/Step2ColumnMapper.tsx`
+  - `frontend/src/components/wallets/wizard/Step3Preview.tsx`
+  - `frontend/src/components/wallets/wizard/Step4Confirm.tsx`
+- Integration:
+  - Modified: `PerformanceAdsImportDialog.tsx` (added "Try Manual Mapping" button)
+  - Modified: `TigerImportDialog.tsx` (added "Try Manual Mapping" button)
+
+**Import Execution:**
+- Reuses existing logic from `performance-ads-import-actions.ts` / `tiger-import-actions.ts`
+- Same database writes: `ad_daily_performance`, `wallet_ledger`, `import_batches`
+- Same business rules: Tiger → wallet only, Product/Live → performance + wallet
+- File hash check prevents duplicates
+
+**Edge Cases Handled:**
+- ✅ No headers in Excel file → Error with clear message
+- ✅ Duplicate column names → Shows as "Column Name (Column 3)"
+- ✅ User changes report type after mapping → Reset all mappings
+- ✅ Preset exists but user modifies → Can override freely
+- ✅ Tiger without date column → Manual date range picker
+
+**When to Use:**
+- Auto-parse fails (template detection error)
+- Non-standard column names
+- Custom report formats
+- Missing or renamed columns
+
+**See:** Plan document at `~/.claude/plans/staged-stirring-mist.md` for full implementation details
+
+---
+
 ## 🚀 Future Enhancements (Not in Current MVP)
 
 ### Phase 3 - Data Import & Automation
@@ -410,9 +494,17 @@ These files contain critical business logic. Changes require careful review:
    - Used for wallet summary cards
    - DO NOT CHANGE without approval
 
+10. **`frontend/src/app/(dashboard)/wallets/manual-mapping-actions.ts`** ⭐ NEW
+    - Manual column mapping wizard server actions
+    - Preset CRUD (load/save user presets)
+    - Custom parsing with column mapping
+    - Business rules validation (Tiger vs Product/Live)
+    - Reuses existing import logic (no duplication)
+    - DO NOT MODIFY without understanding preset system
+
 ### Database Schema Files
-- Supabase migrations (especially `migration-005-wallets.sql`)
-- RLS policies (wallet access control)
+- Supabase migrations (especially `migration-005-wallets.sql`, `migration-006-column-mappings.sql`)
+- RLS policies (wallet access control, preset access control)
 
 ### What CAN be modified safely:
 - UI components (pages, dialogs, cards)
@@ -509,11 +601,20 @@ Read these for context before making changes:
    - P&L impact tests
    - Created: Phase 4 (Performance Ads Import)
 
-7. **`CLAUDE.md`** (this file)
+7. **`~/.claude/plans/staged-stirring-mist.md`** ⭐ NEW
+   - Full implementation plan for Manual Column Mapping Wizard
+   - Architecture decisions and trade-offs
+   - Component hierarchy and data flow
+   - Database schema design
+   - Validation checkpoints and business rules matrix
+   - Edge case handling strategies
+   - Created: Phase 5 (Manual Mapping Wizard)
+
+8. **`CLAUDE.md`** (this file)
    - Project rules and guidelines
    - Current system state
    - Extension guide
-   - Updated: 2026-01-23 (Phase 4: Performance Ads Import)
+   - Updated: 2026-01-23 (Phase 5: Manual Column Mapping Wizard)
 
 ---
 
