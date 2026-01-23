@@ -161,15 +161,20 @@ Later: CSV import, inventory, payables, reports, tax, APIs
 - ✅ Balance calculation (opening, in, out, closing)
 - ✅ CSV export with filters
 - ✅ **STRICT business rules enforcement**
+- ✅ **Tiger Awareness Ads Import (Monthly aggregation)**
 
 **Location:**
 - Page: `frontend/src/app/(dashboard)/wallets/page.tsx`
 - Actions: `frontend/src/app/(dashboard)/wallets/actions.ts`
+- Performance Ads Import Actions: `frontend/src/app/(dashboard)/wallets/performance-ads-import-actions.ts`
+- Tiger Import Actions: `frontend/src/app/(dashboard)/wallets/tiger-import-actions.ts`
 - Balance Utility: `frontend/src/lib/wallet-balance.ts`
 - Types: `frontend/src/types/wallets.ts`
 - Components:
   - `frontend/src/components/wallets/AddLedgerDialog.tsx`
   - `frontend/src/components/wallets/EditLedgerDialog.tsx`
+  - `frontend/src/components/wallets/PerformanceAdsImportDialog.tsx`
+  - `frontend/src/components/wallets/TigerImportDialog.tsx`
 - Database:
   - Migration: `database-scripts/migration-005-wallets.sql`
   - Seed: `database-scripts/migration-005-wallets-seed.sql`
@@ -210,6 +215,91 @@ Later: CSV import, inventory, payables, reports, tax, APIs
 - Filename format: `wallet-{name}-YYYYMMDD-HHmmss.csv`
 - Headers: Date, Entry Type, Direction, Amount, Source, Reference ID, Note, Created At
 - Respects filters (wallet, date range, entry_type, source)
+
+---
+
+### Performance Ads Import - Product & Live (COMPLETE - Phase 4)
+
+**Purpose:** Import performance ads with sales metrics (Product/Live campaigns)
+
+**Key Characteristics:**
+- ✅ Daily breakdown (one record per day per campaign)
+- ✅ Creates ad_daily_performance records (analytics)
+- ✅ Creates wallet_ledger SPEND entries (daily aggregated)
+- ✅ Template validation (must HAVE sales metrics)
+- ✅ File deduplication (SHA256 hash)
+- ✅ Affects Accrual P&L (Advertising Cost)
+- ✅ Independent imports (Product & Live fully decoupled)
+
+**Campaign Types:**
+- **Product Ads** (Daily): Creative/Product campaigns - typically imported daily
+- **Live Ads** (Weekly): Livestream campaigns - typically imported weekly
+
+**Import Requirements:**
+- File format: `.xlsx` only
+- Required columns: Date, Campaign, Cost/Spend, GMV, Orders
+- Optional: ROAS/ROI (will calculate if missing)
+- Must HAVE sales metrics (GMV/Orders/ROAS) - blocks awareness-only files
+
+**Business Logic:**
+- Parse daily data (one row = one day + one campaign)
+- Create ad_daily_performance records (daily breakdown)
+- Aggregate spend per day for wallet entries
+- Create import_batch with type `tiktok_ads_product` or `tiktok_ads_live`
+- Independent imports - no coupling or completeness enforcement
+
+**Database Writes:**
+1. `ad_daily_performance` - one per day per campaign
+   - Fields: ad_date, campaign_type, campaign_name, spend, orders, revenue, roi
+   - Used for: Daily ROI tracking, performance analytics
+2. `wallet_ledger` - one per day (aggregated spend)
+   - Fields: entry_type=SPEND, direction=OUT, amount=[daily total]
+   - Used for: Cashflow tracking
+3. `import_batches` - one per file import
+   - Tracks: file_hash, row_count, inserted_count, status
+
+**Location:**
+- Import Actions: `frontend/src/app/(dashboard)/wallets/performance-ads-import-actions.ts`
+- UI Component: `frontend/src/components/wallets/PerformanceAdsImportDialog.tsx`
+- Integrated in: Wallets page (Import button visible for ADS wallet only)
+
+**See:** `WALLET_BUSINESS_RULES.md` → "Performance Ads (Product/Live) - Daily Sales Tracking" section
+
+---
+
+### Tiger Awareness Ads Import (COMPLETE - Phase 3+)
+
+**Purpose:** Import monthly awareness/reach/video view campaigns (Tiger) as wallet SPEND ONLY
+
+**Key Characteristics:**
+- ✅ Monthly aggregation (1 entry per file)
+- ✅ Wallet SPEND entry ONLY (no ad_daily_performance)
+- ✅ Template validation (must NOT have sales metrics)
+- ✅ File deduplication (SHA256 hash)
+- ✅ Shows in Cashflow Summary ONLY
+- ✅ Does NOT affect Accrual P&L
+
+**Import Requirements:**
+- File format: `.xlsx` only
+- Filename must contain: "Tiger" OR "Campaign Report"
+- Date range format: `(YYYY-MM-DD to YYYY-MM-DD)` in filename
+- Required columns: Campaign, Cost
+- Must NOT have: GMV, Orders, ROAS, Conversion Value, CPA
+
+**Business Logic:**
+- Aggregate total Cost across all campaigns in file
+- Post to wallet on report END DATE (Bangkok timezone)
+- Create import_batch record with type `tiger_awareness_monthly`
+- Create single wallet_ledger entry:
+  - `entry_type=SPEND`, `direction=OUT`, `source=IMPORTED`
+  - Note: "Monthly Awareness Spend (Tiger) - YYYY-MM"
+
+**Location:**
+- Import Actions: `frontend/src/app/(dashboard)/wallets/tiger-import-actions.ts`
+- UI Component: `frontend/src/components/wallets/TigerImportDialog.tsx`
+- Integrated in: Wallets page (Import button visible for ADS wallet only)
+
+**See:** `WALLET_BUSINESS_RULES.md` → "Awareness Ads (Tiger) - Monthly Cash Treatment" section
 
 ---
 
@@ -298,7 +388,23 @@ These files contain critical business logic. Changes require careful review:
    - Prevents editing/deleting IMPORTED entries
    - DO NOT MODIFY without understanding business rules
 
-7. **`frontend/src/lib/wallet-balance.ts`** ⭐ CORE
+7. **`frontend/src/app/(dashboard)/wallets/performance-ads-import-actions.ts`** ⭐ CORE
+   - **Performance Ads import logic (Product/Live)**
+   - Daily breakdown (ad_daily_performance + wallet_ledger)
+   - Template validation (must have sales metrics)
+   - File deduplication (SHA256 hash)
+   - Creates performance records + wallet SPEND (affects P&L)
+   - DO NOT MODIFY without understanding P&L impact
+
+8. **`frontend/src/app/(dashboard)/wallets/tiger-import-actions.ts`** ⭐ CORE
+   - **Tiger Awareness Ads import logic**
+   - Monthly aggregation (1 wallet entry per file)
+   - Template validation (blocks files with sales metrics)
+   - File deduplication (SHA256 hash)
+   - Creates wallet SPEND ONLY (no P&L impact)
+   - DO NOT MODIFY without understanding business separation
+
+9. **`frontend/src/lib/wallet-balance.ts`** ⭐ CORE
    - Wallet balance calculation (opening, in, out, closing)
    - Breakdown by entry type (top-up, spend, refund, adjustment)
    - Used for wallet summary cards
@@ -396,11 +502,18 @@ Read these for context before making changes:
    - Edge cases and error scenarios
    - Created: Phase 3 (Multi-Wallet Foundation)
 
-6. **`CLAUDE.md`** (this file)
+6. **`PERFORMANCE_ADS_VERIFICATION.md`** ⭐ NEW
+   - Manual test checklist for Performance Ads import
+   - Validation tests (Product/Live templates)
+   - Daily breakdown verification
+   - P&L impact tests
+   - Created: Phase 4 (Performance Ads Import)
+
+7. **`CLAUDE.md`** (this file)
    - Project rules and guidelines
    - Current system state
    - Extension guide
-   - Updated: 2026-01-23 (Phase 3: Multi-Wallet Complete)
+   - Updated: 2026-01-23 (Phase 4: Performance Ads Import)
 
 ---
 

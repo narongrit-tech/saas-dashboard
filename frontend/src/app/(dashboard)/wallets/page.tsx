@@ -24,12 +24,17 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Download, Wallet as WalletIcon } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Download, Upload, Wallet as WalletIcon } from 'lucide-react'
 import { AddLedgerDialog } from '@/components/wallets/AddLedgerDialog'
 import { EditLedgerDialog } from '@/components/wallets/EditLedgerDialog'
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
-import { deleteWalletLedgerEntry, exportWalletLedger } from '@/app/(dashboard)/wallets/actions'
-import { calculateWalletBalance } from '@/lib/wallet-balance'
+import { TigerImportDialog } from '@/components/wallets/TigerImportDialog'
+import { PerformanceAdsImportDialog } from '@/components/wallets/PerformanceAdsImportDialog'
+import {
+  deleteWalletLedgerEntry,
+  exportWalletLedger,
+  getWalletBalance,
+} from '@/app/(dashboard)/wallets/actions'
 import { WalletBalance } from '@/types/wallets'
 
 const PER_PAGE = 20
@@ -40,12 +45,13 @@ export default function WalletsPage() {
   const [ledgerEntries, setLedgerEntries] = useState<WalletLedger[]>([])
   const [walletBalance, setWalletBalance] = useState<WalletBalance | null>(null)
   const [loading, setLoading] = useState(true)
-  const [balanceLoading, setBalanceLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [totalCount, setTotalCount] = useState(0)
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [showEditDialog, setShowEditDialog] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [showTigerImportDialog, setShowTigerImportDialog] = useState(false)
+  const [showPerformanceAdsImportDialog, setShowPerformanceAdsImportDialog] = useState(false)
   const [selectedEntry, setSelectedEntry] = useState<WalletLedger | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
@@ -148,23 +154,27 @@ export default function WalletsPage() {
 
   const fetchBalance = async () => {
     try {
-      setBalanceLoading(true)
-
       // Default to last 30 days if no date filter
       const endDate = filters.endDate || new Date().toISOString().split('T')[0]
-      const startDate = filters.startDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+      const startDate =
+        filters.startDate ||
+        new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
 
-      const balance = await calculateWalletBalance({
+      const result = await getWalletBalance({
         walletId: selectedWalletId,
         startDate,
         endDate,
       })
 
-      setWalletBalance(balance)
+      if (result.success && result.data) {
+        setWalletBalance(result.data as WalletBalance)
+      } else {
+        console.error('Error calculating balance:', result.error)
+        setWalletBalance(null)
+      }
     } catch (err) {
       console.error('Error calculating balance:', err)
-    } finally {
-      setBalanceLoading(false)
+      setWalletBalance(null)
     }
   }
 
@@ -445,11 +455,31 @@ export default function WalletsPage() {
 
       {/* Action Buttons */}
       {selectedWalletId && (
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <Button onClick={() => setShowAddDialog(true)}>
             <Plus className="mr-2 h-4 w-4" />
             Add Entry
           </Button>
+          {selectedWallet?.wallet_type === 'ADS' && (
+            <>
+              <Button
+                variant="secondary"
+                onClick={() => setShowPerformanceAdsImportDialog(true)}
+                className="bg-green-600 hover:bg-green-700 text-white"
+              >
+                <Upload className="mr-2 h-4 w-4" />
+                Import Performance Ads
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => setShowTigerImportDialog(true)}
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                <Upload className="mr-2 h-4 w-4" />
+                Import Awareness Ads (Monthly)
+              </Button>
+            </>
+          )}
           <Button
             variant="outline"
             onClick={handleExport}
@@ -645,6 +675,29 @@ export default function WalletsPage() {
             title="ยืนยันการลบรายการ"
             description="คุณต้องการลบรายการนี้ใช่หรือไม่? การดำเนินการนี้ไม่สามารถย้อนกลับได้"
           />
+
+          {selectedWallet.wallet_type === 'ADS' && (
+            <>
+              <PerformanceAdsImportDialog
+                open={showPerformanceAdsImportDialog}
+                onOpenChange={setShowPerformanceAdsImportDialog}
+                adsWalletId={selectedWallet.id}
+                onImportSuccess={() => {
+                  fetchLedgerEntries()
+                  fetchBalance()
+                }}
+              />
+              <TigerImportDialog
+                open={showTigerImportDialog}
+                onOpenChange={setShowTigerImportDialog}
+                adsWalletId={selectedWallet.id}
+                onImportSuccess={() => {
+                  fetchLedgerEntries()
+                  fetchBalance()
+                }}
+              />
+            </>
+          )}
         </>
       )}
     </div>

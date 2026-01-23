@@ -314,6 +314,331 @@ Separately:
 
 ---
 
+## Performance Ads (Product/Live) - Daily Sales Tracking
+
+### What is Performance Ads Import?
+
+Performance Ads Import is for **product and live campaigns with sales metrics**:
+- **Product Ads** = Creative/Product campaigns (daily import typical)
+- **Live Ads** = Livestream campaigns (weekly import typical)
+- **Must have sales metrics** (GMV/Orders/ROAS)
+- **Tracked daily** for ROI optimization
+- **Affects Accrual P&L** (Advertising Cost)
+- **Creates ad_daily_performance records** (analytics)
+
+---
+
+### Why Daily Breakdown?
+
+Unlike awareness ads (monthly aggregation), performance ads are:
+1. **Optimized for conversions** - need daily ROI tracking
+2. **Tied to revenue** - GMV/Orders attribution
+3. **Analyzed for ROAS** - daily performance comparison
+4. **Used for budget decisions** - which campaigns to scale
+
+**Example:**
+```
+Performance Ads (Daily):
+Day 1: Spend ฿1,000, GMV ฿3,000, ROAS = 3.0 ✅ Scale this campaign
+Day 2: Spend ฿1,000, GMV ฿800, ROAS = 0.8 ❌ Pause this campaign
+
+Awareness Ads (Monthly):
+Month: Spend ฿50,000, Reach 500K ✅ Brand awareness goal
+No daily optimization needed
+```
+
+---
+
+### Import Requirements
+
+**File Format:**
+- Must be `.xlsx` (Excel format)
+- No specific filename requirement
+
+**Required Columns:**
+- Date (ad date)
+- Campaign (name)
+- Cost / Spend
+- GMV / Revenue
+- Orders / Conversions
+- ROAS / ROI (optional, will calculate if missing)
+
+**Must Have Sales Metrics:**
+- If file has NO GMV/Orders/ROAS → **BLOCKED** (must use Tiger Import)
+
+**Campaign Type Selection:**
+- User selects: Product (Daily) or Live (Weekly)
+- Both use same import logic (daily breakdown)
+- Difference is metadata only (campaign_type field)
+
+---
+
+### What Happens During Import?
+
+1. **File Validation:**
+   - Check file extension (.xlsx)
+   - Verify required columns exist
+   - Validate sales metrics present
+
+2. **Deduplication:**
+   - Calculate SHA256 hash of file content
+   - Check if file already imported
+   - If duplicate → REJECT with message
+
+3. **Daily Breakdown:**
+   - Parse each row with date + campaign + metrics
+   - Create one ad_daily_performance record per row
+   - Aggregate spend per day for wallet entries
+
+4. **Database Writes:**
+   - **ad_daily_performance** (one per day per campaign):
+     ```
+     marketplace: tiktok
+     ad_date: YYYY-MM-DD
+     campaign_type: product | live
+     campaign_name: [name]
+     spend, orders, revenue, roi
+     source: imported
+     import_batch_id: [batch id]
+     ```
+   - **wallet_ledger** (one per day, aggregated):
+     ```
+     entry_type: SPEND
+     direction: OUT
+     amount: [daily total spend]
+     date: YYYY-MM-DD
+     source: IMPORTED
+     import_batch_id: [batch id]
+     ```
+   - **import_batches**:
+     ```
+     report_type: tiktok_ads_product | tiktok_ads_live
+     status: success
+     ```
+
+5. **Where It Appears:**
+   - ✅ Accrual P&L (as Advertising Cost)
+   - ✅ Ads performance analytics (daily ROI tracking)
+   - ✅ Cashflow Summary (cash outflow)
+   - ✅ Wallet ledger table
+
+---
+
+### Business Rules
+
+1. **Performance Import → Full System**
+   - Creates ad_daily_performance records (analytics)
+   - Creates wallet SPEND entries (cashflow)
+   - Affects Accrual P&L (performance-driven spend)
+
+2. **Independent Imports:**
+   - Product and Live imports are fully independent
+   - No coupling or completeness enforcement
+   - Can import partial data (real-world frequency)
+   - Each import stands alone
+
+3. **ADS Wallet Rules Still Apply:**
+   - SPEND must be IMPORTED (enforced)
+   - Entry is immutable (cannot edit/delete)
+   - Requires import_batch_id
+
+4. **Daily Breakdown:**
+   - One ad_daily_performance record per date per campaign
+   - One wallet_ledger entry per date (aggregated)
+   - Enables daily ROI analysis
+
+---
+
+### Performance vs Awareness: Key Differences
+
+| Feature | Performance Ads | Awareness Ads (Tiger) |
+|---------|----------------|----------------------|
+| Sales Metrics | **Required** (GMV/Orders/ROAS) | **Prohibited** (no sales) |
+| Breakdown | **Daily** (one per day per campaign) | **Monthly** (single aggregate) |
+| ad_daily_performance | **Created** (analytics) | **NOT created** |
+| Accrual P&L | **Included** (performance cost) | **Excluded** (awareness only) |
+| Optimization | **Daily ROI tracking** | **No optimization** |
+| Purpose | Conversion tracking | Brand awareness |
+| Import Frequency | Daily or multi-day | Monthly |
+
+---
+
+## Awareness Ads (Tiger) - Monthly Cash Treatment
+
+### What is Tiger Awareness Import?
+
+Tiger Awareness Import is a **special import feature** for monthly awareness/reach/video view campaigns that:
+- **Do NOT have sales metrics** (no GMV/Orders/ROAS)
+- Are **brand awareness campaigns only**
+- Must be tracked as **monthly cash outflow** in wallet
+- **Do NOT affect Accrual P&L** (not performance ads)
+- **Show ONLY in Cashflow Summary** (cash-based view)
+
+---
+
+### Why Monthly Aggregation?
+
+Unlike performance ads which are tracked daily for ROI analysis, awareness campaigns are:
+1. **Not optimized for conversions** - they measure reach/impressions/views
+2. **Cannot be tied to revenue** - no sales attribution
+3. **Purchased in monthly packages** - spending happens over the month
+4. **Cash tracking purpose only** - we only care about total spend
+
+**Example:**
+```
+Performance Ads (Daily):
+Day 1: Spend ฿1,000, Revenue ฿3,000, ROAS = 3.0 ✅ Track daily for optimization
+
+Awareness Ads (Monthly):
+Month Dec: Spend ฿50,000, Reach 500K people, Views 2M ✅ Track once per month
+```
+
+---
+
+### Import Requirements
+
+**File Format:**
+- Must be `.xlsx` (Excel format)
+- Filename must contain "Tiger" OR "Campaign Report"
+- Date range format: `(YYYY-MM-DD to YYYY-MM-DD)` in filename
+
+**Required Columns:**
+- Campaign (name)
+- Cost (spend amount)
+- Currency (optional, defaults to THB)
+
+**Must NOT Have (Validation):**
+- GMV / Orders / ROAS / Conversion Value / CPA / Purchase
+- If these columns exist → **BLOCKED** (must use Performance Ads Import)
+
+**Example Filename:**
+```
+Tiger x CoolSmile - client's credit card-Campaign Report-(2024-12-01 to 2024-12-31).xlsx
+```
+
+---
+
+### What Happens During Import?
+
+1. **File Validation:**
+   - Check file extension (.xlsx)
+   - Check filename contains "Tiger" or "Campaign Report"
+   - Verify date range exists in filename
+   - Validate template (must have Campaign + Cost, must NOT have sales metrics)
+
+2. **Deduplication:**
+   - Calculate SHA256 hash of file content
+   - Check if file already imported
+   - If duplicate → REJECT with message
+
+3. **Data Aggregation (MONTHLY):**
+   - Sum total Cost across ALL campaigns in file
+   - Extract report end date (posting date)
+   - Create import_batch record
+
+4. **Wallet Entry Creation (1 entry only):**
+   ```
+   wallet_ledger:
+     entry_type: SPEND
+     direction: OUT
+     amount: [total monthly spend]
+     date: [report end date]
+     source: IMPORTED
+     import_batch_id: [batch id]
+     note: "Monthly Awareness Spend (Tiger) - YYYY-MM"
+   ```
+
+5. **Where It Appears:**
+   - ✅ Cashflow Summary (as cash outflow)
+   - ✅ Wallet ledger table
+   - ❌ Accrual P&L (excluded)
+   - ❌ Ads performance analytics (excluded)
+
+---
+
+### Business Rules
+
+1. **Tiger Import → Wallet ONLY**
+   - Creates wallet SPEND entry ONLY
+   - Does NOT create ad_daily_performance records
+   - Does NOT affect Accrual P&L calculation
+
+2. **ADS Wallet Rules Still Apply:**
+   - SPEND must be IMPORTED (enforced)
+   - Entry is immutable (cannot edit/delete)
+   - Requires import_batch_id
+
+3. **Monthly = Single Entry:**
+   - One file = One wallet entry
+   - No daily breakdown
+   - Posting date = Report end date
+
+4. **Currency Support:**
+   - Defaults to THB if not specified
+   - Respects currency from file if provided
+
+---
+
+### Common Mistakes Prevented
+
+**❌ Mistake: Treating Awareness as Performance Ads**
+- **Wrong:** Import Tiger report → Create daily ad_daily_performance records
+- **Why wrong:** Awareness campaigns have no sales data, cannot calculate ROI
+- **System prevention:** Template validation blocks files with sales metrics
+
+**❌ Mistake: Importing into P&L**
+- **Wrong:** Tiger spend shows up as "Advertising Cost" in Daily P&L
+- **Why wrong:** P&L should only show performance-driven ad spend (with ROAS)
+- **System prevention:** Tiger imports are wallet-only, excluded from P&L queries
+
+**❌ Mistake: Daily Splitting**
+- **Wrong:** Divide ฿50,000/30 days = ฿1,667/day and create daily entries
+- **Why wrong:** Unnecessary complexity, awareness isn't optimized daily
+- **System prevention:** Import logic creates single monthly entry only
+
+---
+
+### Example: Tiger vs Performance Import
+
+**Performance Ads (Daily):**
+```
+File: TikTok Ads Report - Daily Performance (2024-12-01 to 2024-12-31).xlsx
+Columns: Date, Campaign, Spend, GMV, Orders, ROAS
+
+Import Result:
+→ 31 ad_daily_performance records (one per day)
+→ 31 wallet_ledger SPEND entries (one per day)
+→ Shows in Accrual P&L (Advertising Cost)
+→ Shows in Ads Analytics (ROI tracking)
+```
+
+**Awareness Ads (Monthly):**
+```
+File: Tiger x CoolSmile - Campaign Report-(2024-12-01 to 2024-12-31).xlsx
+Columns: Campaign, Cost, Currency
+
+Import Result:
+→ 0 ad_daily_performance records
+→ 1 wallet_ledger SPEND entry (monthly total)
+→ Does NOT show in Accrual P&L
+→ Shows in Cashflow Summary ONLY
+```
+
+---
+
+### File Location & Code
+
+**Import Logic:**
+- `frontend/src/app/(dashboard)/wallets/tiger-import-actions.ts`
+
+**UI Component:**
+- `frontend/src/components/wallets/TigerImportDialog.tsx`
+
+**Integration:**
+- Wallets page: Import button visible for ADS wallet only
+
+---
+
 ## Summary: Key Takeaways
 
 1. **2 Views = 2 Purposes**
@@ -325,12 +650,18 @@ Separately:
    - Top-up ≠ Expense
    - Manual SPEND = BLOCKED
 
-3. **Data Integrity**
+3. **Tiger Awareness = Cash Tracking ONLY**
+   - Monthly aggregation (1 entry per file)
+   - Wallet SPEND only (no P&L impact)
+   - No sales metrics (awareness campaigns only)
+   - Shows in Cashflow Summary ONLY
+
+4. **Data Integrity**
    - IMPORTED entries = immutable
    - Source of truth = platform reports
    - Manual entries = auditable with notes
 
-4. **Scalable Design**
+5. **Scalable Design**
    - Add new wallets without schema changes
    - Wallet types define behavior
    - Business rules enforced at server-side
@@ -343,9 +674,10 @@ For questions about business rules or accounting logic:
 - Review this document first
 - Check `CLAUDE.md` for system architecture
 - See `wallets/actions.ts` for validation logic
+- See `wallets/tiger-import-actions.ts` for Tiger import logic
 - Test with `WALLET_VERIFICATION.md` checklist
 
 ---
 
 **Last Updated:** 2026-01-23
-**Version:** 1.0 (Multi-Wallet Foundation)
+**Version:** 1.1 (Tiger Awareness Import Added)

@@ -92,7 +92,7 @@ export function EditLedgerDialog({
 
       onSuccess()
       onOpenChange(false)
-    } catch (error) {
+    } catch {
       toast({
         title: 'เกิดข้อผิดพลาด',
         description: 'เกิดข้อผิดพลาดที่ไม่คาดคิด',

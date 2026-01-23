@@ -267,7 +267,9 @@ export async function updateWalletLedgerEntry(
     }
 
     // 4. Validate against business rules
-    const walletType = (existing.wallets as any)?.wallet_type as WalletType
+    const walletType = (
+      existing.wallets as unknown as { wallet_type: WalletType } | null
+    )?.wallet_type as WalletType
     const validation = validateLedgerEntry(
       walletType,
       input.entry_type,
@@ -471,7 +473,7 @@ export async function exportWalletLedger(filters: ExportFilters): Promise<Export
       'Created At',
     ]
 
-    const escapeCSV = (value: any): string => {
+    const escapeCSV = (value: string | number | null | undefined): string => {
       if (value === null || value === undefined) return ''
       const str = String(value)
       if (str.includes(',') || str.includes('"') || str.includes('\n')) {
@@ -508,6 +510,150 @@ export async function exportWalletLedger(filters: ExportFilters): Promise<Export
     }
   } catch (error) {
     console.error('Unexpected error in exportWalletLedger:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
+
+/**
+ * Calculate wallet balance for a date range (server action wrapper)
+ * This is a wrapper to make balance calculation callable from client
+ */
+interface CalculateBalanceParams {
+  walletId: string
+  startDate: string
+  endDate: string
+}
+
+export async function getWalletBalance(
+  params: CalculateBalanceParams
+): Promise<ActionResult> {
+  try {
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+    }
+
+    // Get wallet info
+    const { data: wallet, error: walletError } = await supabase
+      .from('wallets')
+      .select('id, name')
+      .eq('id', params.walletId)
+      .single()
+
+    if (walletError || !wallet) {
+      return { success: false, error: 'ไม่พบ wallet' }
+    }
+
+    // Get opening balance (all entries before start date)
+    const { data: openingEntries, error: openingError } = await supabase
+      .from('wallet_ledger')
+      .select('direction, amount')
+      .eq('wallet_id', params.walletId)
+      .lt('date', params.startDate)
+
+    if (openingError) {
+      console.error('Error fetching opening balance:', openingError)
+      return { success: false, error: 'เกิดข้อผิดพลาดในการคำนวณยอดเปิด' }
+    }
+
+    const openingBalance = (openingEntries || []).reduce(
+      (sum: number, entry: { direction: string; amount: number }) => {
+        return entry.direction === 'IN'
+          ? sum + Number(entry.amount)
+          : sum - Number(entry.amount)
+      },
+      0
+    )
+
+    // Get entries within date range
+    const { data: rangeEntries, error: rangeError } = await supabase
+      .from('wallet_ledger')
+      .select('*')
+      .eq('wallet_id', params.walletId)
+      .gte('date', params.startDate)
+      .lte('date', params.endDate)
+      .order('date', { ascending: true })
+
+    if (rangeError) {
+      console.error('Error fetching range entries:', rangeError)
+      return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+    }
+
+    // Calculate totals
+    let totalIn = 0
+    let totalOut = 0
+    let topUpTotal = 0
+    let spendTotal = 0
+    let refundTotal = 0
+    let adjustmentIn = 0
+    let adjustmentOut = 0
+
+    ;(rangeEntries || []).forEach(
+      (entry: {
+        direction: string
+        entry_type: string
+        amount: number
+      }) => {
+        const amount = Number(entry.amount)
+
+        if (entry.direction === 'IN') {
+          totalIn += amount
+
+          switch (entry.entry_type) {
+            case 'TOP_UP':
+              topUpTotal += amount
+              break
+            case 'REFUND':
+              refundTotal += amount
+              break
+            case 'ADJUSTMENT':
+              adjustmentIn += amount
+              break
+          }
+        } else {
+          totalOut += amount
+
+          switch (entry.entry_type) {
+            case 'SPEND':
+              spendTotal += amount
+              break
+            case 'ADJUSTMENT':
+              adjustmentOut += amount
+              break
+          }
+        }
+      }
+    )
+
+    const netChange = totalIn - totalOut
+    const closingBalance = openingBalance + netChange
+
+    const balance = {
+      wallet_id: params.walletId,
+      wallet_name: wallet.name,
+      opening_balance: Math.round(openingBalance * 100) / 100,
+      total_in: Math.round(totalIn * 100) / 100,
+      total_out: Math.round(totalOut * 100) / 100,
+      net_change: Math.round(netChange * 100) / 100,
+      closing_balance: Math.round(closingBalance * 100) / 100,
+      top_up_total: Math.round(topUpTotal * 100) / 100,
+      spend_total: Math.round(spendTotal * 100) / 100,
+      refund_total: Math.round(refundTotal * 100) / 100,
+      adjustment_in: Math.round(adjustmentIn * 100) / 100,
+      adjustment_out: Math.round(adjustmentOut * 100) / 100,
+    }
+
+    return { success: true, data: balance }
+  } catch (error) {
+    console.error('Unexpected error calculating balance:', error)
     return {
       success: false,
       error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
