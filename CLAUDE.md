@@ -62,7 +62,7 @@ Later: CSV import, inventory, payables, reports, tax, APIs
 
 ---
 
-# Current System State (Updated: 2026-01-23)
+# Current System State (Updated: 2026-01-25)
 
 ## ✅ Completed Features
 
@@ -387,19 +387,74 @@ Later: CSV import, inventory, payables, reports, tax, APIs
 
 ---
 
+### Sales & Expenses Import (COMPLETE - Phase 6)
+
+**Purpose:** End-to-end CSV/Excel import for Sales Orders and Expenses with preview, validation, and deduplication
+
+**Key Characteristics:**
+- ✅ Sales Import: TikTok Shop (OrderSKUList .xlsx) + Shopee/generic via manual mapping
+- ✅ Expenses Import: Standard template (.xlsx/.csv) + manual mapping fallback
+- ✅ SHA256 file deduplication (prevents duplicate imports)
+- ✅ Preview with validation errors before import
+- ✅ Line-level storage for TikTok (avoid double-counting order totals)
+- ✅ Bangkok timezone consistency
+- ✅ Reuses existing import infrastructure (import_batches, manual mapping wizard)
+
+**Sales Import - TikTok Shop:**
+- Format: OrderSKUList sheet in .xlsx
+- Auto-detects: Row 1 = header, Row 2 = description (skip), Row 3+ = data
+- Date format: DD/MM/YYYY HH:MM:SS → Bangkok timezone
+- Revenue calculation: SKU Subtotal After Discount (line-level, not order-level)
+- Status normalization: delivered/completed → completed, cancel/return → cancelled
+- Metadata: Full TikTok data (timestamps, logistics, payment) stored in JSONB
+
+**Expenses Import - Standard Template:**
+- Format: .xlsx or .csv with headers: Date, Category, Amount, Description
+- Category validation: Must be Advertising, COGS, or Operating
+- Date format: Multiple formats supported → Bangkok timezone (YYYY-MM-DD)
+- Breakdown by category in preview
+
+**Database Schema (Migration 007):**
+- `sales_orders.source` (manual | imported)
+- `sales_orders.import_batch_id` → links to import_batches
+- `sales_orders.metadata` (JSONB) → TikTok rich data
+- `expenses.source` (manual | imported)
+- `expenses.import_batch_id` → links to import_batches
+
+**Flow:**
+1. Upload file → Auto-parse (TikTok/Standard template detection)
+2. Preview: Summary stats + sample rows + errors/warnings
+3. Confirm → Execute import with file hash check
+4. Result: Inserted count + summary (revenue/amount)
+5. Fallback: If auto-parse fails → Manual mapping wizard
+
+**Location:**
+- Sales Import Actions: `frontend/src/app/(dashboard)/sales/sales-import-actions.ts`
+- Expenses Import Actions: `frontend/src/app/(dashboard)/expenses/expenses-import-actions.ts`
+- Sales Import Dialog: `frontend/src/components/sales/SalesImportDialog.tsx`
+- Expenses Import Dialog: `frontend/src/components/expenses/ExpensesImportDialog.tsx`
+- Types: `frontend/src/types/sales-import.ts`, `frontend/src/types/expenses-import.ts`
+- Migration: `database-scripts/migration-007-import-sales-expenses.sql`
+- Integration: Import button added to `/sales` and `/expenses` pages
+
+**Business Rules:**
+- TikTok Row 2 skipped (description row, not data)
+- Line-level import: Each SKU = separate row (avoid order total double-count)
+- Status filter: Only completed orders count toward revenue
+- File hash deduplication: Same file cannot be imported twice (same report_type)
+- Metadata isolation: TikTok-specific fields in JSONB, not polluting main schema
+
+**Deduplication:**
+- SHA256 hash of entire file buffer
+- Stored in `import_batches.file_hash` (indexed)
+- Checked before import → blocks if hash + report_type match
+- Shows original import timestamp if duplicate detected
+
+---
+
 ## 🚀 Future Enhancements (Not in Current MVP)
 
-### Phase 3 - Data Import & Automation
-1. **CSV Import for Sales Orders**
-   - Upload component with drag-and-drop
-   - Server-side parsing and validation
-   - Reuse existing `createManualOrder()` logic
-   - Duplicate detection
-
-2. **CSV Import for Expenses**
-   - Upload component
-   - Server-side parsing and validation
-   - Reuse existing `createManualExpense()` logic
+### Phase 7 - Advanced Features
 
 ### Phase 4 - Advanced Features
 3. **Inventory Management**

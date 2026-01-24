@@ -23,10 +23,11 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Download } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Download, FileUp } from 'lucide-react'
 import { AddExpenseDialog } from '@/components/expenses/AddExpenseDialog'
 import { EditExpenseDialog } from '@/components/expenses/EditExpenseDialog'
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
+import { ExpensesImportDialog } from '@/components/expenses/ExpensesImportDialog'
 import { deleteExpense, exportExpenses } from '@/app/(dashboard)/expenses/actions'
 
 const PER_PAGE = 20
@@ -39,6 +40,7 @@ export default function ExpensesPage() {
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [showEditDialog, setShowEditDialog] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [showImportDialog, setShowImportDialog] = useState(false)
   const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
@@ -288,6 +290,10 @@ export default function ExpensesPage() {
           <Plus className="mr-2 h-4 w-4" />
           เพิ่มค่าใช้จ่าย
         </Button>
+        <Button variant="outline" onClick={() => setShowImportDialog(true)}>
+          <FileUp className="mr-2 h-4 w-4" />
+          Import
+        </Button>
         <Button
           variant="outline"
           onClick={handleExport}
@@ -455,6 +461,13 @@ export default function ExpensesPage() {
         loading={deleteLoading}
         title="ยืนยันการลบรายการค่าใช้จ่าย"
         description="คุณต้องการลบรายการค่าใช้จ่ายนี้ใช่หรือไม่? การดำเนินการนี้ไม่สามารถย้อนกลับได้"
+      />
+
+      {/* Import Dialog */}
+      <ExpensesImportDialog
+        open={showImportDialog}
+        onOpenChange={setShowImportDialog}
+        onSuccess={fetchExpenses}
       />
     </div>
   )

@@ -27,6 +27,7 @@ import { ChevronLeft, ChevronRight, Download, FileUp, Plus, Pencil, Trash2 } fro
 import { AddOrderDialog } from '@/components/sales/AddOrderDialog'
 import { EditOrderDialog } from '@/components/sales/EditOrderDialog'
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
+import { SalesImportDialog } from '@/components/sales/SalesImportDialog'
 import { deleteOrder, exportSalesOrders } from '@/app/(dashboard)/sales/actions'
 
 const MARKETPLACES = ['All', 'TikTok', 'Shopee', 'Lazada', 'Line', 'Facebook']
@@ -40,6 +41,7 @@ export default function SalesPage() {
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [showEditDialog, setShowEditDialog] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [showImportDialog, setShowImportDialog] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<SalesOrder | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
@@ -296,9 +298,9 @@ export default function SalesPage() {
           <Plus className="mr-2 h-4 w-4" />
           Add Order
         </Button>
-        <Button variant="outline" disabled>
+        <Button variant="outline" onClick={() => setShowImportDialog(true)}>
           <FileUp className="mr-2 h-4 w-4" />
-          Import CSV
+          Import
         </Button>
         <Button
           variant="outline"
@@ -471,6 +473,13 @@ export default function SalesPage() {
         loading={deleteLoading}
         title="ยืนยันการลบ Order"
         description={`คุณต้องการลบ order ${selectedOrder?.order_id} ใช่หรือไม่? การดำเนินการนี้ไม่สามารถย้อนกลับได้`}
+      />
+
+      {/* Import Dialog */}
+      <SalesImportDialog
+        open={showImportDialog}
+        onOpenChange={setShowImportDialog}
+        onSuccess={fetchOrders}
       />
     </div>
   )

@@ -23,7 +23,8 @@
       "Bash(npm run lint:*)",
       "Bash(npx next build:*)",
       "Bash(npm run typecheck:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(git commit:*)"
     ]
   },
   "approvalMode": "auto",
