@@ -8,12 +8,10 @@ import { parse as parseDate, isValid } from 'date-fns'
 import { formatBangkok } from '@/lib/bangkok-time'
 import { ParsedSalesRow, SalesImportPreview } from '@/types/sales-import'
 
-const BANGKOK_TZ = 'Asia/Bangkok'
-
 /**
  * Parse Excel date to Bangkok timezone string
  */
-function parseExcelDate(value: any): Date | null {
+function parseExcelDate(value: unknown): Date | null {
   if (!value) return null
 
   // Handle Excel serial date number
@@ -56,7 +54,7 @@ function toBangkokDatetime(date: Date | null): string | null {
   if (!date) return null
   try {
     return formatBangkok(date, 'yyyy-MM-dd HH:mm:ss')
-  } catch (error) {
+  } catch {
     return null
   }
 }
@@ -64,7 +62,7 @@ function toBangkokDatetime(date: Date | null): string | null {
 /**
  * Normalize number
  */
-function normalizeNumber(value: any): number {
+function normalizeNumber(value: unknown): number {
   if (typeof value === 'number') return value
   if (!value) return 0
   const str = String(value).replace(/[^0-9.-]/g, '')
@@ -137,7 +135,7 @@ export async function parseTikTokFile(
     }
 
     const worksheet = workbook.Sheets[sheetName]
-    const rows = XLSX.utils.sheet_to_json(worksheet, { defval: null }) as any[]
+    const rows = XLSX.utils.sheet_to_json(worksheet, { defval: null }) as Record<string, unknown>[]
 
     if (rows.length === 0) {
       return {
@@ -243,7 +241,7 @@ export async function parseTikTokFile(
         const unitPrice = qty > 0 ? lineRevenue / qty : 0
 
         // Parse status
-        const orderStatus = row['Order Status']
+        const orderStatus = row['Order Status'] as string | undefined
         const orderSubstatus = row['Order Substatus']
         const status = normalizeStatus(orderStatus)
 
@@ -257,13 +255,14 @@ export async function parseTikTokFile(
         const paymentStatus = paidTime ? 'paid' : 'unpaid'
 
         // Build metadata (plain objects only) - keep for extended data
-        const metadata: any = {
+        const toStringOrNull = (val: unknown): string | null => val ? String(val) : null
+        const metadata: Record<string, string | null> = {
           source_report: 'OrderSKUList',
-          variation: row['Variation'] || null,
+          variation: toStringOrNull(row['Variation']),
           cancelled_time: cancelledTime ? toBangkokDatetime(cancelledTime) : null,
-          cancel_reason: row['Cancel Reason'] || null,
-          tracking_id: row['Tracking ID'] || null,
-          payment_method: row['Payment Method'] || null,
+          cancel_reason: toStringOrNull(row['Cancel Reason']),
+          tracking_id: toStringOrNull(row['Tracking ID']),
+          payment_method: toStringOrNull(row['Payment Method']),
         }
 
         // Add parsed row (plain object) with UX v2 fields
@@ -287,9 +286,9 @@ export async function parseTikTokFile(
           platform_status: orderStatus ? String(orderStatus).trim() : undefined,
           platform_substatus: orderSubstatus ? String(orderSubstatus).trim() : undefined,
           payment_status: paymentStatus,
-          paid_at: paidTime ? toBangkokDatetime(paidTime) : undefined,
-          shipped_at: shippedTime ? toBangkokDatetime(shippedTime) : undefined,
-          delivered_at: deliveredTime ? toBangkokDatetime(deliveredTime) : undefined,
+          paid_at: paidTime ? toBangkokDatetime(paidTime) || undefined : undefined,
+          shipped_at: shippedTime ? toBangkokDatetime(shippedTime) || undefined : undefined,
+          delivered_at: deliveredTime ? toBangkokDatetime(deliveredTime) || undefined : undefined,
           seller_sku: row['Seller SKU'] ? String(row['Seller SKU']).trim() : undefined,
           sku_id: row['SKU ID'] ? String(row['SKU ID']).trim() : undefined,
         })
@@ -300,10 +299,11 @@ export async function parseTikTokFile(
           totalRevenue += lineRevenue
         }
 
-      } catch (error: any) {
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error'
         errors.push({
           row: rowNumber,
-          message: `Parse error: ${error.message}`,
+          message: `Parse error: ${errorMessage}`,
           severity: 'error'
         })
       }
@@ -351,14 +351,15 @@ export async function parseTikTokFile(
       ],
     }
 
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
     return {
       success: false,
       importType: 'generic',
       totalRows: 0,
       sampleRows: [],
       summary: { totalRevenue: 0, totalOrders: 0, uniqueOrderIds: 0, lineCount: 0 },
-      errors: [{ message: `Error: ${error.message}`, severity: 'error' }],
+      errors: [{ message: `Error: ${errorMessage}`, severity: 'error' }],
       warnings: [],
     }
   }

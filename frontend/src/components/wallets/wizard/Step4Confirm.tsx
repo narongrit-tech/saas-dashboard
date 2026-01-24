@@ -6,7 +6,7 @@
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
-import { AlertCircle, CheckCircle } from 'lucide-react'
+import { AlertCircle } from 'lucide-react'
 import type { PreviewResult, ReportType } from '@/types/manual-mapping'
 
 interface Step4ConfirmProps {

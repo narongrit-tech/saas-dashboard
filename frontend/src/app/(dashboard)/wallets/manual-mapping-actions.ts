@@ -14,7 +14,6 @@ import { formatBangkok } from '@/lib/bangkok-time'
 import { parse, isValid, format } from 'date-fns'
 import { toZonedTime } from 'date-fns-tz'
 import type { ReportType, UserPreset, PreviewResult, ParsedRow } from '@/types/manual-mapping'
-import { extractColumnIndex } from '@/types/manual-mapping'
 
 interface ActionResult {
   success: boolean
@@ -261,9 +260,8 @@ export async function parseWithCustomMapping(
 
       // Map each system field
       let hasData = false
-      for (const [excelColumnValue, systemField] of reverseMapping) {
-        // Extract column name and index
-        const columnIndex = extractColumnIndex(excelColumnValue)
+      for (const [excelColumnValue, systemField] of Array.from(reverseMapping.entries())) {
+        // Extract column name (without index)
         const columnName = excelColumnValue.split('__')[0]
 
         // Get value from row (try both with and without index)
@@ -624,7 +622,7 @@ export async function executeManualImport(
       }
 
       // Insert wallet_ledger (one per day, aggregated)
-      for (const [date, { totalSpend }] of dailyMap) {
+      for (const [date, { totalSpend }] of Array.from(dailyMap.entries())) {
         await supabase.from('wallet_ledger').insert({
           wallet_id: adsWalletId,
           date,

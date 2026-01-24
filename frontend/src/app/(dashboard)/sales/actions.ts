@@ -374,7 +374,7 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
     ]
 
     // Escape CSV field (handle commas, quotes, newlines)
-    const escapeCSV = (value: any): string => {
+    const escapeCSV = (value: string | number | null | undefined): string => {
       if (value === null || value === undefined) return ''
       const str = String(value)
       // If contains comma, quote, or newline, wrap in quotes and escape quotes

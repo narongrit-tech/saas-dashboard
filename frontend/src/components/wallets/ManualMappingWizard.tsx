@@ -31,7 +31,6 @@ import type {
   WizardState,
   ReportType,
   UserPreset,
-  PreviewResult,
 } from '@/types/manual-mapping'
 import {
   areAllRequiredFieldsMapped,

@@ -26,7 +26,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
-import { ChevronLeft, ChevronRight, Download, FileUp, Plus, Pencil, Trash2, Filter } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, FileUp, Plus, Pencil, Trash2 } from 'lucide-react'
 import { AddOrderDialog } from '@/components/sales/AddOrderDialog'
 import { EditOrderDialog } from '@/components/sales/EditOrderDialog'
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
@@ -195,7 +195,7 @@ export default function SalesPage() {
     }
   }
 
-  const handleFilterChange = (key: keyof SalesOrderFilters, value: any) => {
+  const handleFilterChange = (key: keyof SalesOrderFilters, value: string | string[] | number | undefined) => {
     const newFilters = { ...filters, [key]: value, page: 1 }
     setFilters(newFilters)
     updateURL(newFilters)
@@ -303,8 +303,6 @@ export default function SalesPage() {
       </Badge>
     )
   }
-
-  const totalPages = Math.ceil(totalCount / PER_PAGE)
 
   const handleEdit = (order: SalesOrder) => {
     setSelectedOrder(order)

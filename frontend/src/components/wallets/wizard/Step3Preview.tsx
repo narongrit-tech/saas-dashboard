@@ -32,7 +32,7 @@ export function Step3Preview({ reportType, preview, loading }: Step3PreviewProps
         <Alert>
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>
-            กรุณากด "Generate Preview" เพื่อดูข้อมูลก่อน import
+            กรุณากด &ldquo;Generate Preview&rdquo; เพื่อดูข้อมูลก่อน import
           </AlertDescription>
         </Alert>
       </div>

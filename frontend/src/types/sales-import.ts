@@ -172,7 +172,7 @@ export interface ParsedSalesRow {
   status: string // pending | completed | cancelled (internal status)
   customer_name?: string
   notes?: string
-  metadata?: Record<string, any> // TikTok rich data
+  metadata?: Record<string, string | number | null> // TikTok rich data
   rowNumber?: number // for error reporting
 
   // UX v2: Platform-specific fields

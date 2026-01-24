@@ -16,7 +16,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
+import { FileSpreadsheet, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
 import { importSalesToSystem } from '@/app/(dashboard)/sales/sales-import-actions'
 import { SalesImportPreview, ParsedSalesRow } from '@/types/sales-import'
 import { calculateFileHash, toPlain } from '@/lib/file-hash'
@@ -64,14 +64,15 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
         // Show errors
         setStep('preview')
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
       setPreview({
         success: false,
         importType: 'generic',
         totalRows: 0,
         sampleRows: [],
         summary: { totalRevenue: 0, totalOrders: 0, uniqueOrderIds: 0, lineCount: 0 },
-        errors: [{ message: error.message, severity: 'error' }],
+        errors: [{ message: errorMessage, severity: 'error' }],
         warnings: [],
       })
       setStep('preview')
@@ -110,10 +111,11 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
           message: importResult.error || 'Import failed'
         })
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
       setResult({
         success: false,
-        message: error.message
+        message: errorMessage
       })
     } finally {
       setIsProcessing(false)

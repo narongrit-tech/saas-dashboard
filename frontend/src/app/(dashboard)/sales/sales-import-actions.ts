@@ -15,14 +15,10 @@ import * as XLSX from 'xlsx'
 import {
   ParsedSalesRow,
   SalesImportPreview,
-  SalesImportResult,
-  TIKTOK_SHOP_PRESET
+  SalesImportResult
 } from '@/types/sales-import'
-import { getBangkokNow, formatBangkok } from '@/lib/bangkok-time'
-import { zonedTimeToUtc } from 'date-fns-tz'
+import { formatBangkok } from '@/lib/bangkok-time'
 import { parse as parseDate, isValid } from 'date-fns'
-
-const BANGKOK_TZ = 'Asia/Bangkok'
 
 // ============================================
 // Helper Functions
@@ -31,7 +27,7 @@ const BANGKOK_TZ = 'Asia/Bangkok'
 /**
  * Parse various date formats to Bangkok timezone
  */
-function parseExcelDate(value: any): Date | null {
+function parseExcelDate(value: unknown): Date | null {
   if (!value) return null
 
   // Handle Excel serial date number
@@ -76,10 +72,9 @@ function parseExcelDate(value: any): Date | null {
 function toBangkokDatetime(date: Date | null): string | null {
   if (!date) return null
   try {
-    // Convert to Bangkok timezone
-    const bangkokDate = zonedTimeToUtc(date, BANGKOK_TZ)
-    return formatBangkok(bangkokDate, 'yyyy-MM-dd HH:mm:ss')
-  } catch (error) {
+    // Convert to Bangkok timezone and format
+    return formatBangkok(date, 'yyyy-MM-dd HH:mm:ss')
+  } catch {
     return null
   }
 }
@@ -87,7 +82,7 @@ function toBangkokDatetime(date: Date | null): string | null {
 /**
  * Normalize number (handle currency symbols, decimals)
  */
-function normalizeNumber(value: any): number {
+function normalizeNumber(value: unknown): number {
   if (typeof value === 'number') return value
   if (!value) return 0
 
@@ -117,7 +112,7 @@ function detectTikTokFormat(workbook: XLSX.WorkBook, worksheet: XLSX.WorkSheet):
   if (sheetName !== 'OrderSKUList') return false
 
   // Parse first 2 rows to check structure
-  const rows = XLSX.utils.sheet_to_json(worksheet, { defval: null, header: 1 }) as any[][]
+  const rows = XLSX.utils.sheet_to_json(worksheet, { defval: null, header: 1 }) as unknown[][]
 
   if (rows.length < 2) return false
 
@@ -126,7 +121,7 @@ function detectTikTokFormat(workbook: XLSX.WorkBook, worksheet: XLSX.WorkSheet):
   // Check for required TikTok columns
   const requiredColumns = ['Order ID', 'Product Name', 'Quantity', 'Created Time']
   const hasRequired = requiredColumns.every(col =>
-    headerRow.some((cell: any) => String(cell).trim() === col)
+    headerRow.some((cell: unknown) => String(cell).trim() === col)
   )
 
   return hasRequired
@@ -192,15 +187,16 @@ export async function parseSalesImportFile(
     // Parse TikTok format
     return await parseTikTokFormat(workbook, worksheet)
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Parse sales file error:', error)
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
     return {
       success: false,
       importType: 'generic',
       totalRows: 0,
       sampleRows: [],
       summary: { totalRevenue: 0, totalOrders: 0, uniqueOrderIds: 0, lineCount: 0 },
-      errors: [{ message: `Error: ${error.message}`, severity: 'error' }],
+      errors: [{ message: `Error: ${errorMessage}`, severity: 'error' }],
       warnings: [],
     }
   }
@@ -213,7 +209,7 @@ async function parseTikTokFormat(
   workbook: XLSX.WorkBook,
   worksheet: XLSX.WorkSheet
 ): Promise<SalesImportPreview> {
-  const rows = XLSX.utils.sheet_to_json(worksheet, { defval: null }) as any[]
+  const rows = XLSX.utils.sheet_to_json(worksheet, { defval: null }) as Record<string, unknown>[]
 
   if (rows.length === 0) {
     return {
@@ -311,24 +307,25 @@ async function parseTikTokFormat(
       const unitPrice = qty > 0 ? lineRevenue / qty : 0
 
       // Parse status
-      const orderStatus = row['Order Status']
+      const orderStatus = row['Order Status'] as string | undefined
       const status = normalizeStatus(orderStatus)
 
       // Build metadata for rich TikTok data
-      const metadata: any = {
+      const toStringOrNull = (val: unknown): string | null => val ? String(val) : null
+      const metadata: Record<string, string | null> = {
         source_report: 'OrderSKUList',
-        sku_id: row['SKU ID'] || null,
-        seller_sku: row['Seller SKU'] || null,
-        variation: row['Variation'] || null,
-        order_status: orderStatus || null,
-        order_substatus: row['Order Substatus'] || null,
+        sku_id: toStringOrNull(row['SKU ID']),
+        seller_sku: toStringOrNull(row['Seller SKU']),
+        variation: toStringOrNull(row['Variation']),
+        order_status: toStringOrNull(orderStatus),
+        order_substatus: toStringOrNull(row['Order Substatus']),
         paid_time: row['Paid Time'] ? toBangkokDatetime(parseExcelDate(row['Paid Time'])) : null,
         shipped_time: row['Shipped Time'] ? toBangkokDatetime(parseExcelDate(row['Shipped Time'])) : null,
         delivered_time: row['Delivered Time'] ? toBangkokDatetime(parseExcelDate(row['Delivered Time'])) : null,
         cancelled_time: row['Cancelled Time'] ? toBangkokDatetime(parseExcelDate(row['Cancelled Time'])) : null,
-        cancel_reason: row['Cancel Reason'] || null,
-        tracking_id: row['Tracking ID'] || null,
-        payment_method: row['Payment Method'] || null,
+        cancel_reason: toStringOrNull(row['Cancel Reason']),
+        tracking_id: toStringOrNull(row['Tracking ID']),
+        payment_method: toStringOrNull(row['Payment Method']),
       }
 
       // Add parsed row
@@ -354,10 +351,11 @@ async function parseTikTokFormat(
         totalRevenue += lineRevenue
       }
 
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
       errors.push({
         row: rowNumber,
-        message: `Parse error: ${error.message}`,
+        message: `Parse error: ${errorMessage}`,
         severity: 'error'
       })
     }
@@ -609,11 +607,12 @@ export async function importSalesToSystem(
       },
     }
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Import sales error:', error)
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
     return {
       success: false,
-      error: error.message,
+      error: errorMessage,
       inserted: 0,
       skipped: 0,
       errors: 0,

@@ -3,7 +3,7 @@
  * Map Excel columns to system fields + Tiger date range picker
  */
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,12 +19,10 @@ import { AlertCircle, X, Calendar } from 'lucide-react'
 import type {
   ReportType,
   UserPreset,
-  ExcelColumnOption,
 } from '@/types/manual-mapping'
 import {
   getAllFields,
   getRequiredFields,
-  areAllRequiredFieldsMapped,
   isValidTigerDateRange,
   createExcelColumnOptions,
 } from '@/types/manual-mapping'
@@ -236,7 +234,7 @@ export function Step2ColumnMapper({
             </div>
           </div>
           {dateRange && !isTigerDateRangeValid && (
-            <p className="text-xs text-red-600">❌ End date ต้อง >= Start date</p>
+            <p className="text-xs text-red-600">❌ End date ต้อง {'>='} Start date</p>
           )}
           <p className="text-xs text-orange-700">
             Posting Date = End Date (ตาม business rule)

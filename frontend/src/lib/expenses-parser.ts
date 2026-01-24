@@ -16,7 +16,7 @@ import {
 /**
  * Parse Excel date
  */
-function parseExcelDate(value: any): Date | null {
+function parseExcelDate(value: unknown): Date | null {
   if (!value) return null
 
   // Handle Excel serial date number
@@ -58,7 +58,7 @@ function toBangkokDate(date: Date | null): string | null {
   if (!date) return null
   try {
     return formatBangkok(date, 'yyyy-MM-dd')
-  } catch (error) {
+  } catch {
     return null
   }
 }
@@ -66,7 +66,7 @@ function toBangkokDate(date: Date | null): string | null {
 /**
  * Normalize number
  */
-function normalizeNumber(value: any): number {
+function normalizeNumber(value: unknown): number {
   if (typeof value === 'number') return value
   if (!value) return 0
   const str = String(value).replace(/[^0-9.-]/g, '')
@@ -77,7 +77,7 @@ function normalizeNumber(value: any): number {
 /**
  * Validate category
  */
-function validateCategory(category: any): ExpenseCategory | null {
+function validateCategory(category: unknown): ExpenseCategory | null {
   if (!category) return null
   const normalized = String(category).trim()
   const match = EXPENSE_CATEGORIES.find(
@@ -90,13 +90,13 @@ function validateCategory(category: any): ExpenseCategory | null {
  * Detect standard expense template
  */
 function detectStandardTemplate(worksheet: XLSX.WorkSheet): boolean {
-  const rows = XLSX.utils.sheet_to_json(worksheet, { defval: null, header: 1 }) as any[][]
+  const rows = XLSX.utils.sheet_to_json(worksheet, { defval: null, header: 1 }) as unknown[][]
   if (rows.length < 1) return false
 
   const headerRow = rows[0]
   const requiredColumns = ['Date', 'Category', 'Amount', 'Description']
   const hasRequired = requiredColumns.every(col =>
-    headerRow.some((cell: any) => {
+    headerRow.some((cell: unknown) => {
       const cellStr = String(cell || '').trim().toLowerCase()
       return cellStr === col.toLowerCase() || cellStr.includes(col.toLowerCase())
     })
@@ -162,7 +162,7 @@ export async function parseExpensesFile(
     }
 
     // Parse rows
-    const rows = XLSX.utils.sheet_to_json(worksheet, { defval: null }) as any[]
+    const rows = XLSX.utils.sheet_to_json(worksheet, { defval: null }) as Record<string, unknown>[]
 
     if (rows.length === 0) {
       return {
@@ -281,10 +281,11 @@ export async function parseExpensesFile(
         totalAmount += amount
         byCategory[category] += amount
 
-      } catch (error: any) {
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error'
         errors.push({
           row: rowNumber,
-          message: `Parse error: ${error.message}`,
+          message: `Parse error: ${errorMessage}`,
           severity: 'error'
         })
       }
@@ -327,14 +328,15 @@ export async function parseExpensesFile(
       warnings: [],
     }
 
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
     return {
       success: false,
       importType: 'generic',
       totalRows: 0,
       sampleRows: [],
       summary: { totalAmount: 0, byCategory: { Advertising: 0, COGS: 0, Operating: 0 } },
-      errors: [{ message: `Error: ${error.message}`, severity: 'error' }],
+      errors: [{ message: `Error: ${errorMessage}`, severity: 'error' }],
       warnings: [],
     }
   }

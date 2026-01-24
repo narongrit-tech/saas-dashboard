@@ -351,7 +351,6 @@ export async function importPerformanceAdsToSystem(
 
     // 6. Insert ad_daily_performance records (upsert by unique constraint)
     let perfInsertedCount = 0
-    let perfUpdatedCount = 0
 
     for (const dailyData of preview.dailyBreakdown) {
       const { error: perfError } = await supabase.from('ad_daily_performance').upsert(
