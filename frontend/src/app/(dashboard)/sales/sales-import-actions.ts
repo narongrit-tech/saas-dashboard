@@ -487,7 +487,7 @@ export async function importSalesToSystem(
       }
     }
 
-    // Insert sales orders (line-level)
+    // Insert sales orders (line-level) with UX v2 fields
     const salesRows = parsedData.map(row => ({
       order_id: row.order_id,
       marketplace: row.marketplace,
@@ -506,6 +506,18 @@ export async function importSalesToSystem(
       import_batch_id: batch.id,
       metadata: row.metadata || {},
       created_by: user.id,
+
+      // UX v2: Platform-specific fields
+      source_platform: row.source_platform,
+      external_order_id: row.external_order_id,
+      platform_status: row.platform_status,
+      platform_substatus: row.platform_substatus,
+      payment_status: row.payment_status,
+      paid_at: row.paid_at,
+      shipped_at: row.shipped_at,
+      delivered_at: row.delivered_at,
+      seller_sku: row.seller_sku,
+      sku_id: row.sku_id,
     }))
 
     const { data: insertedRows, error: insertError } = await supabase

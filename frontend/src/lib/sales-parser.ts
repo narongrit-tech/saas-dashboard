@@ -244,26 +244,29 @@ export async function parseTikTokFile(
 
         // Parse status
         const orderStatus = row['Order Status']
+        const orderSubstatus = row['Order Substatus']
         const status = normalizeStatus(orderStatus)
 
-        // Build metadata (plain objects only)
+        // Parse fulfillment timestamps
+        const paidTime = parseExcelDate(row['Paid Time'])
+        const shippedTime = parseExcelDate(row['Shipped Time'])
+        const deliveredTime = parseExcelDate(row['Delivered Time'])
+        const cancelledTime = parseExcelDate(row['Cancelled Time'])
+
+        // Derive payment status
+        const paymentStatus = paidTime ? 'paid' : 'unpaid'
+
+        // Build metadata (plain objects only) - keep for extended data
         const metadata: any = {
           source_report: 'OrderSKUList',
-          sku_id: row['SKU ID'] || null,
-          seller_sku: row['Seller SKU'] || null,
           variation: row['Variation'] || null,
-          order_status: orderStatus || null,
-          order_substatus: row['Order Substatus'] || null,
-          paid_time: row['Paid Time'] ? toBangkokDatetime(parseExcelDate(row['Paid Time'])) : null,
-          shipped_time: row['Shipped Time'] ? toBangkokDatetime(parseExcelDate(row['Shipped Time'])) : null,
-          delivered_time: row['Delivered Time'] ? toBangkokDatetime(parseExcelDate(row['Delivered Time'])) : null,
-          cancelled_time: row['Cancelled Time'] ? toBangkokDatetime(parseExcelDate(row['Cancelled Time'])) : null,
+          cancelled_time: cancelledTime ? toBangkokDatetime(cancelledTime) : null,
           cancel_reason: row['Cancel Reason'] || null,
           tracking_id: row['Tracking ID'] || null,
           payment_method: row['Payment Method'] || null,
         }
 
-        // Add parsed row (plain object)
+        // Add parsed row (plain object) with UX v2 fields
         parsedRows.push({
           order_id: String(orderId).trim(),
           marketplace: 'tiktok_shop',
@@ -274,9 +277,21 @@ export async function parseTikTokFile(
           unit_price: unitPrice,
           total_amount: lineRevenue,
           order_date: orderDate,
-          status,
+          status, // Internal status (pending/completed/cancelled)
           metadata,
           rowNumber,
+
+          // UX v2: Platform-specific fields
+          source_platform: 'tiktok_shop',
+          external_order_id: String(orderId).trim(),
+          platform_status: orderStatus ? String(orderStatus).trim() : undefined,
+          platform_substatus: orderSubstatus ? String(orderSubstatus).trim() : undefined,
+          payment_status: paymentStatus,
+          paid_at: paidTime ? toBangkokDatetime(paidTime) : undefined,
+          shipped_at: shippedTime ? toBangkokDatetime(shippedTime) : undefined,
+          delivered_at: deliveredTime ? toBangkokDatetime(deliveredTime) : undefined,
+          seller_sku: row['Seller SKU'] ? String(row['Seller SKU']).trim() : undefined,
+          sku_id: row['SKU ID'] ? String(row['SKU ID']).trim() : undefined,
         })
 
         uniqueOrderIds.add(String(orderId).trim())

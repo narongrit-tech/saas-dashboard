@@ -21,15 +21,31 @@ export interface SalesOrder {
   created_at: string
   updated_at: string
   created_by?: string | null
+
+  // UX v2: Platform-specific fields
+  source_platform?: string | null // tiktok_shop | shopee | lazada
+  external_order_id?: string | null // Original platform order ID
+  platform_status?: string | null // Raw platform status
+  platform_substatus?: string | null // Platform sub-status
+  payment_status?: string | null // paid | unpaid | partial | refunded
+  paid_at?: string | null // YYYY-MM-DD HH:MM:SS
+  shipped_at?: string | null // YYYY-MM-DD HH:MM:SS
+  delivered_at?: string | null // YYYY-MM-DD HH:MM:SS
+  seller_sku?: string | null // Seller-defined SKU
+  sku_id?: string | null // Platform SKU ID
 }
 
 export interface SalesOrderFilters {
-  marketplace?: string
+  marketplace?: string // Legacy filter (will use source_platform instead)
+  sourcePlatform?: string // UX v2: tiktok_shop | shopee | All
+  status?: string[] // UX v2: Multi-select internal status
+  platformStatus?: string // UX v2: Platform-specific status filter
+  paymentStatus?: string // UX v2: paid | unpaid | All
   startDate?: string
   endDate?: string
   search?: string
   page: number
-  perPage: number
+  perPage: number // UX v2: User-selectable (20/50/100)
 }
 
 export interface CreateOrderInput {

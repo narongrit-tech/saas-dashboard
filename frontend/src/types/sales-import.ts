@@ -169,11 +169,23 @@ export interface ParsedSalesRow {
   total_amount: number
   cost_per_unit?: number
   order_date: string // YYYY-MM-DD HH:MM:SS (Bangkok)
-  status: string // pending | completed | cancelled
+  status: string // pending | completed | cancelled (internal status)
   customer_name?: string
   notes?: string
   metadata?: Record<string, any> // TikTok rich data
   rowNumber?: number // for error reporting
+
+  // UX v2: Platform-specific fields
+  source_platform?: string // tiktok_shop | shopee | lazada
+  external_order_id?: string // Original platform order ID
+  platform_status?: string // Raw platform status (e.g., "Unpaid", "To Ship", "Delivered")
+  platform_substatus?: string // Platform sub-status
+  payment_status?: string // paid | unpaid | partial | refunded
+  paid_at?: string // YYYY-MM-DD HH:MM:SS (Bangkok)
+  shipped_at?: string // YYYY-MM-DD HH:MM:SS (Bangkok)
+  delivered_at?: string // YYYY-MM-DD HH:MM:SS (Bangkok)
+  seller_sku?: string // Seller-defined SKU
+  sku_id?: string // Platform SKU ID
 }
 
 /**

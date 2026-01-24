@@ -261,7 +261,10 @@ export async function deleteOrder(orderId: string): Promise<ActionResult> {
 }
 
 interface ExportFilters {
-  marketplace?: string
+  marketplace?: string // Legacy (keep for backward compat)
+  sourcePlatform?: string // UX v2: tiktok_shop | shopee | etc
+  status?: string[] // UX v2: Multi-select status filter
+  paymentStatus?: string // UX v2: paid | unpaid
   startDate?: string
   endDate?: string
   search?: string
@@ -292,15 +295,28 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
       return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
     }
 
-    // 2. Build query with filters (same logic as page query)
+    // 2. Build query with filters (UX v2 logic)
     let query = supabase
       .from('sales_orders')
       .select('*')
       .order('order_date', { ascending: false })
 
-    // Apply marketplace filter
-    if (filters.marketplace && filters.marketplace !== 'All') {
+    // Platform filter (UX v2)
+    if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
+      query = query.eq('source_platform', filters.sourcePlatform)
+    } else if (filters.marketplace && filters.marketplace !== 'All') {
+      // Legacy fallback
       query = query.eq('marketplace', filters.marketplace)
+    }
+
+    // Status filter (multi-select, UX v2)
+    if (filters.status && filters.status.length > 0) {
+      query = query.in('status', filters.status)
+    }
+
+    // Payment status filter (UX v2)
+    if (filters.paymentStatus && filters.paymentStatus !== 'all') {
+      query = query.eq('payment_status', filters.paymentStatus)
     }
 
     // Apply date filters
@@ -317,10 +333,10 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
       query = query.lte('order_date', endOfDayBangkok.toISOString())
     }
 
-    // Apply search filter
+    // Apply search filter (UX v2 includes external_order_id)
     if (filters.search && filters.search.trim()) {
       query = query.or(
-        `order_id.ilike.%${filters.search}%,product_name.ilike.%${filters.search}%`
+        `order_id.ilike.%${filters.search}%,product_name.ilike.%${filters.search}%,external_order_id.ilike.%${filters.search}%`
       )
     }
 
@@ -339,16 +355,20 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
       return { success: false, error: 'ไม่พบข้อมูลที่จะ export' }
     }
 
-    // 3. Generate CSV content
+    // 3. Generate CSV content (UX v2 with platform status & payment)
     // CSV Headers (English for Excel compatibility)
     const headers = [
       'Order ID',
-      'Marketplace',
+      'External Order ID',
+      'Platform',
       'Product Name',
       'Quantity',
       'Unit Price',
       'Total Amount',
-      'Status',
+      'Internal Status',
+      'Platform Status',
+      'Payment Status',
+      'Paid Date',
       'Order Date',
       'Created At',
     ]
@@ -364,16 +384,20 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
       return str
     }
 
-    // Build CSV rows
+    // Build CSV rows (UX v2 with platform status & payment)
     const rows = orders.map((order) => {
       return [
         escapeCSV(order.order_id),
-        escapeCSV(order.marketplace),
+        escapeCSV(order.external_order_id || ''),
+        escapeCSV(order.source_platform || order.marketplace),
         escapeCSV(order.product_name),
         escapeCSV(order.quantity),
         escapeCSV(order.unit_price),
         escapeCSV(order.total_amount),
         escapeCSV(order.status),
+        escapeCSV(order.platform_status || ''),
+        escapeCSV(order.payment_status || ''),
+        escapeCSV(order.paid_at || ''),
         escapeCSV(order.order_date),
         escapeCSV(order.created_at),
       ].join(',')

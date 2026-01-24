@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SalesOrder, SalesOrderFilters } from '@/types/sales'
 import { toZonedTime } from 'date-fns-tz'
@@ -23,17 +24,42 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { ChevronLeft, ChevronRight, Download, FileUp, Plus, Pencil, Trash2 } from 'lucide-react'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
+import { ChevronLeft, ChevronRight, Download, FileUp, Plus, Pencil, Trash2, Filter } from 'lucide-react'
 import { AddOrderDialog } from '@/components/sales/AddOrderDialog'
 import { EditOrderDialog } from '@/components/sales/EditOrderDialog'
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
 import { SalesImportDialog } from '@/components/sales/SalesImportDialog'
 import { deleteOrder, exportSalesOrders } from '@/app/(dashboard)/sales/actions'
 
-const MARKETPLACES = ['All', 'TikTok', 'Shopee', 'Lazada', 'Line', 'Facebook']
-const PER_PAGE = 20
+const PLATFORMS = [
+  { value: 'all', label: 'All Platforms' },
+  { value: 'tiktok_shop', label: 'TikTok' },
+  { value: 'shopee', label: 'Shopee' },
+  { value: 'lazada', label: 'Lazada' },
+  { value: 'line', label: 'Line' },
+  { value: 'facebook', label: 'Facebook' },
+]
+
+const STATUSES = [
+  { value: 'pending', label: 'Pending' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'cancelled', label: 'Cancelled' },
+]
+
+const PAYMENT_STATUSES = [
+  { value: 'all', label: 'All' },
+  { value: 'paid', label: 'Paid' },
+  { value: 'unpaid', label: 'Unpaid' },
+]
+
+const PAGE_SIZES = [20, 50, 100]
 
 export default function SalesPage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+
   const [orders, setOrders] = useState<SalesOrder[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -46,14 +72,60 @@ export default function SalesPage() {
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
 
-  const [filters, setFilters] = useState<SalesOrderFilters>({
-    marketplace: undefined,
-    startDate: undefined,
-    endDate: undefined,
-    search: undefined,
-    page: 1,
-    perPage: PER_PAGE,
-  })
+  // Parse filters from URL params
+  const getFiltersFromURL = (): SalesOrderFilters => {
+    const statusParam = searchParams.get('status')
+    return {
+      sourcePlatform: searchParams.get('platform') || undefined,
+      status: statusParam ? statusParam.split(',') : undefined,
+      paymentStatus: searchParams.get('paymentStatus') || undefined,
+      startDate: searchParams.get('startDate') || undefined,
+      endDate: searchParams.get('endDate') || undefined,
+      search: searchParams.get('search') || undefined,
+      page: parseInt(searchParams.get('page') || '1', 10),
+      perPage: parseInt(searchParams.get('perPage') || '20', 10),
+    }
+  }
+
+  const [filters, setFilters] = useState<SalesOrderFilters>(getFiltersFromURL())
+
+  // Update URL when filters change
+  const updateURL = (newFilters: SalesOrderFilters) => {
+    const params = new URLSearchParams()
+
+    if (newFilters.sourcePlatform && newFilters.sourcePlatform !== 'all') {
+      params.set('platform', newFilters.sourcePlatform)
+    }
+    if (newFilters.status && newFilters.status.length > 0) {
+      params.set('status', newFilters.status.join(','))
+    }
+    if (newFilters.paymentStatus && newFilters.paymentStatus !== 'all') {
+      params.set('paymentStatus', newFilters.paymentStatus)
+    }
+    if (newFilters.startDate) {
+      params.set('startDate', newFilters.startDate)
+    }
+    if (newFilters.endDate) {
+      params.set('endDate', newFilters.endDate)
+    }
+    if (newFilters.search) {
+      params.set('search', newFilters.search)
+    }
+    if (newFilters.page > 1) {
+      params.set('page', newFilters.page.toString())
+    }
+    if (newFilters.perPage !== 20) {
+      params.set('perPage', newFilters.perPage.toString())
+    }
+
+    router.push(`/sales?${params.toString()}`, { scroll: false })
+  }
+
+  // Sync URL params to state
+  useEffect(() => {
+    const urlFilters = getFiltersFromURL()
+    setFilters(urlFilters)
+  }, [searchParams])
 
   useEffect(() => {
     fetchOrders()
@@ -70,11 +142,22 @@ export default function SalesPage() {
         .select('*', { count: 'exact' })
         .order('order_date', { ascending: false })
 
-      // Apply filters
-      if (filters.marketplace && filters.marketplace !== 'All') {
-        query = query.eq('marketplace', filters.marketplace)
+      // Platform filter (UX v2)
+      if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
+        query = query.eq('source_platform', filters.sourcePlatform)
       }
 
+      // Status filter (multi-select, UX v2)
+      if (filters.status && filters.status.length > 0) {
+        query = query.in('status', filters.status)
+      }
+
+      // Payment status filter (UX v2)
+      if (filters.paymentStatus && filters.paymentStatus !== 'all') {
+        query = query.eq('payment_status', filters.paymentStatus)
+      }
+
+      // Date range filters
       if (filters.startDate) {
         query = query.gte('order_date', filters.startDate)
       }
@@ -86,9 +169,10 @@ export default function SalesPage() {
         query = query.lte('order_date', endOfDayBangkok.toISOString())
       }
 
+      // Search filter (order_id, product_name, external_order_id)
       if (filters.search && filters.search.trim()) {
         query = query.or(
-          `order_id.ilike.%${filters.search}%,product_name.ilike.%${filters.search}%`
+          `order_id.ilike.%${filters.search}%,product_name.ilike.%${filters.search}%,external_order_id.ilike.%${filters.search}%`
         )
       }
 
@@ -111,12 +195,41 @@ export default function SalesPage() {
     }
   }
 
-  const handleFilterChange = (key: keyof SalesOrderFilters, value: string | undefined) => {
-    setFilters((prev) => ({ ...prev, [key]: value, page: 1 }))
+  const handleFilterChange = (key: keyof SalesOrderFilters, value: any) => {
+    const newFilters = { ...filters, [key]: value, page: 1 }
+    setFilters(newFilters)
+    updateURL(newFilters)
+  }
+
+  const handleStatusToggle = (status: string) => {
+    const currentStatuses = filters.status || []
+    const newStatuses = currentStatuses.includes(status)
+      ? currentStatuses.filter((s) => s !== status)
+      : [...currentStatuses, status]
+
+    const newFilters = { ...filters, status: newStatuses, page: 1 }
+    setFilters(newFilters)
+    updateURL(newFilters)
   }
 
   const handlePageChange = (newPage: number) => {
-    setFilters((prev) => ({ ...prev, page: newPage }))
+    const newFilters = { ...filters, page: newPage }
+    setFilters(newFilters)
+    updateURL(newFilters)
+  }
+
+  const handlePageSizeChange = (newPageSize: number) => {
+    const newFilters = { ...filters, perPage: newPageSize, page: 1 }
+    setFilters(newFilters)
+    updateURL(newFilters)
+  }
+
+  const handleJumpToPage = (pageInput: string) => {
+    const pageNum = parseInt(pageInput, 10)
+    const totalPages = Math.ceil(totalCount / filters.perPage)
+    if (pageNum >= 1 && pageNum <= totalPages) {
+      handlePageChange(pageNum)
+    }
   }
 
   const getStatusBadge = (status: string) => {
@@ -158,6 +271,37 @@ export default function SalesPage() {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     })
+  }
+
+  const getPlatformLabel = (platform?: string | null) => {
+    if (!platform) return '-'
+    const found = PLATFORMS.find((p) => p.value === platform)
+    return found ? found.label : platform
+  }
+
+  const getPlatformStatusBadge = (platformStatus?: string | null) => {
+    if (!platformStatus) return null
+    return (
+      <Badge variant="outline" className="text-xs">
+        {platformStatus}
+      </Badge>
+    )
+  }
+
+  const getPaymentStatusBadge = (paymentStatus?: string | null) => {
+    if (!paymentStatus) return null
+    if (paymentStatus === 'paid') {
+      return (
+        <Badge className="bg-blue-500 hover:bg-blue-600 text-white text-xs">
+          Paid
+        </Badge>
+      )
+    }
+    return (
+      <Badge variant="outline" className="text-xs">
+        {paymentStatus}
+      </Badge>
+    )
   }
 
   const totalPages = Math.ceil(totalCount / PER_PAGE)
@@ -206,7 +350,9 @@ export default function SalesPage() {
 
     try {
       const result = await exportSalesOrders({
-        marketplace: filters.marketplace,
+        sourcePlatform: filters.sourcePlatform,
+        status: filters.status,
+        paymentStatus: filters.paymentStatus,
         startDate: filters.startDate,
         endDate: filters.endDate,
         search: filters.search,
@@ -241,54 +387,102 @@ export default function SalesPage() {
         <h1 className="text-3xl font-bold">Sales Orders</h1>
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-end">
-        <div className="flex-1 space-y-2">
-          <label className="text-sm font-medium">Marketplace</label>
-          <Select
-            value={filters.marketplace || 'All'}
-            onValueChange={(value) =>
-              handleFilterChange('marketplace', value === 'All' ? undefined : value)
-            }
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="เลือก marketplace" />
-            </SelectTrigger>
-            <SelectContent>
-              {MARKETPLACES.map((marketplace) => (
-                <SelectItem key={marketplace} value={marketplace}>
-                  {marketplace}
-                </SelectItem>
+      {/* Filters - UX v2 */}
+      <div className="space-y-4">
+        {/* Row 1: Platform, Status Multi-Select, Payment Status */}
+        <div className="flex flex-col gap-4 md:flex-row md:items-end">
+          <div className="flex-1 space-y-2">
+            <label className="text-sm font-medium">Platform</label>
+            <Select
+              value={filters.sourcePlatform || 'all'}
+              onValueChange={(value) =>
+                handleFilterChange('sourcePlatform', value === 'all' ? undefined : value)
+              }
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="All Platforms" />
+              </SelectTrigger>
+              <SelectContent>
+                {PLATFORMS.map((platform) => (
+                  <SelectItem key={platform.value} value={platform.value}>
+                    {platform.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex-1 space-y-2">
+            <label className="text-sm font-medium">Status</label>
+            <div className="flex items-center gap-4 border rounded-md p-2.5 bg-white">
+              {STATUSES.map((status) => (
+                <div key={status.value} className="flex items-center gap-2">
+                  <Checkbox
+                    id={`status-${status.value}`}
+                    checked={filters.status?.includes(status.value)}
+                    onCheckedChange={() => handleStatusToggle(status.value)}
+                  />
+                  <Label
+                    htmlFor={`status-${status.value}`}
+                    className="text-sm font-normal cursor-pointer"
+                  >
+                    {status.label}
+                  </Label>
+                </div>
               ))}
-            </SelectContent>
-          </Select>
+            </div>
+          </div>
+
+          <div className="flex-1 space-y-2">
+            <label className="text-sm font-medium">Payment</label>
+            <Select
+              value={filters.paymentStatus || 'all'}
+              onValueChange={(value) =>
+                handleFilterChange('paymentStatus', value === 'all' ? undefined : value)
+              }
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="All" />
+              </SelectTrigger>
+              <SelectContent>
+                {PAYMENT_STATUSES.map((ps) => (
+                  <SelectItem key={ps.value} value={ps.value}>
+                    {ps.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
-        <div className="flex-1 space-y-2">
-          <label className="text-sm font-medium">วันที่เริ่มต้น</label>
-          <Input
-            type="date"
-            value={filters.startDate || ''}
-            onChange={(e) => handleFilterChange('startDate', e.target.value || undefined)}
-          />
-        </div>
+        {/* Row 2: Date Range, Search */}
+        <div className="flex flex-col gap-4 md:flex-row md:items-end">
+          <div className="flex-1 space-y-2">
+            <label className="text-sm font-medium">วันที่เริ่มต้น</label>
+            <Input
+              type="date"
+              value={filters.startDate || ''}
+              onChange={(e) => handleFilterChange('startDate', e.target.value || undefined)}
+            />
+          </div>
 
-        <div className="flex-1 space-y-2">
-          <label className="text-sm font-medium">วันที่สิ้นสุด</label>
-          <Input
-            type="date"
-            value={filters.endDate || ''}
-            onChange={(e) => handleFilterChange('endDate', e.target.value || undefined)}
-          />
-        </div>
+          <div className="flex-1 space-y-2">
+            <label className="text-sm font-medium">วันที่สิ้นสุด</label>
+            <Input
+              type="date"
+              value={filters.endDate || ''}
+              onChange={(e) => handleFilterChange('endDate', e.target.value || undefined)}
+            />
+          </div>
 
-        <div className="flex-1 space-y-2">
-          <label className="text-sm font-medium">ค้นหา</label>
-          <Input
-            placeholder="ค้นหา order id หรือสินค้า..."
-            value={filters.search || ''}
-            onChange={(e) => handleFilterChange('search', e.target.value || undefined)}
-          />
+          <div className="flex-1 space-y-2">
+            <label className="text-sm font-medium">ค้นหา</label>
+            <Input
+              placeholder="Order ID, สินค้า, External Order ID..."
+              value={filters.search || ''}
+              onChange={(e) => handleFilterChange('search', e.target.value || undefined)}
+            />
+          </div>
         </div>
       </div>
 
@@ -319,19 +513,22 @@ export default function SalesPage() {
         </div>
       )}
 
-      {/* Table */}
-      <div className="rounded-md border bg-white">
+      {/* Table - UX v2 with Platform Status & Payment */}
+      <div className="rounded-md border bg-white overflow-x-auto">
         <Table>
-          <TableHeader>
+          <TableHeader className="sticky top-0 bg-white z-10">
             <TableRow>
-              <TableHead>Order ID</TableHead>
-              <TableHead>Marketplace</TableHead>
-              <TableHead>Product Name</TableHead>
-              <TableHead className="text-right">Qty</TableHead>
-              <TableHead className="text-right">Total Amount</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Order Date</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead className="min-w-[140px]">Order ID</TableHead>
+              <TableHead className="min-w-[100px]">Platform</TableHead>
+              <TableHead className="min-w-[200px]">Product Name</TableHead>
+              <TableHead className="text-right min-w-[60px]">Qty</TableHead>
+              <TableHead className="text-right min-w-[120px]">Amount</TableHead>
+              <TableHead className="min-w-[100px]">Status</TableHead>
+              <TableHead className="min-w-[120px]">Platform Status</TableHead>
+              <TableHead className="min-w-[80px]">Payment</TableHead>
+              <TableHead className="min-w-[100px]">Paid Date</TableHead>
+              <TableHead className="min-w-[120px]">Order Date</TableHead>
+              <TableHead className="text-right min-w-[100px]">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -368,7 +565,7 @@ export default function SalesPage() {
             ) : orders.length === 0 ? (
               // Empty state
               <TableRow>
-                <TableCell colSpan={8} className="h-32 text-center">
+                <TableCell colSpan={11} className="h-32 text-center">
                   <div className="flex flex-col items-center justify-center text-muted-foreground">
                     <p className="text-lg font-medium">ไม่พบข้อมูล</p>
                     <p className="text-sm">No orders found</p>
@@ -376,17 +573,30 @@ export default function SalesPage() {
                 </TableCell>
               </TableRow>
             ) : (
-              // Data rows
+              // Data rows - UX v2 with platform status & payment
               orders.map((order) => (
                 <TableRow key={order.id}>
-                  <TableCell className="font-medium">{order.order_id}</TableCell>
-                  <TableCell>{order.marketplace}</TableCell>
-                  <TableCell>{order.product_name}</TableCell>
+                  <TableCell className="font-medium" title={order.external_order_id || order.order_id}>
+                    <div className="max-w-[140px] truncate">
+                      {order.external_order_id || order.order_id}
+                    </div>
+                  </TableCell>
+                  <TableCell>{getPlatformLabel(order.source_platform || order.marketplace)}</TableCell>
+                  <TableCell title={order.product_name}>
+                    <div className="max-w-[200px] truncate">
+                      {order.product_name}
+                    </div>
+                  </TableCell>
                   <TableCell className="text-right">{order.quantity}</TableCell>
                   <TableCell className="text-right">
                     ฿{formatCurrency(order.total_amount)}
                   </TableCell>
                   <TableCell>{getStatusBadge(order.status)}</TableCell>
+                  <TableCell>{getPlatformStatusBadge(order.platform_status)}</TableCell>
+                  <TableCell>{getPaymentStatusBadge(order.payment_status)}</TableCell>
+                  <TableCell>
+                    {order.paid_at ? formatDate(order.paid_at) : '-'}
+                  </TableCell>
                   <TableCell>{formatDate(order.order_date)}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
@@ -416,36 +626,75 @@ export default function SalesPage() {
         </Table>
       </div>
 
-      {/* Pagination */}
-      {!loading && orders.length > 0 && (
-        <div className="flex items-center justify-between">
+      {/* Pagination - UX v2 with Page Size & Jump Controls */}
+      {!loading && totalCount > 0 && (
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          {/* Left: Record count */}
           <p className="text-sm text-muted-foreground">
-            แสดง {(filters.page - 1) * PER_PAGE + 1} ถึง{' '}
-            {Math.min(filters.page * PER_PAGE, totalCount)} จากทั้งหมด {totalCount}{' '}
+            แสดง {(filters.page - 1) * filters.perPage + 1} ถึง{' '}
+            {Math.min(filters.page * filters.perPage, totalCount)} จากทั้งหมด {totalCount}{' '}
             รายการ
           </p>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handlePageChange(filters.page - 1)}
-              disabled={filters.page === 1}
-            >
-              <ChevronLeft className="h-4 w-4" />
-              Previous
-            </Button>
-            <span className="text-sm">
-              หน้า {filters.page} / {totalPages}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handlePageChange(filters.page + 1)}
-              disabled={filters.page >= totalPages}
-            >
-              Next
-              <ChevronRight className="h-4 w-4" />
-            </Button>
+
+          {/* Right: Page Size, Jump, Prev/Next */}
+          <div className="flex items-center gap-4">
+            {/* Page Size Selector */}
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Show:</span>
+              <Select
+                value={filters.perPage.toString()}
+                onValueChange={(value) => handlePageSizeChange(parseInt(value, 10))}
+              >
+                <SelectTrigger className="w-20">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PAGE_SIZES.map((size) => (
+                    <SelectItem key={size} value={size.toString()}>
+                      {size}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Jump to Page */}
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Page:</span>
+              <Input
+                type="number"
+                min={1}
+                max={Math.ceil(totalCount / filters.perPage)}
+                value={filters.page}
+                onChange={(e) => handleJumpToPage(e.target.value)}
+                className="w-16 text-center"
+              />
+              <span className="text-sm text-muted-foreground">
+                / {Math.ceil(totalCount / filters.perPage)}
+              </span>
+            </div>
+
+            {/* Prev/Next Buttons */}
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handlePageChange(filters.page - 1)}
+                disabled={filters.page === 1}
+              >
+                <ChevronLeft className="h-4 w-4" />
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handlePageChange(filters.page + 1)}
+                disabled={filters.page >= Math.ceil(totalCount / filters.perPage)}
+              >
+                Next
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </div>
       )}
