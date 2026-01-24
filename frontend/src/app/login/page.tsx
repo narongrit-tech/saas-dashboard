@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -8,9 +9,31 @@ import { Chrome } from 'lucide-react'
 
 export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false)
+  const [isChecking, setIsChecking] = useState(true)
+  const router = useRouter()
   const supabase = createClient()
 
+  // Guard: Redirect if already logged in
+  useEffect(() => {
+    const checkSession = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
+        if (session) {
+          router.replace('/')
+        }
+      } catch (error) {
+        console.error('Session check error:', error)
+      } finally {
+        setIsChecking(false)
+      }
+    }
+
+    checkSession()
+  }, [supabase, router])
+
   const handleGoogleLogin = async () => {
+    if (isLoading) return // Prevent double-click
+
     try {
       setIsLoading(true)
       const { error } = await supabase.auth.signInWithOAuth({
@@ -28,6 +51,15 @@ export default function LoginPage() {
     } finally {
       setIsLoading(false)
     }
+  }
+
+  // Show loading state while checking session
+  if (isChecking) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-50 to-slate-100">
+        <div className="text-muted-foreground">Loading...</div>
+      </div>
+    )
   }
 
   return (
