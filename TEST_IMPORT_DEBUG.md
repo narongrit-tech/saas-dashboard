@@ -1,7 +1,13 @@
 # Test Import with Debug Logs
 
+## FIX APPLIED:
+- Moved file parsing to CLIENT-SIDE (no more ArrayBuffer in server actions)
+- TikTok parser: `frontend/src/lib/sales-parser.ts`
+- Expenses parser: `frontend/src/lib/expenses-parser.ts`
+- Added extensive debug logs to track serialization
+
 ## Purpose
-Debug serialization issues before calling server actions
+Verify that import works and payload is serializable
 
 ## Steps
 
