@@ -66,25 +66,63 @@ Later: CSV import, inventory, payables, reports, tax, APIs
 
 ## ✅ Completed Features
 
-### Sales Orders (COMPLETE - MVP Core Feature)
-- ✅ View: Paginated list with filters (marketplace, date range, search)
+### Sales Orders (COMPLETE - MVP Core Feature + UX v2)
+- ✅ View: Paginated list with advanced filters
 - ✅ Add: Manual order entry with validation
 - ✅ Edit: Update existing orders with server-side validation
 - ✅ Delete: Hard delete with confirmation dialog
 - ✅ Export: CSV export respecting all filters (Asia/Bangkok timezone)
+- ✅ **UX v2**: Platform status tracking, flexible pagination, URL params
 
 **Location:**
 - Page: `frontend/src/app/(dashboard)/sales/page.tsx`
 - Actions: `frontend/src/app/(dashboard)/sales/actions.ts`
+- Import: `frontend/src/app/(dashboard)/sales/sales-import-actions.ts`
+- Parser: `frontend/src/lib/sales-parser.ts`
 - Components:
   - `frontend/src/components/sales/AddOrderDialog.tsx`
   - `frontend/src/components/sales/EditOrderDialog.tsx`
+  - `frontend/src/components/sales/SalesImportDialog.tsx`
   - `frontend/src/components/shared/DeleteConfirmDialog.tsx`
+- Database: `database-scripts/migration-008-sales-ux-v2.sql`
 
-**CSV Export:**
+**UX v2 Features (Phase 6B):**
+
+**Platform Status Tracking:**
+- `platform_status` - Raw status from platform (e.g., "To Ship", "Delivered", "Cancelled")
+- `platform_substatus` - Platform-specific sub-status
+- `payment_status` - Payment state: paid/unpaid/partial/refunded
+- `paid_at` - Timestamp when payment received
+- `shipped_at` - Timestamp when order shipped
+- `delivered_at` - Timestamp when order delivered
+- `source_platform` - Normalized platform: tiktok_shop/shopee/lazada
+- `external_order_id` - Original platform order ID
+
+**Advanced Filters (URL Params):**
+- Platform filter: tiktok_shop/shopee/all
+- Status multi-select: pending/completed/cancelled (checkboxes)
+- Payment status: paid/unpaid/all
+- Date range: start/end (Bangkok timezone)
+- Search: order_id/product_name/external_order_id
+- URL format: `?platform=tiktok_shop&status=pending,completed&paymentStatus=paid&page=2&perPage=50`
+
+**Pagination Controls:**
+- Page size dropdown: 20/50/100 records per page
+- Jump-to-page input: Navigate to specific page (1 to N)
+- Prev/Next buttons: Sequential navigation
+- URL persistence: `?page=N&perPage=M` (refresh-safe)
+
+**Table Improvements:**
+- 11 columns: Order ID, External Order ID, Platform, Product, Qty, Amount, Internal Status, Platform Status, Payment, Paid Date, Order Date, Actions
+- Sticky header for long scrolls
+- Ellipsis with hover tooltip for long text
+- Right-align numeric columns
+- Status badges: Internal (green/yellow/red), Platform (outline), Payment (blue)
+
+**CSV Export (UX v2):**
 - Filename format: `sales-orders-YYYYMMDD-HHmmss.csv`
-- Headers: Order ID, Marketplace, Product Name, Quantity, Unit Price, Total Amount, Status, Order Date, Created At
-- Server-side generation, respects filters (marketplace, date range, search)
+- Headers: Order ID, External Order ID, Platform, Product Name, Quantity, Unit Price, Total Amount, Internal Status, Platform Status, Payment Status, Paid Date, Order Date, Created At
+- Respects all UX v2 filters (platform, status multi-select, payment)
 
 ### Expenses (COMPLETE - MVP Core Feature)
 - ✅ View: Paginated list with filters (category, date range, search)
@@ -400,13 +438,24 @@ Later: CSV import, inventory, payables, reports, tax, APIs
 - ✅ Bangkok timezone consistency
 - ✅ Reuses existing import infrastructure (import_batches, manual mapping wizard)
 
-**Sales Import - TikTok Shop:**
+**Sales Import - TikTok Shop (UX v2 Enhanced):**
 - Format: OrderSKUList sheet in .xlsx
 - Auto-detects: Row 1 = header, Row 2 = description (skip), Row 3+ = data
 - Date format: DD/MM/YYYY HH:MM:SS → Bangkok timezone
 - Revenue calculation: SKU Subtotal After Discount (line-level, not order-level)
 - Status normalization: delivered/completed → completed, cancel/return → cancelled
-- Metadata: Full TikTok data (timestamps, logistics, payment) stored in JSONB
+- **UX v2 Mapping:**
+  - `Order Status` → `platform_status`
+  - `Order Substatus` → `platform_substatus`
+  - `Paid Time` → `paid_at`, `payment_status=paid`
+  - `Shipped Time` → `shipped_at`
+  - `Delivered Time` → `delivered_at`
+  - `Order ID` → `external_order_id`
+  - `Seller SKU` → `seller_sku`
+  - `SKU ID` → `sku_id`
+  - Derive: `payment_status=paid` if `paid_at` exists, else `unpaid`
+  - Source: `source_platform=tiktok_shop`
+- Metadata: Extended TikTok data (tracking, logistics) stored in JSONB
 
 **Expenses Import - Standard Template:**
 - Format: .xlsx or .csv with headers: Date, Category, Amount, Description
@@ -669,7 +718,7 @@ Read these for context before making changes:
    - Project rules and guidelines
    - Current system state
    - Extension guide
-   - Updated: 2026-01-23 (Phase 5: Manual Column Mapping Wizard)
+   - Updated: 2026-01-25 (Phase 6B: Sales Orders UX v2)
 
 ---
 
