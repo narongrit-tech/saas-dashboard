@@ -432,18 +432,20 @@ export async function importSalesToSystem(
 
     // File hash already calculated on client-side (no need to recalculate)
 
-    // Check for duplicate import
+    // Check for duplicate import (only block if previous import was successful)
     const { data: existingBatch } = await supabase
       .from('import_batches')
-      .select('id, file_name, created_at')
+      .select('id, file_name, created_at, status, inserted_count')
       .eq('file_hash', fileHash)
       .eq('marketplace', 'tiktok_shop')
+      .eq('status', 'success')
+      .gt('inserted_count', 0)
       .single()
 
     if (existingBatch) {
       return {
         success: false,
-        error: `ไฟล์นี้ถูก import ไปแล้ว - "${existingBatch.file_name}" (${formatBangkok(new Date(existingBatch.created_at), 'yyyy-MM-dd HH:mm')})`,
+        error: `ไฟล์นี้ถูก import สำเร็จไปแล้ว - "${existingBatch.file_name}" (${formatBangkok(new Date(existingBatch.created_at), 'yyyy-MM-dd HH:mm')})`,
         inserted: 0,
         skipped: 0,
         errors: 0,
@@ -520,6 +522,7 @@ export async function importSalesToSystem(
         .update({
           status: 'failed',
           error_count: parsedData.length,
+          notes: `Insert failed: ${insertError.message}`,
         })
         .eq('id', batch.id)
 
@@ -534,12 +537,43 @@ export async function importSalesToSystem(
 
     const insertedCount = insertedRows?.length || 0
 
+    // Post-insert verification: Count actual rows in database
+    const { count: actualCount } = await supabase
+      .from('sales_orders')
+      .select('*', { count: 'exact', head: true })
+      .eq('import_batch_id', batch.id)
+
+    const verifiedCount = actualCount || 0
+
+    // Check if insert was actually successful
+    if (verifiedCount === 0) {
+      // No rows inserted (possible RLS block or silent failure)
+      await supabase
+        .from('import_batches')
+        .update({
+          status: 'failed',
+          inserted_count: 0,
+          error_count: parsedData.length,
+          notes: 'Import failed: 0 rows inserted. Possible RLS policy issue or authentication error.',
+        })
+        .eq('id', batch.id)
+
+      return {
+        success: false,
+        error: 'Import failed: 0 rows inserted. กรุณาตรวจสอบ permissions หรือติดต่อผู้ดูแลระบบ',
+        inserted: 0,
+        skipped: 0,
+        errors: parsedData.length,
+      }
+    }
+
     // Update batch status to success
     await supabase
       .from('import_batches')
       .update({
         status: 'success',
-        inserted_count: insertedCount,
+        inserted_count: verifiedCount,
+        notes: `Successfully imported ${verifiedCount} rows`,
       })
       .eq('id', batch.id)
 
