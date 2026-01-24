@@ -22,11 +22,13 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Upload, FileSpreadsheet, AlertCircle, CheckCircle } from 'lucide-react'
+import { Upload, FileSpreadsheet, AlertCircle, CheckCircle, Wand2 } from 'lucide-react'
 import {
   parseTigerReportFile,
   importTigerReportToWallet,
 } from '@/app/(dashboard)/wallets/tiger-import-actions'
+import { ManualMappingWizard } from './ManualMappingWizard'
+import * as XLSX from 'xlsx'
 
 interface TigerImportDialogProps {
   open: boolean
@@ -58,6 +60,10 @@ export function TigerImportDialog({
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
+  // Manual mapping wizard state
+  const [wizardOpen, setWizardOpen] = useState(false)
+  const [excelHeaders, setExcelHeaders] = useState<string[]>([])
+
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
@@ -66,6 +72,7 @@ export function TigerImportDialog({
     setPreview(null)
     setError(null)
     setSuccess(null)
+    setExcelHeaders([])
     setLoading(true)
 
     try {
@@ -73,13 +80,31 @@ export function TigerImportDialog({
       const buffer = await file.arrayBuffer()
       setFileBuffer(buffer)
 
-      // Parse and validate
+      // Try to parse and validate
       const result = await parseTigerReportFile(buffer, file.name)
 
       if (!result.success) {
+        // Extract Excel headers for manual mapping fallback
+        try {
+          const workbook = XLSX.read(buffer, { type: 'array' })
+          const sheetName = workbook.SheetNames[0]
+          if (sheetName) {
+            const worksheet = workbook.Sheets[sheetName]
+            const rows = XLSX.utils.sheet_to_json(worksheet, { defval: null }) as Record<
+              string,
+              unknown
+            >[]
+            if (rows.length > 0) {
+              const headers = Object.keys(rows[0])
+              setExcelHeaders(headers)
+            }
+          }
+        } catch (parseErr) {
+          console.error('Error extracting headers:', parseErr)
+        }
+
         setError(result.error || 'ไม่สามารถอ่านไฟล์ได้')
-        setSelectedFile(null)
-        setFileBuffer(null)
+        // Keep file and buffer for manual mapping
         return
       }
 
@@ -203,7 +228,22 @@ export function TigerImportDialog({
           {error && (
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{error}</AlertDescription>
+              <AlertDescription>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1">{error}</div>
+                  {excelHeaders.length > 0 && fileBuffer && selectedFile && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setWizardOpen(true)}
+                      className="shrink-0"
+                    >
+                      <Wand2 className="mr-2 h-4 w-4" />
+                      Try Manual Mapping
+                    </Button>
+                  )}
+                </div>
+              </AlertDescription>
             </Alert>
           )}
 
@@ -280,6 +320,23 @@ export function TigerImportDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      {/* Manual Mapping Wizard */}
+      {fileBuffer && selectedFile && excelHeaders.length > 0 && (
+        <ManualMappingWizard
+          open={wizardOpen}
+          onOpenChange={setWizardOpen}
+          adsWalletId={adsWalletId}
+          fileBuffer={fileBuffer}
+          fileName={selectedFile.name}
+          excelHeaders={excelHeaders}
+          onImportSuccess={() => {
+            setWizardOpen(false)
+            handleClose()
+            onImportSuccess()
+          }}
+        />
+      )}
     </Dialog>
   )
 }
