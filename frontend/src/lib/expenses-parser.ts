@@ -328,7 +328,6 @@ export async function parseExpensesFile(
     }
 
   } catch (error: any) {
-    console.error('Parse expenses file error:', error)
     return {
       success: false,
       importType: 'generic',

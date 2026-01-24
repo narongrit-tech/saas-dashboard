@@ -139,17 +139,6 @@ export async function parseTikTokFile(
     const worksheet = workbook.Sheets[sheetName]
     const rows = XLSX.utils.sheet_to_json(worksheet, { defval: null }) as any[]
 
-    console.log('📋 TikTok OrderSKUList structure:', {
-      sheetName,
-      totalRawRows: rows.length,
-      firstRowSample: rows[0] ? {
-        orderId: rows[0]['Order ID'],
-        createdTime: rows[0]['Created Time'],
-        productName: rows[0]['Product Name']
-      } : 'N/A',
-      note: 'rows[0] = Excel Row 2 (description), rows[1] = Excel Row 3 (data)'
-    })
-
     if (rows.length === 0) {
       return {
         success: false,
@@ -179,7 +168,6 @@ export async function parseTikTokFile(
       // Row 1 = Headers, Row 2 = Description text, Row 3+ = Data
       // After sheet_to_json, rows[0] = Excel Row 2 (description)
       if (i === 0) {
-        console.log('⏭️  Skipping Row 2 (description row)')
         continue
       }
 
@@ -193,7 +181,6 @@ export async function parseTikTokFile(
       // TikTok Order IDs are typically long numeric strings
       const orderIdStr = String(orderId).trim()
       if (orderIdStr.length < 10 || !/^[0-9A-Za-z\-_]+$/.test(orderIdStr)) {
-        console.log(`⏭️  Skipping row ${rowNumber}: Order ID "${orderIdStr}" doesn't match expected pattern`)
         continue
       }
 
@@ -307,16 +294,6 @@ export async function parseTikTokFile(
       }
     }
 
-    // Log parsing summary
-    console.log('✅ TikTok parsing complete:', {
-      totalRawRows: rows.length,
-      parsedRows: parsedRows.length,
-      skippedRows: rows.length - parsedRows.length - errors.length,
-      errorRows: errors.filter(e => e.severity === 'error').length,
-      warningRows: errors.filter(e => e.severity === 'warning').length,
-      uniqueOrders: uniqueOrderIds.size
-    })
-
     // Check if any valid rows
     if (parsedRows.length === 0) {
       return {
@@ -360,7 +337,6 @@ export async function parseTikTokFile(
     }
 
   } catch (error: any) {
-    console.error('Parse TikTok file error:', error)
     return {
       success: false,
       importType: 'generic',

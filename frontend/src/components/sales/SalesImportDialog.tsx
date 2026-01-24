@@ -20,7 +20,6 @@ import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, Loader2 } from 'luc
 import { importSalesToSystem } from '@/app/(dashboard)/sales/sales-import-actions'
 import { SalesImportPreview, ParsedSalesRow } from '@/types/sales-import'
 import { calculateFileHash, toPlain } from '@/lib/file-hash'
-import { debugSerializable } from '@/lib/debug-serialization'
 import { parseTikTokFile } from '@/lib/sales-parser'
 
 interface SalesImportDialogProps {
@@ -53,28 +52,19 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
       setFileBuffer(buffer)
 
       // Parse file (CLIENT-SIDE to avoid ArrayBuffer in server action)
-      console.log('📂 Parsing TikTok file:', selectedFile.name)
       const previewResult = await parseTikTokFile(buffer, selectedFile.name)
-      console.log('📊 Parse result:', {
-        success: previewResult.success,
-        totalRows: previewResult.totalRows,
-        errors: previewResult.errors.length
-      })
 
       setPreview(previewResult)
 
       if (previewResult.success && previewResult.allRows && previewResult.allRows.length > 0) {
         // Store full parsed data for import (already plain objects)
         setParsedData(previewResult.allRows)
-        console.log('✅ Stored', previewResult.allRows.length, 'parsed rows')
         setStep('preview')
       } else {
         // Show errors
-        console.warn('⚠️ Parse failed or no rows:', previewResult.errors)
         setStep('preview')
       }
     } catch (error: any) {
-      console.error('❌ Parse error:', error)
       setPreview({
         success: false,
         importType: 'generic',
@@ -92,13 +82,6 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
 
   const handleConfirmImport = async () => {
     if (!file || !fileBuffer || !preview || !preview.success || parsedData.length === 0) {
-      console.warn('⚠️ Cannot import:', {
-        hasFile: !!file,
-        hasBuffer: !!fileBuffer,
-        hasPreview: !!preview,
-        previewSuccess: preview?.success,
-        parsedDataLength: parsedData.length
-      })
       return
     }
 
@@ -108,38 +91,12 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
     try {
       // Calculate file hash (client-side)
       const fileHash = await calculateFileHash(fileBuffer)
-      console.log('🔑 File hash:', fileHash)
 
       // Sanitize parsed data to plain objects (remove Date objects, etc.)
       const plainData = toPlain(parsedData)
-      console.log('📦 Plain data rows:', plainData.length)
-
-      // DEBUG: Check if payload is serializable before calling server action
-      console.group('🐛 DEBUG: Pre-flight Serialization Check')
-      try {
-        const testPayload = { fileHash, fileName: file.name, plainData }
-        const serialized = JSON.stringify(testPayload)
-        console.log('✅ Payload is JSON-serializable')
-        console.log('📏 Payload size:', serialized.length, 'bytes')
-
-        // Check for suspicious types
-        console.log('🔍 Type checks:', {
-          fileHashType: typeof fileHash,
-          fileNameType: typeof file.name,
-          plainDataIsArray: Array.isArray(plainData),
-          firstRowSample: plainData[0] ? Object.keys(plainData[0]) : 'N/A'
-        })
-      } catch (e: any) {
-        console.error('❌ Payload NOT serializable:', e.message)
-        debugSerializable({ fileHash, fileName: file.name, plainData }, 'Sales Import Payload')
-        throw new Error(`Serialization failed: ${e.message}`)
-      }
-      console.groupEnd()
 
       // Import to system using stored parsed data
-      console.log('📤 Calling importSalesToSystem...')
       const importResult = await importSalesToSystem(fileHash, file.name, plainData)
-      console.log('📥 Import result:', importResult)
 
       if (importResult.success) {
         setResult({
