@@ -20,6 +20,7 @@ import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, Loader2 } from 'luc
 import { parseSalesImportFile, importSalesToSystem } from '@/app/(dashboard)/sales/sales-import-actions'
 import { SalesImportPreview, ParsedSalesRow } from '@/types/sales-import'
 import { calculateFileHash, toPlain } from '@/lib/file-hash'
+import { debugSerializable } from '@/lib/debug-serialization'
 
 interface SalesImportDialogProps {
   open: boolean
@@ -90,6 +91,10 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
 
       // Sanitize parsed data to plain objects (remove Date objects, etc.)
       const plainData = toPlain(parsedData)
+
+      // DEBUG: Check if payload is serializable before calling server action
+      console.log('🐛 DEBUG: Checking Sales Import Payload Serialization')
+      debugSerializable({ fileHash, fileName: file.name, plainData }, 'Sales Import Payload')
 
       // Import to system using stored parsed data
       const importResult = await importSalesToSystem(fileHash, file.name, plainData)

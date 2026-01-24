@@ -20,6 +20,7 @@ import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, Loader2 } from 'luc
 import { parseExpensesImportFile, importExpensesToSystem } from '@/app/(dashboard)/expenses/expenses-import-actions'
 import { ExpensesImportPreview, ParsedExpenseRow } from '@/types/expenses-import'
 import { calculateFileHash, toPlain } from '@/lib/file-hash'
+import { debugSerializable } from '@/lib/debug-serialization'
 
 interface ExpensesImportDialogProps {
   open: boolean
@@ -90,6 +91,10 @@ export function ExpensesImportDialog({ open, onOpenChange, onSuccess }: Expenses
 
       // Sanitize parsed data to plain objects (remove Date objects, etc.)
       const plainData = toPlain(parsedData)
+
+      // DEBUG: Check if payload is serializable before calling server action
+      console.log('🐛 DEBUG: Checking Expenses Import Payload Serialization')
+      debugSerializable({ fileHash, fileName: file.name, plainData }, 'Expenses Import Payload')
 
       // Import to system using stored parsed data
       const importResult = await importExpensesToSystem(fileHash, file.name, plainData)
