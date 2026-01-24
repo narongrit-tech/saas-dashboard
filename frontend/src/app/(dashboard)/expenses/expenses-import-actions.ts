@@ -11,7 +11,6 @@
 
 import { createClient } from '@/lib/supabase/server'
 import * as XLSX from 'xlsx'
-import crypto from 'crypto'
 import {
   ParsedExpenseRow,
   ExpensesImportPreview,
@@ -382,7 +381,7 @@ async function parseStandardFormat(
 // ============================================
 
 export async function importExpensesToSystem(
-  fileBuffer: ArrayBuffer,
+  fileHash: string,
   fileName: string,
   parsedData: ParsedExpenseRow[]
 ): Promise<ExpensesImportResult> {
@@ -401,11 +400,7 @@ export async function importExpensesToSystem(
       }
     }
 
-    // Calculate file hash
-    const fileHash = crypto
-      .createHash('sha256')
-      .update(Buffer.from(fileBuffer))
-      .digest('hex')
+    // File hash already calculated on client-side (no need to recalculate)
 
     // Check for duplicate import
     const { data: existingBatch } = await supabase

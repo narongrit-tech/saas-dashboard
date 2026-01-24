@@ -19,6 +19,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
 import { parseSalesImportFile, importSalesToSystem } from '@/app/(dashboard)/sales/sales-import-actions'
 import { SalesImportPreview, ParsedSalesRow } from '@/types/sales-import'
+import { calculateFileHash, toPlain } from '@/lib/file-hash'
 
 interface SalesImportDialogProps {
   open: boolean
@@ -84,8 +85,14 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
     setIsProcessing(true)
 
     try {
+      // Calculate file hash (client-side)
+      const fileHash = await calculateFileHash(fileBuffer)
+
+      // Sanitize parsed data to plain objects (remove Date objects, etc.)
+      const plainData = toPlain(parsedData)
+
       // Import to system using stored parsed data
-      const importResult = await importSalesToSystem(fileBuffer, file.name, parsedData)
+      const importResult = await importSalesToSystem(fileHash, file.name, plainData)
 
       if (importResult.success) {
         setResult({

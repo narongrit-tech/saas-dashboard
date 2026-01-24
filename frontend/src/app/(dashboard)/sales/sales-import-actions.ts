@@ -12,7 +12,6 @@
 
 import { createClient } from '@/lib/supabase/server'
 import * as XLSX from 'xlsx'
-import crypto from 'crypto'
 import {
   ParsedSalesRow,
   SalesImportPreview,
@@ -412,7 +411,7 @@ async function parseTikTokFormat(
 // ============================================
 
 export async function importSalesToSystem(
-  fileBuffer: ArrayBuffer,
+  fileHash: string,
   fileName: string,
   parsedData: ParsedSalesRow[]
 ): Promise<SalesImportResult> {
@@ -431,11 +430,7 @@ export async function importSalesToSystem(
       }
     }
 
-    // Calculate file hash
-    const fileHash = crypto
-      .createHash('sha256')
-      .update(Buffer.from(fileBuffer))
-      .digest('hex')
+    // File hash already calculated on client-side (no need to recalculate)
 
     // Check for duplicate import
     const { data: existingBatch } = await supabase

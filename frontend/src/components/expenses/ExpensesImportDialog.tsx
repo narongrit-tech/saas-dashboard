@@ -19,6 +19,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
 import { parseExpensesImportFile, importExpensesToSystem } from '@/app/(dashboard)/expenses/expenses-import-actions'
 import { ExpensesImportPreview, ParsedExpenseRow } from '@/types/expenses-import'
+import { calculateFileHash, toPlain } from '@/lib/file-hash'
 
 interface ExpensesImportDialogProps {
   open: boolean
@@ -84,8 +85,14 @@ export function ExpensesImportDialog({ open, onOpenChange, onSuccess }: Expenses
     setIsProcessing(true)
 
     try {
+      // Calculate file hash (client-side)
+      const fileHash = await calculateFileHash(fileBuffer)
+
+      // Sanitize parsed data to plain objects (remove Date objects, etc.)
+      const plainData = toPlain(parsedData)
+
       // Import to system using stored parsed data
-      const importResult = await importExpensesToSystem(fileBuffer, file.name, parsedData)
+      const importResult = await importExpensesToSystem(fileHash, file.name, plainData)
 
       if (importResult.success) {
         setResult({
