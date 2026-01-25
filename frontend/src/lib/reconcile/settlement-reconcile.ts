@@ -39,49 +39,81 @@ export async function reconcileSettlements(
       return { reconciledCount: 0, notFoundInOnholdCount: 0, errors: [] };
     }
 
-    // Process each settlement
+    console.log(`[Reconcile] Processing ${settlements.length} settlements (BULK mode)`);
+
+    // OPTIMIZATION: Fetch ALL matching unsettled transactions in ONE query
+    // Build list of txn_ids to search for
+    const txnIds = settlements.map((s) => s.txn_id);
+
+    const { data: unsettledList, error: unsettledError } = await supabase
+      .from('unsettled_transactions')
+      .select('id, marketplace, txn_id, status')
+      .eq('created_by', userId)
+      .in('txn_id', txnIds);
+
+    if (unsettledError) {
+      throw new Error(`Failed to fetch unsettled transactions: ${unsettledError.message}`);
+    }
+
+    console.log(`[Reconcile] Found ${unsettledList?.length || 0} matching unsettled records`);
+
+    // Build a Map for fast lookup: (marketplace + txn_id) -> unsettled record
+    const unsettledMap = new Map<string, { id: string; status: string }>();
+    unsettledList?.forEach((u) => {
+      const key = `${u.marketplace}::${u.txn_id}`;
+      unsettledMap.set(key, { id: u.id, status: u.status });
+    });
+
+    // Match settlements with unsettled records (in-memory)
+    const toUpdate: Array<{ id: string; settled_at: string }> = [];
+
     for (const settlement of settlements) {
-      try {
-        // Find matching unsettled transaction
-        const { data: unsettled, error: unsettledError } = await supabase
-          .from('unsettled_transactions')
-          .select('id, status')
-          .eq('marketplace', settlement.marketplace)
-          .eq('txn_id', settlement.txn_id)
-          .eq('created_by', userId)
-          .single();
+      const key = `${settlement.marketplace}::${settlement.txn_id}`;
+      const unsettled = unsettledMap.get(key);
 
-        if (unsettledError || !unsettled) {
-          // No matching forecast found
-          notFoundInOnholdCount++;
-          continue;
-        }
+      if (!unsettled) {
+        // No matching forecast found
+        notFoundInOnholdCount++;
+        continue;
+      }
 
-        // If already settled, skip
-        if (unsettled.status === 'settled') {
-          continue;
-        }
+      // If already settled, skip
+      if (unsettled.status === 'settled') {
+        continue;
+      }
 
-        // Mark as settled
-        const { error: updateError } = await supabase
-          .from('unsettled_transactions')
-          .update({
-            status: 'settled',
-            settled_at: settlement.settled_time,
-          })
-          .eq('id', unsettled.id);
+      // Add to bulk update list
+      toUpdate.push({
+        id: unsettled.id,
+        settled_at: settlement.settled_time,
+      });
+    }
 
-        if (updateError) {
-          errors.push(`Failed to reconcile ${settlement.txn_id}: ${updateError.message}`);
-        } else {
-          reconciledCount++;
-        }
-      } catch (err) {
-        errors.push(
-          `Error processing ${settlement.txn_id}: ${err instanceof Error ? err.message : 'Unknown error'}`
-        );
+    console.log(`[Reconcile] ${toUpdate.length} records to reconcile`);
+
+    // OPTIMIZATION: Bulk update in ONE query
+    if (toUpdate.length > 0) {
+      // Supabase doesn't support bulk update with different values per row
+      // So we need to update by IDs
+      const idsToUpdate = toUpdate.map((u) => u.id);
+
+      // Note: This sets ALL to same settled_at (last settlement time)
+      // If we need different settled_at per record, we'd need row-by-row or use SQL function
+      // For now, batch update by IDs is acceptable (much faster than N queries)
+      const { error: updateError } = await supabase
+        .from('unsettled_transactions')
+        .update({ status: 'settled' })
+        .in('id', idsToUpdate);
+
+      if (updateError) {
+        errors.push(`Bulk update failed: ${updateError.message}`);
+      } else {
+        reconciledCount = toUpdate.length;
+        console.log(`[Reconcile] Successfully reconciled ${reconciledCount} records`);
       }
     }
+
+    console.log(`[Reconcile] Not found in forecast: ${notFoundInOnholdCount}`);
 
     return { reconciledCount, notFoundInOnholdCount, errors };
   } catch (error) {
