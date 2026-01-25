@@ -120,7 +120,7 @@ BEGIN
   )
   SELECT
     p_user_id,
-    d.date,
+    date_gen::date,
     COALESCE(f.forecast_sum, 0) AS forecast_sum,
     COALESCE(f.forecast_count, 0) AS forecast_count,
     COALESCE(a.actual_sum, 0) AS actual_sum,
@@ -131,7 +131,7 @@ BEGIN
       ELSE 0
     END AS matched_count,
     CASE
-      WHEN f.forecast_sum IS NOT NULL AND a.actual_sum IS NULL AND d.date < CURRENT_DATE THEN 1
+      WHEN f.forecast_sum IS NOT NULL AND a.actual_sum IS NULL AND date_gen::date < CURRENT_DATE THEN 1
       ELSE 0
     END AS overdue_count,
     CASE
@@ -143,7 +143,7 @@ BEGIN
       ELSE 0
     END AS actual_only_count
   FROM
-    generate_series(p_start_date, p_end_date, '1 day'::interval)::date AS d(date)
+    generate_series(p_start_date, p_end_date, '1 day'::interval) AS date_gen
   LEFT JOIN (
     SELECT
       DATE(estimated_settle_time) AS date,
@@ -156,7 +156,7 @@ BEGIN
       AND DATE(estimated_settle_time) <= p_end_date
       AND status = 'unsettled'
     GROUP BY DATE(estimated_settle_time)
-  ) f ON f.date = d.date
+  ) f ON f.date = date_gen::date
   LEFT JOIN (
     SELECT
       DATE(settled_time) AS date,
@@ -168,7 +168,7 @@ BEGIN
       AND DATE(settled_time) >= p_start_date
       AND DATE(settled_time) <= p_end_date
     GROUP BY DATE(settled_time)
-  ) a ON a.date = d.date
+  ) a ON a.date = date_gen::date
   WHERE f.forecast_sum IS NOT NULL OR a.actual_sum IS NOT NULL;
 
   GET DIAGNOSTICS v_rows_affected = ROW_COUNT;
