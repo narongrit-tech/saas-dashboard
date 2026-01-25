@@ -74,19 +74,22 @@ CREATE TABLE IF NOT EXISTS cashflow_daily_summary (
 CREATE INDEX IF NOT EXISTS idx_cashflow_daily_summary_user_date
 ON cashflow_daily_summary(created_by, date);
 
--- RLS Policies
+-- RLS Policies (idempotent - drop if exists)
 ALTER TABLE cashflow_daily_summary ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can view own cashflow summary" ON cashflow_daily_summary;
 CREATE POLICY "Users can view own cashflow summary"
 ON cashflow_daily_summary
 FOR SELECT
 USING (auth.uid() = created_by);
 
+DROP POLICY IF EXISTS "Users can insert own cashflow summary" ON cashflow_daily_summary;
 CREATE POLICY "Users can insert own cashflow summary"
 ON cashflow_daily_summary
 FOR INSERT
 WITH CHECK (auth.uid() = created_by);
 
+DROP POLICY IF EXISTS "Users can update own cashflow summary" ON cashflow_daily_summary;
 CREATE POLICY "Users can update own cashflow summary"
 ON cashflow_daily_summary
 FOR UPDATE
