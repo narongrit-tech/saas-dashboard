@@ -71,13 +71,30 @@ function normalizeNumber(value: unknown): number {
 }
 
 /**
- * Normalize status
+ * Normalize status to internal status (completed/pending/cancelled)
+ * Now supports Thai keywords from TikTok Order Status/Substatus
  */
-function normalizeStatus(tiktokStatus?: string): string {
-  if (!tiktokStatus) return 'pending'
-  const status = tiktokStatus.toLowerCase()
-  if (status.includes('delivered') || status.includes('completed')) return 'completed'
-  if (status.includes('cancel') || status.includes('return')) return 'cancelled'
+function normalizeStatus(orderStatus?: string, orderSubstatus?: string): string {
+  // Check Order Substatus first (more specific)
+  if (orderSubstatus) {
+    const sub = orderSubstatus.toLowerCase()
+    // Thai: ยกเลิกคำสั่งซื้อ, คืนสินค้า, ยกเลิก
+    if (sub.includes('ยกเลิก') || sub.includes('คืนสินค้า')) return 'cancelled'
+    // Thai: จัดส่งแล้ว, ส่งสำเร็จ, จัดส่งสำเร็จ
+    if (sub.includes('จัดส่งแล้ว') || sub.includes('ส่งสำเร็จ') || sub.includes('จัดส่งสำเร็จ')) return 'completed'
+  }
+
+  // Check Order Status (broader category)
+  if (orderStatus) {
+    const status = orderStatus.toLowerCase()
+    // Thai: ยกเลิกแล้ว
+    if (status.includes('ยกเลิก')) return 'cancelled'
+    // English fallbacks
+    if (status.includes('delivered') || status.includes('completed')) return 'completed'
+    if (status.includes('cancel') || status.includes('return')) return 'cancelled'
+  }
+
+  // Default to pending for orders that are "รอจัดส่ง", "อยู่ระหว่างงานขนส่ง", etc.
   return 'pending'
 }
 
@@ -240,10 +257,12 @@ export async function parseTikTokFile(
         const lineRevenue = normalizeNumber(row['SKU Subtotal After Discount'])
         const unitPrice = qty > 0 ? lineRevenue / qty : 0
 
-        // Parse status
-        const orderStatus = row['Order Status'] as string | undefined
-        const orderSubstatus = row['Order Substatus']
-        const status = normalizeStatus(orderStatus)
+        // Parse status (TikTok columns)
+        const orderStatus = row['Order Status'] as string | undefined // ที่จัดส่ง, ชำระเงินแล้ว, ยกเลิกแล้ว
+        const orderSubstatus = row['Order Substatus'] as string | undefined // รอจัดส่ง, อยู่ระหว่างงานขนส่ง, ยกเลิกคำสั่งซื้อ
+
+        // Internal status for business logic (completed/pending/cancelled)
+        const status = normalizeStatus(orderStatus, orderSubstatus)
 
         // Parse fulfillment timestamps
         const paidTime = parseExcelDate(row['Paid Time'])
@@ -283,8 +302,11 @@ export async function parseTikTokFile(
           // UX v2: Platform-specific fields
           source_platform: 'tiktok_shop',
           external_order_id: String(orderId).trim(),
-          platform_status: orderStatus ? String(orderStatus).trim() : undefined,
-          platform_substatus: orderSubstatus ? String(orderSubstatus).trim() : undefined,
+          // FIX: platform_status = Order Substatus (รอจัดส่ง, อยู่ระหว่างงานขนส่ง) - MAIN UI STATUS
+          platform_status: orderSubstatus ? String(orderSubstatus).trim() : undefined,
+          // NEW: status_group = Order Status (ที่จัดส่ง, ชำระเงินแล้ว, ยกเลิกแล้ว) - Group filter
+          status_group: orderStatus ? String(orderStatus).trim() : undefined,
+          platform_substatus: undefined, // Deprecated - not used
           payment_status: paymentStatus,
           paid_at: paidTime ? toBangkokDatetime(paidTime) || undefined : undefined,
           shipped_at: shippedTime ? toBangkokDatetime(shippedTime) || undefined : undefined,

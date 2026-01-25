@@ -178,8 +178,9 @@ export interface ParsedSalesRow {
   // UX v2: Platform-specific fields
   source_platform?: string // tiktok_shop | shopee | lazada
   external_order_id?: string // Original platform order ID
-  platform_status?: string // Raw platform status (e.g., "Unpaid", "To Ship", "Delivered")
-  platform_substatus?: string // Platform sub-status
+  platform_status?: string // Order Substatus (รอจัดส่ง, อยู่ระหว่างงานขนส่ง) - MAIN UI STATUS
+  status_group?: string // Order Status (ที่จัดส่ง, ชำระเงินแล้ว, ยกเลิกแล้ว) - Group filter
+  platform_substatus?: string // Platform sub-status (deprecated/unused)
   payment_status?: string // paid | unpaid | partial | refunded
   paid_at?: string // YYYY-MM-DD HH:MM:SS (Bangkok)
   shipped_at?: string // YYYY-MM-DD HH:MM:SS (Bangkok)

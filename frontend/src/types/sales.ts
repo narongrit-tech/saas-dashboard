@@ -25,8 +25,9 @@ export interface SalesOrder {
   // UX v2: Platform-specific fields
   source_platform?: string | null // tiktok_shop | shopee | lazada
   external_order_id?: string | null // Original platform order ID
-  platform_status?: string | null // Raw platform status
-  platform_substatus?: string | null // Platform sub-status
+  platform_status?: string | null // Order Substatus (รอจัดส่ง, อยู่ระหว่างงานขนส่ง) - MAIN UI STATUS
+  status_group?: string | null // Order Status (ที่จัดส่ง, ชำระเงินแล้ว, ยกเลิกแล้ว) - Group filter
+  platform_substatus?: string | null // Platform sub-status (deprecated)
   payment_status?: string | null // paid | unpaid | partial | refunded
   paid_at?: string | null // YYYY-MM-DD HH:MM:SS
   shipped_at?: string | null // YYYY-MM-DD HH:MM:SS

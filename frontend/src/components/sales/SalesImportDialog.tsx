@@ -17,7 +17,11 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { FileSpreadsheet, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
-import { importSalesToSystem } from '@/app/(dashboard)/sales/sales-import-actions'
+import {
+  createImportBatch,
+  importSalesChunk,
+  finalizeImportBatch,
+} from '@/app/(dashboard)/sales/sales-import-actions'
 import { SalesImportPreview, ParsedSalesRow } from '@/types/sales-import'
 import { calculateFileHash, toPlain } from '@/lib/file-hash'
 import { parseTikTokFile } from '@/lib/sales-parser'
@@ -38,6 +42,7 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
   const [parsedData, setParsedData] = useState<ParsedSalesRow[]>([])
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
+  const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null)
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
@@ -88,6 +93,7 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
 
     setStep('importing')
     setIsProcessing(true)
+    setImportProgress(null)
 
     try {
       // Calculate file hash (client-side)
@@ -96,19 +102,77 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
       // Sanitize parsed data to plain objects (remove Date objects, etc.)
       const plainData = toPlain(parsedData)
 
-      // Import to system using stored parsed data
-      const importResult = await importSalesToSystem(fileHash, file.name, plainData)
+      // Determine date range for batch
+      const dateRange = plainData.length > 0
+        ? `${plainData[0].order_date} to ${plainData[plainData.length - 1].order_date}`
+        : 'N/A'
 
-      if (importResult.success) {
+      // Step 1: Create import batch
+      const batchResult = await createImportBatch(
+        fileHash,
+        file.name,
+        plainData.length,
+        dateRange
+      )
+
+      if (!batchResult.success || !batchResult.batchId) {
+        setResult({
+          success: false,
+          message: batchResult.error || 'Failed to create import batch'
+        })
+        setIsProcessing(false)
+        setStep('result')
+        return
+      }
+
+      const batchId = batchResult.batchId
+
+      // Step 2: Split data into chunks (500 rows per chunk)
+      const CHUNK_SIZE = 500
+      const chunks: ParsedSalesRow[][] = []
+      for (let i = 0; i < plainData.length; i += CHUNK_SIZE) {
+        chunks.push(plainData.slice(i, i + CHUNK_SIZE))
+      }
+
+      // Step 3: Import chunks sequentially
+      let totalInserted = 0
+      for (let i = 0; i < chunks.length; i++) {
+        setImportProgress({ current: i + 1, total: chunks.length })
+
+        const chunkResult = await importSalesChunk(
+          batchId,
+          chunks[i],
+          i,
+          chunks.length
+        )
+
+        if (!chunkResult.success) {
+          // Chunk failed - finalize with error
+          setResult({
+            success: false,
+            message: `Import failed at chunk ${i + 1}/${chunks.length}: ${chunkResult.error || 'Unknown error'}`
+          })
+          setIsProcessing(false)
+          setStep('result')
+          return
+        }
+
+        totalInserted += chunkResult.inserted
+      }
+
+      // Step 4: Finalize import batch
+      const finalResult = await finalizeImportBatch(batchId, totalInserted, plainData)
+
+      if (finalResult.success) {
         setResult({
           success: true,
-          message: `Import สำเร็จ: ${importResult.inserted} รายการ${importResult.summary ? ` | รายได้รวม: ฿${importResult.summary.totalRevenue.toLocaleString()}` : ''}`
+          message: `Import สำเร็จ: ${finalResult.inserted} รายการ${finalResult.summary ? ` | รายได้รวม: ฿${finalResult.summary.totalRevenue.toLocaleString()}` : ''}`
         })
         onSuccess()
       } else {
         setResult({
           success: false,
-          message: importResult.error || 'Import failed'
+          message: finalResult.error || 'Import failed'
         })
       }
     } catch (error: unknown) {
@@ -119,6 +183,7 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
       })
     } finally {
       setIsProcessing(false)
+      setImportProgress(null)
       setStep('result')
     }
   }
@@ -131,6 +196,7 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
     setParsedData([])
     setResult(null)
     setIsProcessing(false)
+    setImportProgress(null)
     onOpenChange(false)
   }
 
@@ -279,7 +345,13 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
           <div className="text-center py-8">
             <Loader2 className="mx-auto h-12 w-12 animate-spin text-primary mb-4" />
             <p className="text-lg font-medium">Importing...</p>
-            <p className="text-sm text-muted-foreground">กรุณารอสักครู่</p>
+            {importProgress ? (
+              <p className="text-sm text-muted-foreground">
+                Processing chunk {importProgress.current} of {importProgress.total}
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground">กรุณารอสักครู่</p>
+            )}
           </div>
         )}
 

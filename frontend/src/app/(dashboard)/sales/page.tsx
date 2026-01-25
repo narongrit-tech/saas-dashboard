@@ -42,10 +42,20 @@ const PLATFORMS = [
   { value: 'facebook', label: 'Facebook' },
 ]
 
+// FIX: Platform Status values from TikTok Order Substatus (Thai)
 const STATUSES = [
-  { value: 'pending', label: 'Pending' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'cancelled', label: 'Cancelled' },
+  { value: 'รอจัดส่ง', label: 'รอจัดส่ง' },
+  { value: 'อยู่ระหว่างงานขนส่ง', label: 'อยู่ระหว่างงานขนส่ง' },
+  { value: 'จัดส่งสำเร็จ', label: 'จัดส่งสำเร็จ' },
+  { value: 'ยกเลิกคำสั่งซื้อ', label: 'ยกเลิกคำสั่งซื้อ' },
+]
+
+// NEW: Status Group values from TikTok Order Status (Thai) - optional filter
+const STATUS_GROUPS = [
+  { value: 'all', label: 'ทั้งหมด' },
+  { value: 'ที่จัดส่ง', label: 'ที่จัดส่ง' },
+  { value: 'ชำระเงินแล้ว', label: 'ชำระเงินแล้ว' },
+  { value: 'ยกเลิกแล้ว', label: 'ยกเลิกแล้ว' },
 ]
 
 const PAYMENT_STATUSES = [
@@ -147,9 +157,9 @@ export default function SalesPage() {
         query = query.eq('source_platform', filters.sourcePlatform)
       }
 
-      // Status filter (multi-select, UX v2)
+      // Status filter (multi-select, UX v2) - now filters by platform_status (Thai values)
       if (filters.status && filters.status.length > 0) {
-        query = query.in('status', filters.status)
+        query = query.in('platform_status', filters.status)
       }
 
       // Payment status filter (UX v2)
@@ -280,10 +290,42 @@ export default function SalesPage() {
   }
 
   const getPlatformStatusBadge = (platformStatus?: string | null) => {
-    if (!platformStatus) return null
+    if (!platformStatus) return <span className="text-muted-foreground text-xs">-</span>
+    // Platform Status = Order Substatus (รอจัดส่ง, อยู่ระหว่างงานขนส่ง, ยกเลิกคำสั่งซื้อ)
+    const statusLower = platformStatus.toLowerCase()
+
+    // Cancelled orders - red
+    if (statusLower.includes('ยกเลิก')) {
+      return (
+        <Badge className="bg-red-500 hover:bg-red-600 text-white text-xs">
+          {platformStatus}
+        </Badge>
+      )
+    }
+
+    // Delivered/Completed orders - green
+    if (statusLower.includes('จัดส่งแล้ว') || statusLower.includes('ส่งสำเร็จ') || statusLower.includes('สำเร็จ')) {
+      return (
+        <Badge className="bg-green-500 hover:bg-green-600 text-white text-xs">
+          {platformStatus}
+        </Badge>
+      )
+    }
+
+    // Pending orders (รอจัดส่ง, อยู่ระหว่าง) - yellow/orange
+    return (
+      <Badge className="bg-yellow-500 hover:bg-yellow-600 text-white text-xs">
+        {platformStatus}
+      </Badge>
+    )
+  }
+
+  const getStatusGroupBadge = (statusGroup?: string | null) => {
+    if (!statusGroup) return <span className="text-muted-foreground text-xs">-</span>
+    // Status Group = Order Status (ที่จัดส่ง, ชำระเงินแล้ว, ยกเลิกแล้ว)
     return (
       <Badge variant="outline" className="text-xs">
-        {platformStatus}
+        {statusGroup}
       </Badge>
     )
   }
@@ -521,8 +563,8 @@ export default function SalesPage() {
               <TableHead className="min-w-[200px]">Product Name</TableHead>
               <TableHead className="text-right min-w-[60px]">Qty</TableHead>
               <TableHead className="text-right min-w-[120px]">Amount</TableHead>
-              <TableHead className="min-w-[100px]">Status</TableHead>
-              <TableHead className="min-w-[120px]">Platform Status</TableHead>
+              <TableHead className="min-w-[140px]">Status</TableHead>
+              <TableHead className="min-w-[120px]">Status Group</TableHead>
               <TableHead className="min-w-[80px]">Payment</TableHead>
               <TableHead className="min-w-[100px]">Paid Date</TableHead>
               <TableHead className="min-w-[120px]">Order Date</TableHead>
@@ -589,8 +631,8 @@ export default function SalesPage() {
                   <TableCell className="text-right">
                     ฿{formatCurrency(order.total_amount)}
                   </TableCell>
-                  <TableCell>{getStatusBadge(order.status)}</TableCell>
                   <TableCell>{getPlatformStatusBadge(order.platform_status)}</TableCell>
+                  <TableCell>{getStatusGroupBadge(order.status_group)}</TableCell>
                   <TableCell>{getPaymentStatusBadge(order.payment_status)}</TableCell>
                   <TableCell>
                     {order.paid_at ? formatDate(order.paid_at) : '-'}

@@ -92,14 +92,30 @@ function normalizeNumber(value: unknown): number {
 }
 
 /**
- * Normalize status from TikTok to our system
+ * Normalize status to internal status (completed/pending/cancelled)
+ * Now supports Thai keywords from TikTok Order Status/Substatus
  */
-function normalizeStatus(tiktokStatus?: string): string {
-  if (!tiktokStatus) return 'pending'
+function normalizeStatus(orderStatus?: string, orderSubstatus?: string): string {
+  // Check Order Substatus first (more specific)
+  if (orderSubstatus) {
+    const sub = orderSubstatus.toLowerCase()
+    // Thai: ยกเลิกคำสั่งซื้อ, คืนสินค้า, ยกเลิก
+    if (sub.includes('ยกเลิก') || sub.includes('คืนสินค้า')) return 'cancelled'
+    // Thai: จัดส่งแล้ว, ส่งสำเร็จ, จัดส่งสำเร็จ
+    if (sub.includes('จัดส่งแล้ว') || sub.includes('ส่งสำเร็จ') || sub.includes('จัดส่งสำเร็จ')) return 'completed'
+  }
 
-  const status = tiktokStatus.toLowerCase()
-  if (status.includes('delivered') || status.includes('completed')) return 'completed'
-  if (status.includes('cancel') || status.includes('return')) return 'cancelled'
+  // Check Order Status (broader category)
+  if (orderStatus) {
+    const status = orderStatus.toLowerCase()
+    // Thai: ยกเลิกแล้ว
+    if (status.includes('ยกเลิก')) return 'cancelled'
+    // English fallbacks
+    if (status.includes('delivered') || status.includes('completed')) return 'completed'
+    if (status.includes('cancel') || status.includes('return')) return 'cancelled'
+  }
+
+  // Default to pending for orders that are "รอจัดส่ง", "อยู่ระหว่างงานขนส่ง", etc.
   return 'pending'
 }
 
@@ -306,23 +322,28 @@ async function parseTikTokFormat(
       // Calculate unit price from line revenue / qty
       const unitPrice = qty > 0 ? lineRevenue / qty : 0
 
-      // Parse status
-      const orderStatus = row['Order Status'] as string | undefined
-      const status = normalizeStatus(orderStatus)
+      // Parse status (TikTok columns)
+      const orderStatus = row['Order Status'] as string | undefined // ที่จัดส่ง, ชำระเงินแล้ว, ยกเลิกแล้ว
+      const orderSubstatus = row['Order Substatus'] as string | undefined // รอจัดส่ง, อยู่ระหว่างงานขนส่ง, ยกเลิกคำสั่งซื้อ
 
-      // Build metadata for rich TikTok data
+      // Internal status for business logic (completed/pending/cancelled)
+      const status = normalizeStatus(orderStatus, orderSubstatus)
+
+      // Parse fulfillment timestamps
+      const paidTime = parseExcelDate(row['Paid Time'])
+      const shippedTime = parseExcelDate(row['Shipped Time'])
+      const deliveredTime = parseExcelDate(row['Delivered Time'])
+      const cancelledTime = parseExcelDate(row['Cancelled Time'])
+
+      // Derive payment status
+      const paymentStatus = paidTime ? 'paid' : 'unpaid'
+
+      // Build metadata for extended TikTok data
       const toStringOrNull = (val: unknown): string | null => val ? String(val) : null
       const metadata: Record<string, string | null> = {
         source_report: 'OrderSKUList',
-        sku_id: toStringOrNull(row['SKU ID']),
-        seller_sku: toStringOrNull(row['Seller SKU']),
         variation: toStringOrNull(row['Variation']),
-        order_status: toStringOrNull(orderStatus),
-        order_substatus: toStringOrNull(row['Order Substatus']),
-        paid_time: row['Paid Time'] ? toBangkokDatetime(parseExcelDate(row['Paid Time'])) : null,
-        shipped_time: row['Shipped Time'] ? toBangkokDatetime(parseExcelDate(row['Shipped Time'])) : null,
-        delivered_time: row['Delivered Time'] ? toBangkokDatetime(parseExcelDate(row['Delivered Time'])) : null,
-        cancelled_time: row['Cancelled Time'] ? toBangkokDatetime(parseExcelDate(row['Cancelled Time'])) : null,
+        cancelled_time: cancelledTime ? toBangkokDatetime(cancelledTime) : null,
         cancel_reason: toStringOrNull(row['Cancel Reason']),
         tracking_id: toStringOrNull(row['Tracking ID']),
         payment_method: toStringOrNull(row['Payment Method']),
@@ -339,9 +360,24 @@ async function parseTikTokFormat(
         unit_price: unitPrice,
         total_amount: lineRevenue,
         order_date: orderDate,
-        status,
+        status, // Internal status (completed/pending/cancelled)
         metadata,
         rowNumber,
+
+        // UX v2: Platform-specific fields
+        source_platform: 'tiktok_shop',
+        external_order_id: String(orderId).trim(),
+        // FIX: platform_status = Order Substatus (รอจัดส่ง, อยู่ระหว่างงานขนส่ง) - MAIN UI STATUS
+        platform_status: orderSubstatus ? String(orderSubstatus).trim() : undefined,
+        // NEW: status_group = Order Status (ที่จัดส่ง, ชำระเงินแล้ว, ยกเลิกแล้ว) - Group filter
+        status_group: orderStatus ? String(orderStatus).trim() : undefined,
+        platform_substatus: undefined, // Deprecated
+        payment_status: paymentStatus,
+        paid_at: paidTime ? toBangkokDatetime(paidTime) : undefined,
+        shipped_at: shippedTime ? toBangkokDatetime(shippedTime) : undefined,
+        delivered_at: deliveredTime ? toBangkokDatetime(deliveredTime) : undefined,
+        seller_sku: row['Seller SKU'] ? String(row['Seller SKU']).trim() : undefined,
+        sku_id: row['SKU ID'] ? String(row['SKU ID']).trim() : undefined,
       })
 
       uniqueOrderIds.add(String(orderId).trim())
@@ -408,6 +444,264 @@ async function parseTikTokFormat(
 // Main: Import Sales to System
 // ============================================
 
+/**
+ * Create import batch and prepare for chunked import
+ */
+export async function createImportBatch(
+  fileHash: string,
+  fileName: string,
+  totalRows: number,
+  dateRange: string
+): Promise<{ success: boolean; batchId?: string; error?: string }> {
+  const supabase = createClient()
+
+  try {
+    // Get current user
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return {
+        success: false,
+        error: 'Authentication required',
+      }
+    }
+
+    // Check for duplicate import
+    const { data: existingBatch } = await supabase
+      .from('import_batches')
+      .select('id, file_name, created_at, status, inserted_count')
+      .eq('file_hash', fileHash)
+      .eq('marketplace', 'tiktok_shop')
+      .eq('status', 'success')
+      .gt('inserted_count', 0)
+      .single()
+
+    if (existingBatch) {
+      return {
+        success: false,
+        error: `ไฟล์นี้ถูก import สำเร็จไปแล้ว - "${existingBatch.file_name}" (${formatBangkok(new Date(existingBatch.created_at), 'yyyy-MM-dd HH:mm')})`,
+      }
+    }
+
+    // Create import batch record
+    const { data: batch, error: batchError } = await supabase
+      .from('import_batches')
+      .insert({
+        file_hash: fileHash,
+        marketplace: 'tiktok_shop',
+        report_type: 'sales_order_sku_list',
+        period: dateRange,
+        file_name: fileName,
+        row_count: totalRows,
+        inserted_count: 0,
+        updated_count: 0,
+        skipped_count: 0,
+        error_count: 0,
+        status: 'processing',
+        created_by: user.id,
+      })
+      .select()
+      .single()
+
+    if (batchError || !batch) {
+      console.error('Batch creation error:', batchError)
+      return {
+        success: false,
+        error: 'Failed to create import batch',
+      }
+    }
+
+    return {
+      success: true,
+      batchId: batch.id,
+    }
+  } catch (error: unknown) {
+    console.error('Create batch error:', error)
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    return {
+      success: false,
+      error: errorMessage,
+    }
+  }
+}
+
+/**
+ * Import a chunk of sales data
+ */
+export async function importSalesChunk(
+  batchId: string,
+  chunkData: ParsedSalesRow[],
+  chunkIndex: number,
+  totalChunks: number
+): Promise<{ success: boolean; inserted: number; error?: string }> {
+  const supabase = createClient()
+
+  try {
+    // Get current user
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return {
+        success: false,
+        inserted: 0,
+        error: 'Authentication required',
+      }
+    }
+
+    // Insert sales orders (chunk)
+    const salesRows = chunkData.map(row => ({
+      order_id: row.order_id,
+      marketplace: row.marketplace,
+      channel: row.channel,
+      product_name: row.product_name,
+      sku: row.sku,
+      quantity: row.quantity,
+      unit_price: row.unit_price,
+      total_amount: row.total_amount,
+      cost_per_unit: row.cost_per_unit,
+      order_date: row.order_date,
+      status: row.status,
+      customer_name: row.customer_name,
+      notes: row.notes,
+      source: 'imported',
+      import_batch_id: batchId,
+      metadata: row.metadata || {},
+      created_by: user.id,
+
+      // UX v2: Platform-specific fields
+      source_platform: row.source_platform,
+      external_order_id: row.external_order_id,
+      platform_status: row.platform_status,
+      status_group: row.status_group,
+      platform_substatus: row.platform_substatus,
+      payment_status: row.payment_status,
+      paid_at: row.paid_at,
+      shipped_at: row.shipped_at,
+      delivered_at: row.delivered_at,
+      seller_sku: row.seller_sku,
+      sku_id: row.sku_id,
+    }))
+
+    const { data: insertedRows, error: insertError } = await supabase
+      .from('sales_orders')
+      .insert(salesRows)
+      .select()
+
+    if (insertError) {
+      console.error(`Insert error (chunk ${chunkIndex + 1}/${totalChunks}):`, insertError)
+      return {
+        success: false,
+        inserted: 0,
+        error: `Insert failed: ${insertError.message}`,
+      }
+    }
+
+    const insertedCount = insertedRows?.length || 0
+
+    return {
+      success: true,
+      inserted: insertedCount,
+    }
+  } catch (error: unknown) {
+    console.error('Import chunk error:', error)
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    return {
+      success: false,
+      inserted: 0,
+      error: errorMessage,
+    }
+  }
+}
+
+/**
+ * Finalize import batch after all chunks are imported
+ */
+export async function finalizeImportBatch(
+  batchId: string,
+  totalInserted: number,
+  parsedData: ParsedSalesRow[]
+): Promise<SalesImportResult> {
+  const supabase = createClient()
+
+  try {
+    // Post-insert verification: Count actual rows in database
+    const { count: actualCount } = await supabase
+      .from('sales_orders')
+      .select('*', { count: 'exact', head: true })
+      .eq('import_batch_id', batchId)
+
+    const verifiedCount = actualCount || 0
+
+    // Check if insert was actually successful
+    if (verifiedCount === 0) {
+      // No rows inserted (possible RLS block or silent failure)
+      await supabase
+        .from('import_batches')
+        .update({
+          status: 'failed',
+          inserted_count: 0,
+          error_count: parsedData.length,
+          notes: 'Import failed: 0 rows inserted. Possible RLS policy issue or authentication error.',
+        })
+        .eq('id', batchId)
+
+      return {
+        success: false,
+        error: 'Import failed: 0 rows inserted. กรุณาตรวจสอบ permissions หรือติดต่อผู้ดูแลระบบ',
+        inserted: 0,
+        skipped: 0,
+        errors: parsedData.length,
+      }
+    }
+
+    // Update batch status to success
+    await supabase
+      .from('import_batches')
+      .update({
+        status: 'success',
+        inserted_count: verifiedCount,
+        notes: `Successfully imported ${verifiedCount} rows (chunked import)`,
+      })
+      .eq('id', batchId)
+
+    // Calculate summary
+    const totalRevenue = parsedData
+      .filter(r => r.status === 'completed')
+      .reduce((sum, r) => sum + r.total_amount, 0)
+
+    const uniqueOrders = new Set(parsedData.map(r => r.order_id)).size
+
+    const dateRange = parsedData.length > 0
+      ? `${parsedData[0].order_date} to ${parsedData[parsedData.length - 1].order_date}`
+      : 'N/A'
+
+    return {
+      success: true,
+      batchId: batchId,
+      inserted: verifiedCount,
+      skipped: 0,
+      errors: 0,
+      summary: {
+        dateRange,
+        totalRevenue,
+        orderCount: uniqueOrders,
+      },
+    }
+  } catch (error: unknown) {
+    console.error('Finalize batch error:', error)
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    return {
+      success: false,
+      error: errorMessage,
+      inserted: 0,
+      skipped: 0,
+      errors: 0,
+    }
+  }
+}
+
+/**
+ * Legacy: Import all at once (for backward compatibility)
+ * @deprecated Use chunked import instead (createImportBatch + importSalesChunk + finalizeImportBatch)
+ */
 export async function importSalesToSystem(
   fileHash: string,
   fileName: string,
@@ -508,8 +802,9 @@ export async function importSalesToSystem(
       // UX v2: Platform-specific fields
       source_platform: row.source_platform,
       external_order_id: row.external_order_id,
-      platform_status: row.platform_status,
-      platform_substatus: row.platform_substatus,
+      platform_status: row.platform_status, // Order Substatus (รอจัดส่ง, อยู่ระหว่างงานขนส่ง) - MAIN UI STATUS
+      status_group: row.status_group, // Order Status (ที่จัดส่ง, ชำระเงินแล้ว, ยกเลิกแล้ว) - Group filter
+      platform_substatus: row.platform_substatus, // Deprecated
       payment_status: row.payment_status,
       paid_at: row.paid_at,
       shipped_at: row.shipped_at,

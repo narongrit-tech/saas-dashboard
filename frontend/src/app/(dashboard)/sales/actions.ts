@@ -309,9 +309,9 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
       query = query.eq('marketplace', filters.marketplace)
     }
 
-    // Status filter (multi-select, UX v2)
+    // Status filter (multi-select, UX v2) - filters by platform_status (Thai values)
     if (filters.status && filters.status.length > 0) {
-      query = query.in('status', filters.status)
+      query = query.in('platform_status', filters.status)
     }
 
     // Payment status filter (UX v2)
@@ -367,6 +367,7 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
       'Total Amount',
       'Internal Status',
       'Platform Status',
+      'Status Group',
       'Payment Status',
       'Paid Date',
       'Order Date',
@@ -396,6 +397,7 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
         escapeCSV(order.total_amount),
         escapeCSV(order.status),
         escapeCSV(order.platform_status || ''),
+        escapeCSV(order.status_group || ''),
         escapeCSV(order.payment_status || ''),
         escapeCSV(order.paid_at || ''),
         escapeCSV(order.order_date),
