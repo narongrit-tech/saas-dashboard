@@ -40,7 +40,11 @@ function formatCurrency(amount: number): string {
 }
 
 function formatDate(dateStr: string): string {
-  const date = new Date(dateStr);
+  // Parse date string as local date (YYYY-MM-DD from database)
+  // CRITICAL: Don't use new Date() as it treats YYYY-MM-DD as UTC midnight
+  // which can shift the date when converted to Bangkok timezone
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
   return date.toLocaleDateString('th-TH', {
     year: 'numeric',
     month: 'short',

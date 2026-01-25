@@ -1,6 +1,7 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
+import { formatBangkok } from '@/lib/bangkok-time';
 import type {
   CashflowSummary,
   TransactionsRequest,
@@ -38,8 +39,8 @@ export async function getCashflowSummary(
   const { data: dailySummary, error: summaryError } = await supabase
     .from('cashflow_daily_summary')
     .select('*')
-    .gte('date', startDate.toISOString().split('T')[0])
-    .lte('date', endDate.toISOString().split('T')[0])
+    .gte('date', formatBangkok(startDate, 'yyyy-MM-dd'))
+    .lte('date', formatBangkok(endDate, 'yyyy-MM-dd'))
     .order('date', { ascending: true });
 
   dbTime += Date.now() - dbStart;
@@ -129,13 +130,17 @@ async function getCashflowSummaryFallback(
   const supabase = await createClient();
 
   // Query forecast (removed created_by filter)
+  // Use Bangkok date strings to match database timezone bucketing
+  const startDateStr = formatBangkok(startDate, 'yyyy-MM-dd');
+  const endDateStr = formatBangkok(endDate, 'yyyy-MM-dd');
+
   const dbStart1 = Date.now();
   const { data: forecastData } = await supabase
     .from('unsettled_transactions')
     .select('estimated_settle_time, estimated_settlement_amount')
     .eq('status', 'unsettled')
-    .gte('estimated_settle_time', startDate.toISOString())
-    .lte('estimated_settle_time', endDate.toISOString());
+    .gte('estimated_settle_time', `${startDateStr}T00:00:00+07:00`)
+    .lte('estimated_settle_time', `${endDateStr}T23:59:59+07:00`);
   dbTime += Date.now() - dbStart1;
 
   // Query actual (removed created_by filter)
@@ -143,8 +148,8 @@ async function getCashflowSummaryFallback(
   const { data: actualData } = await supabase
     .from('settlement_transactions')
     .select('settled_time, settlement_amount')
-    .gte('settled_time', startDate.toISOString())
-    .lte('settled_time', endDate.toISOString());
+    .gte('settled_time', `${startDateStr}T00:00:00+07:00`)
+    .lte('settled_time', `${endDateStr}T23:59:59+07:00`);
   dbTime += Date.now() - dbStart2;
 
   // Aggregate manually
@@ -363,19 +368,23 @@ export async function getDailyCashflowSummary(
 
   const offset = (page - 1) * pageSize;
 
+  // Use Bangkok date strings to match database timezone
+  const startDateStr = formatBangkok(startDate, 'yyyy-MM-dd');
+  const endDateStr = formatBangkok(endDate, 'yyyy-MM-dd');
+
   // Count total rows (removed created_by filter)
   const { count } = await supabase
     .from('cashflow_daily_summary')
     .select('id', { count: 'exact', head: true })
-    .gte('date', startDate.toISOString().split('T')[0])
-    .lte('date', endDate.toISOString().split('T')[0]);
+    .gte('date', startDateStr)
+    .lte('date', endDateStr);
 
   // Fetch paginated data (removed created_by filter)
   const { data, error } = await supabase
     .from('cashflow_daily_summary')
     .select('date, forecast_sum, actual_sum, gap_sum')
-    .gte('date', startDate.toISOString().split('T')[0])
-    .lte('date', endDate.toISOString().split('T')[0])
+    .gte('date', startDateStr)
+    .lte('date', endDateStr)
     .order('date', { ascending: true })
     .range(offset, offset + pageSize - 1);
 
@@ -444,10 +453,18 @@ export async function rebuildCashflowSummary(
     throw new Error('Unauthorized');
   }
 
+  // Convert to Bangkok date strings (YYYY-MM-DD) to match database timezone
+  const startDateStr = typeof req.startDate === 'string'
+    ? req.startDate
+    : formatBangkok(new Date(req.startDate), 'yyyy-MM-dd');
+  const endDateStr = typeof req.endDate === 'string'
+    ? req.endDate
+    : formatBangkok(new Date(req.endDate), 'yyyy-MM-dd');
+
   const { data, error } = await supabase.rpc('rebuild_cashflow_daily_summary', {
     p_user_id: user.id,
-    p_start_date: req.startDate,
-    p_end_date: req.endDate,
+    p_start_date: startDateStr,
+    p_end_date: endDateStr,
   });
 
   if (error) {
