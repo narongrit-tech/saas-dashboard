@@ -464,7 +464,10 @@ export async function getDailyReconciliation(startDate: Date, endDate: Date) {
     })
 
     // Merge both maps to create daily reconciliation
-    const allDates = new Set([...forecastByDate.keys(), ...actualByDate.keys()])
+    const allDates = new Set([
+      ...Array.from(forecastByDate.keys()),
+      ...Array.from(actualByDate.keys())
+    ])
     const dailyData: DailyReconciliationRow[] = []
 
     allDates.forEach((date) => {

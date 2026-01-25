@@ -2,19 +2,12 @@
 
 import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { TrendingUp, DollarSign, AlertCircle } from 'lucide-react'
 import { getDailyPLForDate } from './actions'
 import { DailyPLData } from '@/lib/daily-pl'
-import { toZonedTime } from 'date-fns-tz'
-import { format } from 'date-fns'
-
-function getTodayDate(): string {
-  // Get today's date in Bangkok timezone
-  const bangkokNow = toZonedTime(new Date(), 'Asia/Bangkok')
-  return format(bangkokNow, 'yyyy-MM-dd')
-}
+import { getBangkokNow, formatBangkok, toBangkokTime } from '@/lib/bangkok-time'
+import { SingleDatePicker } from '@/components/shared/SingleDatePicker'
 
 function formatCurrency(amount: number): string {
   return amount.toLocaleString('th-TH', {
@@ -25,7 +18,7 @@ function formatCurrency(amount: number): string {
 
 function formatDateThai(dateStr: string): string {
   // Use Bangkok timezone for date formatting
-  const bangkokDate = toZonedTime(new Date(dateStr), 'Asia/Bangkok')
+  const bangkokDate = toBangkokTime(new Date(dateStr))
   return bangkokDate.toLocaleDateString('th-TH', {
     year: 'numeric',
     month: 'long',
@@ -34,7 +27,7 @@ function formatDateThai(dateStr: string): string {
 }
 
 export default function DailyPLPage() {
-  const [selectedDate, setSelectedDate] = useState<string>(getTodayDate())
+  const [selectedDate, setSelectedDate] = useState<Date>(getBangkokNow())
   const [plData, setPLData] = useState<DailyPLData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -48,7 +41,8 @@ export default function DailyPLPage() {
       setLoading(true)
       setError(null)
 
-      const result = await getDailyPLForDate(selectedDate)
+      const dateStr = formatBangkok(selectedDate, 'yyyy-MM-dd')
+      const result = await getDailyPLForDate(dateStr)
 
       if (!result.success || !result.data) {
         setError(result.error || 'ไม่สามารถโหลดข้อมูลได้')
@@ -76,16 +70,18 @@ export default function DailyPLPage() {
       </div>
 
       {/* Date Selector */}
-      <div className="max-w-xs">
-        <Label htmlFor="date">เลือกวันที่</Label>
-        <Input
-          id="date"
-          type="date"
-          value={selectedDate}
-          onChange={(e) => setSelectedDate(e.target.value)}
-          className="mt-2"
-        />
-        <p className="mt-1 text-sm text-muted-foreground">{formatDateThai(selectedDate)}</p>
+      <div className="max-w-md">
+        <Label>เลือกวันที่</Label>
+        <div className="mt-2">
+          <SingleDatePicker
+            value={selectedDate}
+            onChange={setSelectedDate}
+            className="min-w-[240px]"
+          />
+        </div>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {formatDateThai(formatBangkok(selectedDate, 'yyyy-MM-dd'))}
+        </p>
       </div>
 
       {/* Error State */}
@@ -206,7 +202,7 @@ export default function DailyPLPage() {
                 {formatCurrency(Math.abs(plData.net_profit))}
               </div>
               <p className="mt-2 text-sm text-muted-foreground">
-                {isProfit ? '✓ กำไร' : '✗ ขาดทุน'} วันที่ {formatDateThai(selectedDate)}
+                {isProfit ? '✓ กำไร' : '✗ ขาดทุน'} วันที่ {formatDateThai(formatBangkok(selectedDate, 'yyyy-MM-dd'))}
               </p>
             </CardContent>
           </Card>

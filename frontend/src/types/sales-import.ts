@@ -176,17 +176,17 @@ export interface ParsedSalesRow {
   rowNumber?: number // for error reporting
 
   // UX v2: Platform-specific fields
-  source_platform?: string // tiktok_shop | shopee | lazada
-  external_order_id?: string // Original platform order ID
-  platform_status?: string // Order Substatus (รอจัดส่ง, อยู่ระหว่างงานขนส่ง) - MAIN UI STATUS
-  status_group?: string // Order Status (ที่จัดส่ง, ชำระเงินแล้ว, ยกเลิกแล้ว) - Group filter
-  platform_substatus?: string // Platform sub-status (deprecated/unused)
-  payment_status?: string // paid | unpaid | partial | refunded
-  paid_at?: string // YYYY-MM-DD HH:MM:SS (Bangkok)
-  shipped_at?: string // YYYY-MM-DD HH:MM:SS (Bangkok)
-  delivered_at?: string // YYYY-MM-DD HH:MM:SS (Bangkok)
-  seller_sku?: string // Seller-defined SKU
-  sku_id?: string // Platform SKU ID
+  source_platform?: string | null // tiktok_shop | shopee | lazada
+  external_order_id?: string | null // Original platform order ID
+  platform_status?: string | null // Order Substatus (รอจัดส่ง, อยู่ระหว่างงานขนส่ง) - MAIN UI STATUS
+  status_group?: string | null // Order Status (ที่จัดส่ง, ชำระเงินแล้ว, ยกเลิกแล้ว) - Group filter
+  platform_substatus?: string | null // Platform sub-status (deprecated/unused)
+  payment_status?: string | null // paid | unpaid | partial | refunded
+  paid_at?: string | null // YYYY-MM-DD HH:MM:SS (Bangkok)
+  shipped_at?: string | null // YYYY-MM-DD HH:MM:SS (Bangkok)
+  delivered_at?: string | null // YYYY-MM-DD HH:MM:SS (Bangkok)
+  seller_sku?: string | null // Seller-defined SKU
+  sku_id?: string | null // Platform SKU ID
 }
 
 /**

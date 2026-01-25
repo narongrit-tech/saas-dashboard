@@ -7,6 +7,11 @@ import { Button } from '@/components/ui/button';
 import { CalendarIcon } from 'lucide-react';
 import { format } from 'date-fns';
 import { DateRange } from 'react-day-picker';
+import {
+  getBangkokNow,
+  startOfDayBangkok,
+  endOfDayBangkok
+} from '@/lib/bangkok-time';
 
 export interface DateRangeResult {
   startDate: Date;
@@ -29,31 +34,34 @@ export function SingleDateRangePicker({
     {
       label: 'Today',
       getValue: () => {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        return { startDate: today, endDate: today };
+        const today = getBangkokNow();
+        return {
+          startDate: startOfDayBangkok(today),
+          endDate: endOfDayBangkok(today)
+        };
       },
     },
     {
       label: 'Last 7 Days',
       getValue: () => {
-        const end = new Date();
-        end.setHours(23, 59, 59, 999);
-        const start = new Date();
+        const now = getBangkokNow();
+        const start = new Date(now);
         start.setDate(start.getDate() - 6);
-        start.setHours(0, 0, 0, 0);
-        return { startDate: start, endDate: end };
+        return {
+          startDate: startOfDayBangkok(start),
+          endDate: endOfDayBangkok(now)
+        };
       },
     },
     {
       label: 'MTD',
       getValue: () => {
-        const today = new Date();
+        const today = getBangkokNow();
         const start = new Date(today.getFullYear(), today.getMonth(), 1);
-        start.setHours(0, 0, 0, 0);
-        const end = new Date(today);
-        end.setHours(23, 59, 59, 999);
-        return { startDate: start, endDate: end };
+        return {
+          startDate: startOfDayBangkok(start),
+          endDate: endOfDayBangkok(today)
+        };
       },
     },
   ],
@@ -76,6 +84,8 @@ export function SingleDateRangePicker({
   });
 
   // Auto-apply when both dates selected
+  // Note: onChange intentionally omitted from deps to avoid infinite loop
+  // (parent may recreate onChange on every render, but we only want to trigger on dateRange change)
   useEffect(() => {
     if (dateRange?.from && dateRange?.to) {
       onChange({
@@ -83,7 +93,8 @@ export function SingleDateRangePicker({
         endDate: dateRange.to,
       });
     }
-  }, [dateRange, onChange]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateRange]);
 
   const handlePresetClick = (preset: { getValue: () => DateRangeResult }) => {
     const range = preset.getValue();

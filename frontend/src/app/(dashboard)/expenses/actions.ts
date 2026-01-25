@@ -74,6 +74,21 @@ export async function createManualExpense(input: CreateExpenseInput): Promise<Ac
       return { success: false, error: `เกิดข้อผิดพลาด: ${insertError.message}` }
     }
 
+    // 5. Create audit log (CREATE action)
+    await supabase.rpc('create_expense_audit_log', {
+      p_expense_id: insertedExpense.id,
+      p_action: 'CREATE',
+      p_performed_by: user.id,
+      p_changes: {
+        created: {
+          category: input.category,
+          amount: roundedAmount,
+          expense_date: input.expense_date,
+          description,
+        },
+      },
+    })
+
     return { success: true, data: insertedExpense }
   } catch (error) {
     console.error('Unexpected error in createManualExpense:', error)
@@ -116,7 +131,7 @@ export async function updateExpense(
     // 3. Check if expense exists and belongs to user (RLS will also enforce this)
     const { data: existingExpense, error: fetchError } = await supabase
       .from('expenses')
-      .select('id, created_by')
+      .select('*')
       .eq('id', expenseId)
       .single()
 
@@ -156,6 +171,27 @@ export async function updateExpense(
       return { success: false, error: `เกิดข้อผิดพลาด: ${updateError.message}` }
     }
 
+    // 7. Create audit log (UPDATE action)
+    await supabase.rpc('create_expense_audit_log', {
+      p_expense_id: expenseId,
+      p_action: 'UPDATE',
+      p_performed_by: user.id,
+      p_changes: {
+        before: {
+          category: existingExpense.category,
+          amount: existingExpense.amount,
+          expense_date: existingExpense.expense_date,
+          description: existingExpense.description,
+        },
+        after: {
+          category: input.category,
+          amount: roundedAmount,
+          expense_date: input.expense_date,
+          description,
+        },
+      },
+    })
+
     return { success: true, data: updatedExpense }
   } catch (error) {
     console.error('Unexpected error in updateExpense:', error)
@@ -182,7 +218,7 @@ export async function deleteExpense(expenseId: string): Promise<ActionResult> {
     // 2. Check if expense exists and belongs to user (RLS will also enforce this)
     const { data: existingExpense, error: fetchError } = await supabase
       .from('expenses')
-      .select('id, created_by')
+      .select('*')
       .eq('id', expenseId)
       .single()
 
@@ -195,7 +231,22 @@ export async function deleteExpense(expenseId: string): Promise<ActionResult> {
       return { success: false, error: 'คุณไม่มีสิทธิ์ลบรายการนี้' }
     }
 
-    // 3. Hard delete from database
+    // 3. Create audit log BEFORE deleting (DELETE action)
+    await supabase.rpc('create_expense_audit_log', {
+      p_expense_id: expenseId,
+      p_action: 'DELETE',
+      p_performed_by: user.id,
+      p_changes: {
+        deleted: {
+          category: existingExpense.category,
+          amount: existingExpense.amount,
+          expense_date: existingExpense.expense_date,
+          description: existingExpense.description,
+        },
+      },
+    })
+
+    // 4. Hard delete from database
     const { error: deleteError } = await supabase
       .from('expenses')
       .delete()

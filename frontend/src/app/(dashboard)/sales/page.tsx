@@ -4,10 +4,10 @@ import { useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SalesOrder, SalesOrderFilters } from '@/types/sales'
-import { toZonedTime } from 'date-fns-tz'
-import { endOfDay } from 'date-fns'
+import { endOfDayBangkok, formatBangkok } from '@/lib/bangkok-time'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { SingleDateRangePicker, DateRangeResult } from '@/components/shared/SingleDateRangePicker'
 import {
   Select,
   SelectContent,
@@ -48,14 +48,6 @@ const STATUSES = [
   { value: 'อยู่ระหว่างงานขนส่ง', label: 'อยู่ระหว่างงานขนส่ง' },
   { value: 'จัดส่งสำเร็จ', label: 'จัดส่งสำเร็จ' },
   { value: 'ยกเลิกคำสั่งซื้อ', label: 'ยกเลิกคำสั่งซื้อ' },
-]
-
-// NEW: Status Group values from TikTok Order Status (Thai) - optional filter
-const STATUS_GROUPS = [
-  { value: 'all', label: 'ทั้งหมด' },
-  { value: 'ที่จัดส่ง', label: 'ที่จัดส่ง' },
-  { value: 'ชำระเงินแล้ว', label: 'ชำระเงินแล้ว' },
-  { value: 'ยกเลิกแล้ว', label: 'ยกเลิกแล้ว' },
 ]
 
 const PAYMENT_STATUSES = [
@@ -174,9 +166,8 @@ export default function SalesPage() {
 
       if (filters.endDate) {
         // Use Bangkok timezone for end of day
-        const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
-        const endOfDayBangkok = endOfDay(bangkokDate)
-        query = query.lte('order_date', endOfDayBangkok.toISOString())
+        const endBangkok = endOfDayBangkok(filters.endDate)
+        query = query.lte('order_date', endBangkok.toISOString())
       }
 
       // Search filter (order_id, product_name, external_order_id)
@@ -211,6 +202,17 @@ export default function SalesPage() {
     updateURL(newFilters)
   }
 
+  const handleDateRangeChange = (range: DateRangeResult) => {
+    const newFilters = {
+      ...filters,
+      startDate: formatBangkok(range.startDate, 'yyyy-MM-dd'),
+      endDate: formatBangkok(range.endDate, 'yyyy-MM-dd'),
+      page: 1
+    }
+    setFilters(newFilters)
+    updateURL(newFilters)
+  }
+
   const handleStatusToggle = (status: string) => {
     const currentStatuses = filters.status || []
     const newStatuses = currentStatuses.includes(status)
@@ -240,32 +242,6 @@ export default function SalesPage() {
     if (pageNum >= 1 && pageNum <= totalPages) {
       handlePageChange(pageNum)
     }
-  }
-
-  const getStatusBadge = (status: string) => {
-    const statusLower = status.toLowerCase()
-    if (statusLower === 'completed') {
-      return (
-        <Badge className="bg-green-500 hover:bg-green-600 text-white">
-          Completed
-        </Badge>
-      )
-    }
-    if (statusLower === 'pending') {
-      return (
-        <Badge className="bg-yellow-500 hover:bg-yellow-600 text-white">
-          Pending
-        </Badge>
-      )
-    }
-    if (statusLower === 'cancelled') {
-      return (
-        <Badge className="bg-red-500 hover:bg-red-600 text-white">
-          Cancelled
-        </Badge>
-      )
-    }
-    return <Badge>{status}</Badge>
   }
 
   const formatDate = (dateString: string) => {
@@ -498,20 +474,17 @@ export default function SalesPage() {
         {/* Row 2: Date Range, Search */}
         <div className="flex flex-col gap-4 md:flex-row md:items-end">
           <div className="flex-1 space-y-2">
-            <label className="text-sm font-medium">วันที่เริ่มต้น</label>
-            <Input
-              type="date"
-              value={filters.startDate || ''}
-              onChange={(e) => handleFilterChange('startDate', e.target.value || undefined)}
-            />
-          </div>
-
-          <div className="flex-1 space-y-2">
-            <label className="text-sm font-medium">วันที่สิ้นสุด</label>
-            <Input
-              type="date"
-              value={filters.endDate || ''}
-              onChange={(e) => handleFilterChange('endDate', e.target.value || undefined)}
+            <label className="text-sm font-medium">ช่วงวันที่</label>
+            <SingleDateRangePicker
+              defaultRange={
+                filters.startDate && filters.endDate
+                  ? {
+                      startDate: new Date(filters.startDate),
+                      endDate: new Date(filters.endDate)
+                    }
+                  : undefined
+              }
+              onChange={handleDateRangeChange}
             />
           </div>
 

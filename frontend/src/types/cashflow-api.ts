@@ -91,3 +91,29 @@ export interface RebuildSummaryResponse {
   rows_affected: number;
   message: string;
 }
+
+// ============================================
+// DAILY SUMMARY TABLE
+// ============================================
+
+export interface DailySummaryRow {
+  date: string;
+  forecast_sum: number;
+  actual_sum: number;
+  gap: number;
+  status: 'actual_over' | 'pending' | 'actual_only' | 'forecast_only';
+}
+
+export interface DailySummaryResponse {
+  rows: DailySummaryRow[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    totalCount: number;
+    totalPages: number;
+  };
+  _timing?: {
+    total_ms: number;
+    db_ms: number;
+  };
+}

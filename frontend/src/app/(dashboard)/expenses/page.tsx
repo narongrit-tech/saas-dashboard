@@ -3,10 +3,10 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Expense, ExpenseFilters, ExpenseCategory } from '@/types/expenses'
-import { toZonedTime } from 'date-fns-tz'
-import { endOfDay } from 'date-fns'
+import { endOfDayBangkok, formatBangkok } from '@/lib/bangkok-time'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { SingleDateRangePicker, DateRangeResult } from '@/components/shared/SingleDateRangePicker'
 import {
   Select,
   SelectContent,
@@ -23,12 +23,13 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Download, FileUp } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Download, FileUp, FileDown } from 'lucide-react'
 import { AddExpenseDialog } from '@/components/expenses/AddExpenseDialog'
 import { EditExpenseDialog } from '@/components/expenses/EditExpenseDialog'
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
 import { ExpensesImportDialog } from '@/components/expenses/ExpensesImportDialog'
 import { deleteExpense, exportExpenses } from '@/app/(dashboard)/expenses/actions'
+import { downloadExpenseTemplate } from '@/app/(dashboard)/expenses/template-actions'
 
 const PER_PAGE = 20
 
@@ -44,6 +45,7 @@ export default function ExpensesPage() {
   const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
+  const [downloadTemplateLoading, setDownloadTemplateLoading] = useState(false)
 
   const [filters, setFilters] = useState<ExpenseFilters>({
     category: undefined,
@@ -80,9 +82,8 @@ export default function ExpensesPage() {
 
       if (filters.endDate) {
         // Use Bangkok timezone for end of day
-        const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
-        const endOfDayBangkok = endOfDay(bangkokDate)
-        query = query.lte('expense_date', endOfDayBangkok.toISOString())
+        const endBangkok = endOfDayBangkok(filters.endDate)
+        query = query.lte('expense_date', endBangkok.toISOString())
       }
 
       if (filters.search && filters.search.trim()) {
@@ -112,6 +113,15 @@ export default function ExpensesPage() {
 
   const handleFilterChange = (key: keyof ExpenseFilters, value: string | undefined) => {
     setFilters((prev) => ({ ...prev, [key]: value, page: 1 }))
+  }
+
+  const handleDateRangeChange = (range: DateRangeResult) => {
+    setFilters((prev) => ({
+      ...prev,
+      startDate: formatBangkok(range.startDate, 'yyyy-MM-dd'),
+      endDate: formatBangkok(range.endDate, 'yyyy-MM-dd'),
+      page: 1
+    }))
   }
 
   const handlePageChange = (newPage: number) => {
@@ -228,6 +238,38 @@ export default function ExpensesPage() {
     }
   }
 
+  const handleDownloadTemplate = async () => {
+    setDownloadTemplateLoading(true)
+    setError(null)
+
+    try {
+      const result = await downloadExpenseTemplate()
+
+      if (!result.success || !result.buffer || !result.filename) {
+        setError(result.error || 'เกิดข้อผิดพลาดในการดาวน์โหลด template')
+        return
+      }
+
+      // Create blob and download
+      const blob = new Blob([result.buffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = result.filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('Error downloading template:', err)
+      setError('เกิดข้อผิดพลาดในการดาวน์โหลด template')
+    } finally {
+      setDownloadTemplateLoading(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -257,20 +299,17 @@ export default function ExpensesPage() {
         </div>
 
         <div className="flex-1 space-y-2">
-          <label className="text-sm font-medium">วันที่เริ่มต้น</label>
-          <Input
-            type="date"
-            value={filters.startDate || ''}
-            onChange={(e) => handleFilterChange('startDate', e.target.value || undefined)}
-          />
-        </div>
-
-        <div className="flex-1 space-y-2">
-          <label className="text-sm font-medium">วันที่สิ้นสุด</label>
-          <Input
-            type="date"
-            value={filters.endDate || ''}
-            onChange={(e) => handleFilterChange('endDate', e.target.value || undefined)}
+          <label className="text-sm font-medium">ช่วงวันที่</label>
+          <SingleDateRangePicker
+            defaultRange={
+              filters.startDate && filters.endDate
+                ? {
+                    startDate: new Date(filters.startDate),
+                    endDate: new Date(filters.endDate)
+                  }
+                : undefined
+            }
+            onChange={handleDateRangeChange}
           />
         </div>
 
@@ -289,6 +328,14 @@ export default function ExpensesPage() {
         <Button onClick={() => setShowAddDialog(true)}>
           <Plus className="mr-2 h-4 w-4" />
           เพิ่มค่าใช้จ่าย
+        </Button>
+        <Button
+          variant="outline"
+          onClick={handleDownloadTemplate}
+          disabled={downloadTemplateLoading}
+        >
+          <FileDown className="mr-2 h-4 w-4" />
+          {downloadTemplateLoading ? 'กำลังดาวน์โหลด...' : 'Download Template'}
         </Button>
         <Button variant="outline" onClick={() => setShowImportDialog(true)}>
           <FileUp className="mr-2 h-4 w-4" />

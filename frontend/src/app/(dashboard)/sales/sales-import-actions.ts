@@ -368,16 +368,16 @@ async function parseTikTokFormat(
         source_platform: 'tiktok_shop',
         external_order_id: String(orderId).trim(),
         // FIX: platform_status = Order Substatus (รอจัดส่ง, อยู่ระหว่างงานขนส่ง) - MAIN UI STATUS
-        platform_status: orderSubstatus ? String(orderSubstatus).trim() : undefined,
+        platform_status: orderSubstatus ? String(orderSubstatus).trim() : null,
         // NEW: status_group = Order Status (ที่จัดส่ง, ชำระเงินแล้ว, ยกเลิกแล้ว) - Group filter
-        status_group: orderStatus ? String(orderStatus).trim() : undefined,
-        platform_substatus: undefined, // Deprecated
+        status_group: orderStatus ? String(orderStatus).trim() : null,
+        platform_substatus: null, // Deprecated
         payment_status: paymentStatus,
-        paid_at: paidTime ? toBangkokDatetime(paidTime) : undefined,
-        shipped_at: shippedTime ? toBangkokDatetime(shippedTime) : undefined,
-        delivered_at: deliveredTime ? toBangkokDatetime(deliveredTime) : undefined,
-        seller_sku: row['Seller SKU'] ? String(row['Seller SKU']).trim() : undefined,
-        sku_id: row['SKU ID'] ? String(row['SKU ID']).trim() : undefined,
+        paid_at: paidTime ? toBangkokDatetime(paidTime) : null,
+        shipped_at: shippedTime ? toBangkokDatetime(shippedTime) : null,
+        delivered_at: deliveredTime ? toBangkokDatetime(deliveredTime) : null,
+        seller_sku: row['Seller SKU'] ? String(row['Seller SKU']).trim() : null,
+        sku_id: row['SKU ID'] ? String(row['SKU ID']).trim() : null,
       })
 
       uniqueOrderIds.add(String(orderId).trim())

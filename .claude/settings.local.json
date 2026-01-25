@@ -27,7 +27,10 @@
       "Bash(git commit:*)",
       "Bash(npx supabase db reset)",
       "Bash(head:*)",
-      "Bash(psql:*)"
+      "Bash(psql:*)",
+      "Bash(git push:*)",
+      "Bash(cd:*)",
+      "Bash(grep:*)"
     ]
   },
   "approvalMode": "auto",

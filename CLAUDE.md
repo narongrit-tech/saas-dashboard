@@ -584,6 +584,207 @@ Later: CSV import, inventory, payables, reports, tax, APIs
 
 ---
 
+### Unified Date Picker (COMPLETE - Phase 7 Task D)
+
+**Purpose:** Consistent Bangkok timezone date selection across all pages
+
+**Key Characteristics:**
+- ✅ Two reusable components: SingleDateRangePicker, SingleDatePicker
+- ✅ Bangkok timezone (Asia/Bangkok) everywhere
+- ✅ Presets: Today, Last 7 Days, Last 30 Days, MTD, Last Month
+- ✅ No breaking changes to existing functionality
+
+**Components:**
+- `frontend/src/components/shared/SingleDateRangePicker.tsx` - Range picker (start/end date)
+- `frontend/src/components/shared/SingleDatePicker.tsx` - Single date picker
+
+**Integrated Pages:**
+- `/sales` - Date range filter
+- `/expenses` - Date range filter
+- `/daily-pl` - Single date selector
+- `/company-cashflow` - Date range filter
+- `/reconciliation` - Date range filter
+- `/cashflow` - Date range filter (already existed)
+
+**Bangkok Timezone Utilities:**
+- `frontend/src/lib/bangkok-time.ts` - Central timezone handling
+- Functions: `getBangkokNow()`, `formatBangkok()`, `startOfDayBangkok()`, `endOfDayBangkok()`
+
+**See:** `MANUAL_QA_CHECKLIST_TASKS_ABCD.md` → Test D1, D2
+
+---
+
+### Company Cashflow (COMPLETE - Phase 7 Task A)
+
+**Purpose:** Track actual cash in/out for company (liquidity view, not accrual P&L)
+
+**Key Characteristics:**
+- ✅ Summary cards: Total Cash In, Total Cash Out, Net Cashflow
+- ✅ Daily breakdown table with running balance
+- ✅ Date range filter (default: Last 7 days)
+- ✅ CSV export with Bangkok timezone
+- ✅ Page loads < 5 seconds
+
+**Data Sources:**
+- **Cash In**: `settlement_transactions` (marketplace settlements)
+- **Cash Out**: `expenses` table + `wallet_ledger` (TOP_UP entries)
+
+**Location:**
+- Page: `frontend/src/app/(dashboard)/company-cashflow/page.tsx`
+- Actions: `frontend/src/app/(dashboard)/company-cashflow/actions.ts`
+- Route: `/company-cashflow`
+
+**Key Functions:**
+```typescript
+export async function getCompanyCashflow(
+  startDate: Date,
+  endDate: Date
+): Promise<{ success: boolean; data?: CompanyCashflowSummary; error?: string }>
+
+export async function exportCompanyCashflow(
+  startDate: Date,
+  endDate: Date
+): Promise<{ success: boolean; csv?: string; filename?: string; error?: string }>
+```
+
+**Business Logic:**
+- Cash In = sum(settlement_amount) from settlement_transactions
+- Cash Out = sum(expenses.amount) + sum(wallet_ledger TOP_UP amounts)
+- Net Cashflow = Cash In - Cash Out
+- Running Balance = cumulative net across date range
+
+**CSV Export:**
+- Filename format: `company-cashflow-YYYYMMDD-HHmmss.csv`
+- Headers: Date, Cash In, Cash Out, Net Cashflow, Running Balance
+- Server-side generation, respects date range filter
+
+**See:** `MANUAL_QA_CHECKLIST_TASKS_ABCD.md` → Test A1, A2, A3
+
+---
+
+### P&L vs Cashflow Reconciliation (COMPLETE - Phase 7 Task B)
+
+**Purpose:** Explain difference between Accrual P&L (performance) and Company Cashflow (liquidity)
+
+**Key Characteristics:**
+- ✅ Side-by-side comparison: Accrual P&L vs Company Cashflow
+- ✅ Bridge items explain the gap
+- ✅ Verification formula checks accuracy
+- ✅ Date range filter (default: Last 7 days)
+- ✅ CSV export with all sections
+- ✅ Read-only report (no data modification)
+
+**Location:**
+- Page: `frontend/src/app/(dashboard)/reconciliation/page.tsx`
+- Actions: `frontend/src/app/(dashboard)/reconciliation/actions.ts`
+- Route: `/reconciliation`
+
+**Bridge Items (Explain P&L vs Cashflow Gap):**
+1. **Revenue not yet settled**: Accrual revenue - Actual cash in (sales recorded but not paid)
+2. **Wallet top-ups**: Cash out but NOT expense (company → wallet transfer)
+3. **Ad spend timing differences**: Placeholder (0) - data not yet available
+
+**Verification Formula:**
+```
+Accrual Net Profit + Total Bridge = Cashflow Net
+```
+- Error < 0.01 → ✅ Verified
+- Error ≥ 0.01 → ⚠️ Warning (missing bridge items)
+
+**Key Functions:**
+```typescript
+export async function getReconciliationReport(
+  startDate: Date,
+  endDate: Date
+): Promise<{ success: boolean; data?: ReconciliationReport; error?: string }>
+
+export interface ReconciliationBridgeItem {
+  label: string
+  amount: number
+  explanation: string
+  dataAvailable: boolean
+}
+```
+
+**CSV Export:**
+- Filename format: `reconciliation-YYYYMMDD-HHmmss.csv`
+- Sections: Accrual P&L, Company Cashflow, Bridge Items, Verification Error
+
+**See:** `MANUAL_QA_CHECKLIST_TASKS_ABCD.md` → Test B1, B2, B3, B4
+
+---
+
+### Expenses Template + Audit Log (COMPLETE - Phase 7 Task C)
+
+**Purpose:** Downloadable Excel template for expense import + audit trail for all expense changes
+
+**Key Characteristics:**
+- ✅ Download Template: .xlsx with 2 sheets (template + instructions)
+- ✅ Import with preview/validation (reuses Phase 6 infrastructure)
+- ✅ File hash deduplication
+- ✅ Audit log table: tracks CREATE/UPDATE/DELETE operations
+- ✅ Immutable audit logs (no UPDATE/DELETE policies)
+- ✅ Future-proof for permission system
+
+**Template Download:**
+- **Template Sheet**: Headers + example row
+  - Columns: date, category, description, amount, payment_method, vendor, notes, reference_id
+  - Example row: `2026-01-25, Advertising, Facebook Ads Campaign, 5000.00, Credit Card, Meta, Campaign Jan 2026, FB-2026-001`
+- **Instructions Sheet**: Thai + English guidance
+  - Required columns, Category values, Data validation rules, Usage notes
+
+**Import Functionality:**
+- Uses existing `ExpensesImportDialog` component (Phase 6)
+- Parser: `frontend/src/lib/expenses-parser.ts` (client-side)
+- Import: `frontend/src/app/(dashboard)/expenses/expenses-import-actions.ts` (server-side)
+- Preview → Validate → Confirm → Insert
+- File hash deduplication via `import_batches` table
+
+**Audit Log System:**
+- **Table**: `expense_audit_logs`
+- **Fields**: expense_id, action (CREATE/UPDATE/DELETE), performed_by, performed_at, changes (JSONB), ip_address, user_agent, notes
+- **Changes Structure**:
+  - CREATE: `{ created: { category, amount, expense_date, description } }`
+  - UPDATE: `{ before: {...}, after: {...} }`
+  - DELETE: `{ deleted: { category, amount, expense_date, description } }`
+- **RLS Policy**: Users can only view audit logs for their own expenses
+- **Immutability**: No UPDATE or DELETE policies (append-only)
+
+**Helper Function:**
+```sql
+CREATE OR REPLACE FUNCTION public.create_expense_audit_log(
+  p_expense_id UUID,
+  p_action VARCHAR(20),
+  p_performed_by UUID,
+  p_changes JSONB,
+  p_ip_address INET DEFAULT NULL,
+  p_user_agent TEXT DEFAULT NULL,
+  p_notes TEXT DEFAULT NULL
+) RETURNS UUID
+```
+
+**Location:**
+- Template Actions: `frontend/src/app/(dashboard)/expenses/template-actions.ts`
+- Import Parser: `frontend/src/lib/expenses-parser.ts` (Phase 6)
+- Import Actions: `frontend/src/app/(dashboard)/expenses/expenses-import-actions.ts` (Phase 6)
+- Expense Actions: `frontend/src/app/(dashboard)/expenses/actions.ts` (updated with audit logging)
+- Import Dialog: `frontend/src/components/expenses/ExpensesImportDialog.tsx` (Phase 6)
+- Database: `database-scripts/migration-013-expense-audit-logs.sql`
+
+**Integration:**
+- `/expenses` page has "Download Template" button (calls `downloadExpenseTemplate()`)
+- `/expenses` page has "Import" button (opens `ExpensesImportDialog`)
+- All CRUD operations (create/update/delete) automatically create audit logs
+
+**CSV Export:**
+- Filename format: `expense-template-YYYYMMDD.xlsx`
+- Generated server-side using XLSX library
+- Two sheets: template data + instructions
+
+**See:** `MANUAL_QA_CHECKLIST_TASKS_ABCD.md` → Test C1-C7
+
+---
+
 ## 🚀 Future Enhancements (Not in Current MVP)
 
 ### Phase 7 - Advanced Features
@@ -720,10 +921,40 @@ These files contain critical business logic. Changes require careful review:
     - Transaction fetching (lazy loaded)
     - DO NOT MODIFY without understanding performance requirements
 
+15. **`frontend/src/app/(dashboard)/company-cashflow/actions.ts`** ⭐ NEW (Phase 7)
+    - **Company cashflow calculations (Task A)**
+    - Cash In: settlement_transactions
+    - Cash Out: expenses + wallet_ledger TOP_UP
+    - Daily aggregation with running balance
+    - CSV export with Bangkok timezone
+    - DO NOT MODIFY without understanding liquidity vs accrual difference
+
+16. **`frontend/src/app/(dashboard)/reconciliation/actions.ts`** ⭐ NEW (Phase 7)
+    - **P&L vs Cashflow reconciliation logic (Task B)**
+    - Bridge items calculation (revenue not settled, wallet top-ups, ad timing)
+    - Verification formula: Accrual Net + Bridge = Cashflow Net
+    - Integrates daily-pl.ts and company-cashflow actions
+    - DO NOT MODIFY without understanding bridge items concept
+
+17. **`frontend/src/app/(dashboard)/expenses/template-actions.ts`** ⭐ NEW (Phase 7)
+    - **Expense template download and import (Task C)**
+    - Generates .xlsx template with 2 sheets (template + instructions)
+    - Import validation (category, amount, date format)
+    - File hash deduplication via import_batches
+    - Note: Import UI uses Phase 6 infrastructure (expenses-import-actions.ts)
+    - DO NOT MODIFY without understanding template structure
+
+18. **`frontend/src/app/(dashboard)/expenses/actions.ts`** (UPDATED Phase 7)
+    - Category validation (3 types only)
+    - Expense creation logic
+    - **NEW:** Audit trail logging for CREATE/UPDATE/DELETE
+    - Calls create_expense_audit_log RPC function
+    - DO NOT MODIFY without understanding audit requirements
+
 ### Database Schema Files
-- Supabase migrations (especially `migration-005-wallets.sql`, `migration-006-column-mappings.sql`, `migration-010-cashflow-performance.sql`)
-- RLS policies (wallet access control, preset access control, cashflow summary access)
-- Database functions: `rebuild_cashflow_daily_summary(user_id, start_date, end_date)`
+- Supabase migrations (especially `migration-005-wallets.sql`, `migration-006-column-mappings.sql`, `migration-010-cashflow-performance.sql`, `migration-013-expense-audit-logs.sql`)
+- RLS policies (wallet access control, preset access control, cashflow summary access, expense audit logs access)
+- Database functions: `rebuild_cashflow_daily_summary(user_id, start_date, end_date)`, `create_expense_audit_log(...)`
 
 ### What CAN be modified safely:
 - UI components (pages, dialogs, cards)
@@ -869,11 +1100,22 @@ Read these for context before making changes:
    - Performance: Index usage verification
    - Created: Phase 2B (Cashflow Performance Optimization)
 
-9. **`CLAUDE.md`** (this file)
-   - Project rules and guidelines
-   - Current system state
-   - Extension guide
-   - Updated: 2026-01-25 (Phase 2B: Cashflow Performance + Import Optimization)
+9. **`MANUAL_QA_CHECKLIST_TASKS_ABCD.md`** ⭐ NEW
+   - Comprehensive manual QA checklist for Tasks A, B, C, D
+   - Test scenarios for all 4 tasks (60+ test cases)
+   - Integration tests (cross-feature validation)
+   - Security & data integrity tests
+   - Performance benchmarks
+   - Regression tests
+   - Edge cases & error handling
+   - Acceptance criteria verification
+   - Created: Phase 7 (Tasks A, B, C, D Completion)
+
+10. **`CLAUDE.md`** (this file)
+    - Project rules and guidelines
+    - Current system state
+    - Extension guide
+    - Updated: 2026-01-25 (Phase 7: Tasks A, B, C, D - Company Cashflow + Reconciliation + Expenses Template + Unified Date Picker)
 
 ---
 

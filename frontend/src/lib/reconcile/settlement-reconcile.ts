@@ -11,12 +11,10 @@ export interface ReconcileResult {
  * Marks matching unsettled transactions as 'settled'
  *
  * @param batchId - Import batch ID for settlements just imported
- * @param userId - User ID for RLS
  * @returns ReconcileResult with counts
  */
 export async function reconcileSettlements(
-  batchId: string,
-  userId: string
+  batchId: string
 ): Promise<ReconcileResult> {
   const supabase = await createClient();
   let reconciledCount = 0;
@@ -146,7 +144,6 @@ export async function reconcileSettlements(
  * Useful for UI display
  */
 export async function getReconcileStatus(
-  userId: string,
   startDate: string,
   endDate: string
 ): Promise<{

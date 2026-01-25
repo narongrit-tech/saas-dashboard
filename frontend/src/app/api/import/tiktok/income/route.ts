@@ -7,6 +7,7 @@ import {
   type ImportResult,
 } from '@/lib/importers/tiktok-income';
 import { reconcileSettlements } from '@/lib/reconcile/settlement-reconcile';
+import { toZonedTime } from 'date-fns-tz';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60; // 60 seconds timeout
@@ -154,7 +155,7 @@ export async function POST(request: NextRequest) {
       let reconciledCount = 0;
       let notFoundCount = 0;
       try {
-        const reconcileResult = await reconcileSettlements(batch.id, user.id);
+        const reconcileResult = await reconcileSettlements(batch.id);
         reconciledCount = reconcileResult.reconciledCount;
         notFoundCount = reconcileResult.notFoundInOnholdCount;
       } catch (reconcileError) {
@@ -193,14 +194,13 @@ export async function POST(request: NextRequest) {
           // Calculate date range from imported rows (Asia/Bangkok timezone)
           const settledDates = rows
             .map((r) => {
+              if (!r.settled_time) return null;
               const settledTime = new Date(r.settled_time);
-              // Convert to Bangkok date
-              const bangkokDate = new Date(
-                settledTime.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' })
-              );
+              // Convert to Bangkok timezone
+              const bangkokDate = toZonedTime(settledTime, 'Asia/Bangkok');
               return bangkokDate.toISOString().split('T')[0];
             })
-            .filter((d) => d);
+            .filter((d) => d !== null) as string[];
 
           if (settledDates.length > 0) {
             const minDate = settledDates.reduce((a, b) => (a < b ? a : b));

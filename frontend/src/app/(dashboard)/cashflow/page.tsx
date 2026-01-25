@@ -35,6 +35,7 @@ import {
 } from './cashflow-api-actions';
 import type {
   CashflowSummary,
+  DailySummaryResponse,
   TransactionType,
   TransactionsResponse,
   TransactionRow,
@@ -82,7 +83,7 @@ export default function CashflowPageV3() {
   const [summaryError, setSummaryError] = useState<string | null>(null);
 
   // Daily summary table (PRIMARY CONTENT)
-  const [dailySummary, setDailySummary] = useState<any>(null);
+  const [dailySummary, setDailySummary] = useState<DailySummaryResponse | null>(null);
   const [dailySummaryLoading, setDailySummaryLoading] = useState(false);
   const [dailySummaryError, setDailySummaryError] = useState<string | null>(null);
   const [dailyPage, setDailyPage] = useState(1);
@@ -117,7 +118,7 @@ export default function CashflowPageV3() {
       if (result._timing) {
         console.log(`[Summary Cards] ${result._timing.total_ms}ms`);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error fetching summary:', err);
       setSummaryError('ไม่สามารถโหลดสรุปข้อมูลได้');
     } finally {
@@ -143,7 +144,7 @@ export default function CashflowPageV3() {
       );
 
       setDailySummary(result);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error fetching daily summary:', err);
       setDailySummaryError('ไม่สามารถโหลดตารางรายวันได้');
     } finally {
@@ -172,7 +173,7 @@ export default function CashflowPageV3() {
       });
 
       setTransactions(result);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error fetching transactions:', err);
       setTransactionsError('ไม่สามารถโหลดรายการได้');
     } finally {
@@ -418,7 +419,7 @@ export default function CashflowPageV3() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {dailySummary.rows.map((row: any) => {
+                    {dailySummary.rows.map((row) => {
                       const statusConfig = {
                         actual_over: { label: 'Actual > Forecast', color: 'text-green-600 bg-green-50' },
                         pending: { label: 'Pending', color: 'text-yellow-600 bg-yellow-50' },
