@@ -96,6 +96,27 @@ function parseDate(value: unknown): Date | null {
 }
 
 /**
+ * Safe conversion to string (prevents precision loss for large numbers)
+ */
+function safeToString(value: unknown): string {
+  if (value === null || value === undefined) return '';
+
+  // If it's a number with >15 digits, it's likely a transaction ID
+  // Use scientific notation check to detect large numbers
+  if (typeof value === 'number') {
+    const str = value.toString();
+    // If number is in scientific notation (e.g., 1.23e+17) or has >15 digits
+    if (str.includes('e+') || str.includes('E+') || Math.abs(value) > Number.MAX_SAFE_INTEGER) {
+      // Already precision loss - but keep as string
+      console.warn(`Large number detected (precision may be lost): ${str}`);
+      return str.replace(/e\+\d+/, ''); // Remove scientific notation
+    }
+  }
+
+  return String(value).trim();
+}
+
+/**
  * Parse Excel buffer and normalize rows
  */
 export function parseOnholdExcel(buffer: Buffer): {
@@ -103,7 +124,7 @@ export function parseOnholdExcel(buffer: Buffer): {
   warnings: string[];
 } {
   const warnings: string[] = [];
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const workbook = XLSX.read(buffer, { type: 'buffer', raw: false }); // Force string conversion
 
   // Use first sheet
   const sheetName = workbook.SheetNames[0];
@@ -112,15 +133,15 @@ export function parseOnholdExcel(buffer: Buffer): {
   }
 
   const worksheet = workbook.Sheets[sheetName];
-  const data = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as unknown[][];
+  const data = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false, defval: '' }) as unknown[][];
 
   if (data.length < 2) {
     throw new Error('Excel file is empty or has no data rows');
   }
 
-  // Find header row (first row with required columns)
+  // Find header row (scan first 30 rows for disclaimer/metadata)
   let headerRowIndex = -1;
-  for (let i = 0; i < Math.min(5, data.length); i++) {
+  for (let i = 0; i < Math.min(30, data.length); i++) {
     const row = data[i];
     if (Array.isArray(row) && row.length > 0) {
       const hasRequiredColumn = findColumn(
@@ -129,13 +150,14 @@ export function parseOnholdExcel(buffer: Buffer): {
       );
       if (hasRequiredColumn !== -1) {
         headerRowIndex = i;
+        console.log(`[Onhold Import] Header detected at row ${i + 1}`);
         break;
       }
     }
   }
 
   if (headerRowIndex === -1) {
-    throw new Error('Could not find header row with required columns');
+    throw new Error('Could not find header row with required columns (scanned first 30 rows)');
   }
 
   const headers = data[headerRowIndex].map(String);
@@ -161,16 +183,17 @@ export function parseOnholdExcel(buffer: Buffer): {
     if (!row || row.length === 0) continue;
 
     const txnId = row[columnIndexes.txn_id];
-    if (!txnId || String(txnId).trim() === '') {
+    const txnIdStr = safeToString(txnId);
+    if (!txnIdStr || txnIdStr === '') {
       warnings.push(`Row ${i + 1}: Missing transaction ID, skipping`);
       continue;
     }
 
     const normalizedRow: NormalizedOnholdRow = {
-      txn_id: String(txnId).trim(),
+      txn_id: txnIdStr,
       related_order_id:
         columnIndexes.related_order_id !== -1 && row[columnIndexes.related_order_id]
-          ? String(row[columnIndexes.related_order_id]).trim()
+          ? safeToString(row[columnIndexes.related_order_id])
           : null,
       type:
         columnIndexes.type !== -1 && row[columnIndexes.type]

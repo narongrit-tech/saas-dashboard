@@ -91,7 +91,10 @@ export async function POST(request: NextRequest) {
 
     try {
       // Parse Excel file
+      console.log(`[Onhold Import] Parsing file: ${file.name}`);
       const { rows, warnings } = parseOnholdExcel(buffer);
+      console.log(`[Onhold Import] Total rows parsed: ${rows.length}`);
+      console.log(`[Onhold Import] First 3 Transaction IDs:`, rows.slice(0, 3).map(r => r.txn_id));
 
       if (rows.length === 0) {
         // Mark batch as failed
@@ -112,11 +115,13 @@ export async function POST(request: NextRequest) {
       }
 
       // Upsert rows
+      console.log(`[Onhold Import] Upserting ${rows.length} rows...`);
       const { insertedCount, updatedCount, errorCount, errors } = await upsertOnholdRows(
         rows,
         batch.id,
         user.id
       );
+      console.log(`[Onhold Import] Results: inserted=${insertedCount}, updated=${updatedCount}, errors=${errorCount}`);
 
       const skippedCount = rows.length - insertedCount - updatedCount - errorCount;
 

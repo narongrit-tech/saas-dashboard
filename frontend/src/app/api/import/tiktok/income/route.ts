@@ -92,7 +92,10 @@ export async function POST(request: NextRequest) {
 
     try {
       // Parse Excel file
+      console.log(`[Income Import] Parsing file: ${file.name}`);
       const { rows, warnings } = parseIncomeExcel(buffer);
+      console.log(`[Income Import] Total rows parsed: ${rows.length}`);
+      console.log(`[Income Import] First 3 Transaction IDs:`, rows.slice(0, 3).map(r => r.txn_id));
 
       if (rows.length === 0) {
         // Mark batch as failed
@@ -113,15 +116,18 @@ export async function POST(request: NextRequest) {
       }
 
       // Upsert rows into settlement_transactions
+      console.log(`[Income Import] Upserting ${rows.length} rows...`);
       const { insertedCount, updatedCount, errorCount, errors } = await upsertIncomeRows(
         rows,
         batch.id,
         user.id
       );
+      console.log(`[Income Import] Results: inserted=${insertedCount}, updated=${updatedCount}, errors=${errorCount}`);
 
       const skippedCount = rows.length - insertedCount - updatedCount - errorCount;
 
       // Reconcile with unsettled_transactions
+      console.log(`[Income Import] Starting reconciliation...`);
       let reconciledCount = 0;
       let notFoundCount = 0;
       try {
