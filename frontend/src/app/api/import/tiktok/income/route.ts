@@ -187,6 +187,46 @@ export async function POST(request: NextRequest) {
         })
         .eq('id', batch.id);
 
+      // AUTO REBUILD SUMMARY after successful import
+      if (batchStatus === 'success' && rows.length > 0) {
+        try {
+          // Calculate date range from imported rows (Asia/Bangkok timezone)
+          const settledDates = rows
+            .map((r) => {
+              const settledTime = new Date(r.settled_time);
+              // Convert to Bangkok date
+              const bangkokDate = new Date(
+                settledTime.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' })
+              );
+              return bangkokDate.toISOString().split('T')[0];
+            })
+            .filter((d) => d);
+
+          if (settledDates.length > 0) {
+            const minDate = settledDates.reduce((a, b) => (a < b ? a : b));
+            const maxDate = settledDates.reduce((a, b) => (a > b ? a : b));
+
+            console.log(`[Income Import] Rebuilding summary for date range: ${minDate} to ${maxDate}`);
+
+            const { error: rebuildError } = await supabase.rpc('rebuild_cashflow_daily_summary', {
+              p_user_id: user.id,
+              p_start_date: minDate,
+              p_end_date: maxDate,
+            });
+
+            if (rebuildError) {
+              console.error('[Income Import] Rebuild summary failed:', rebuildError);
+              warnings.push('Summary rebuild failed - please rebuild manually');
+            } else {
+              console.log('[Cashflow] Summary rebuilt after import');
+            }
+          }
+        } catch (rebuildError) {
+          console.error('[Income Import] Rebuild summary error:', rebuildError);
+          warnings.push('Summary rebuild failed - please rebuild manually');
+        }
+      }
+
       const result: ImportResult & {
         reconciledCount?: number;
         notFoundInForecastCount?: number;

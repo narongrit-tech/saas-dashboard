@@ -33,11 +33,11 @@ export async function getCashflowSummary(
   }
 
   // Try to read from pre-aggregated table first
+  // NOTE: Removed created_by filter to support service role imports (internal dashboard - single tenant)
   const dbStart = Date.now();
   const { data: dailySummary, error: summaryError } = await supabase
     .from('cashflow_daily_summary')
     .select('*')
-    .eq('created_by', user.id)
     .gte('date', startDate.toISOString().split('T')[0])
     .lte('date', endDate.toISOString().split('T')[0])
     .order('date', { ascending: true });
@@ -128,23 +128,21 @@ async function getCashflowSummaryFallback(
   let dbTime = initialDbTime;
   const supabase = await createClient();
 
-  // Query forecast
+  // Query forecast (removed created_by filter)
   const dbStart1 = Date.now();
   const { data: forecastData } = await supabase
     .from('unsettled_transactions')
     .select('estimated_settle_time, estimated_settlement_amount')
-    .eq('created_by', userId)
     .eq('status', 'unsettled')
     .gte('estimated_settle_time', startDate.toISOString())
     .lte('estimated_settle_time', endDate.toISOString());
   dbTime += Date.now() - dbStart1;
 
-  // Query actual
+  // Query actual (removed created_by filter)
   const dbStart2 = Date.now();
   const { data: actualData } = await supabase
     .from('settlement_transactions')
     .select('settled_time, settlement_amount')
-    .eq('created_by', userId)
     .gte('settled_time', startDate.toISOString())
     .lte('settled_time', endDate.toISOString());
   dbTime += Date.now() - dbStart2;
@@ -218,13 +216,13 @@ export async function getCashflowTransactions(
   let dateField: string;
   let amountField: string;
 
+  // Removed created_by filter to support service role imports
   if (req.type === 'forecast') {
     dateField = 'estimated_settle_time';
     amountField = 'estimated_settlement_amount';
     query = supabase
       .from('unsettled_transactions')
       .select('id, txn_id, type, estimated_settle_time, estimated_settlement_amount, currency, status, marketplace')
-      .eq('created_by', user.id)
       .neq('status', 'settled') // Show all except settled (includes unsettled, pending, null)
       .gte(dateField, req.startDate)
       .lte(dateField, req.endDate);
@@ -232,7 +230,6 @@ export async function getCashflowTransactions(
     countQuery = supabase
       .from('unsettled_transactions')
       .select('id', { count: 'exact', head: true })
-      .eq('created_by', user.id)
       .neq('status', 'settled') // Show all except settled
       .gte(dateField, req.startDate)
       .lte(dateField, req.endDate);
@@ -242,14 +239,12 @@ export async function getCashflowTransactions(
     query = supabase
       .from('settlement_transactions')
       .select('id, txn_id, type, settled_time, settlement_amount, currency, marketplace')
-      .eq('created_by', user.id)
       .gte(dateField, req.startDate)
       .lte(dateField, req.endDate);
 
     countQuery = supabase
       .from('settlement_transactions')
       .select('id', { count: 'exact', head: true })
-      .eq('created_by', user.id)
       .gte(dateField, req.startDate)
       .lte(dateField, req.endDate);
   } else {
@@ -259,7 +254,6 @@ export async function getCashflowTransactions(
     query = supabase
       .from('unsettled_transactions')
       .select('id, txn_id, type, estimated_settle_time, estimated_settlement_amount, currency, status, marketplace')
-      .eq('created_by', user.id)
       .eq('status', 'unsettled')
       .gte(dateField, req.startDate)
       .lte(dateField, req.endDate);
@@ -267,7 +261,6 @@ export async function getCashflowTransactions(
     countQuery = supabase
       .from('unsettled_transactions')
       .select('id', { count: 'exact', head: true })
-      .eq('created_by', user.id)
       .eq('status', 'unsettled')
       .gte(dateField, req.startDate)
       .lte(dateField, req.endDate);
@@ -370,19 +363,17 @@ export async function getDailyCashflowSummary(
 
   const offset = (page - 1) * pageSize;
 
-  // Count total rows
+  // Count total rows (removed created_by filter)
   const { count } = await supabase
     .from('cashflow_daily_summary')
     .select('id', { count: 'exact', head: true })
-    .eq('created_by', user.id)
     .gte('date', startDate.toISOString().split('T')[0])
     .lte('date', endDate.toISOString().split('T')[0]);
 
-  // Fetch paginated data
+  // Fetch paginated data (removed created_by filter)
   const { data, error } = await supabase
     .from('cashflow_daily_summary')
     .select('date, forecast_sum, actual_sum, gap_sum')
-    .eq('created_by', user.id)
     .gte('date', startDate.toISOString().split('T')[0])
     .lte('date', endDate.toISOString().split('T')[0])
     .order('date', { ascending: true })

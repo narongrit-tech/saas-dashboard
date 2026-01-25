@@ -163,6 +163,46 @@ export async function POST(request: NextRequest) {
         })
         .eq('id', batch.id);
 
+      // AUTO REBUILD SUMMARY after successful import
+      if (batchStatus === 'success' && rows.length > 0) {
+        try {
+          // Calculate date range from imported rows (Asia/Bangkok timezone)
+          const estimatedDates = rows
+            .map((r) => {
+              const estimatedTime = new Date(r.estimated_settle_time);
+              // Convert to Bangkok date
+              const bangkokDate = new Date(
+                estimatedTime.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' })
+              );
+              return bangkokDate.toISOString().split('T')[0];
+            })
+            .filter((d) => d);
+
+          if (estimatedDates.length > 0) {
+            const minDate = estimatedDates.reduce((a, b) => (a < b ? a : b));
+            const maxDate = estimatedDates.reduce((a, b) => (a > b ? a : b));
+
+            console.log(`[Onhold Import] Rebuilding summary for date range: ${minDate} to ${maxDate}`);
+
+            const { error: rebuildError } = await supabase.rpc('rebuild_cashflow_daily_summary', {
+              p_user_id: user.id,
+              p_start_date: minDate,
+              p_end_date: maxDate,
+            });
+
+            if (rebuildError) {
+              console.error('[Onhold Import] Rebuild summary failed:', rebuildError);
+              warnings.push('Summary rebuild failed - please rebuild manually');
+            } else {
+              console.log('[Cashflow] Summary rebuilt after import');
+            }
+          }
+        } catch (rebuildError) {
+          console.error('[Onhold Import] Rebuild summary error:', rebuildError);
+          warnings.push('Summary rebuild failed - please rebuild manually');
+        }
+      }
+
       const result: ImportResult = {
         success: batchStatus === 'success',
         batchId: batch.id,
