@@ -37,7 +37,7 @@ const menuItems = [
     icon: BarChart3,
   },
   {
-    title: 'Cashflow',
+    title: 'Marketplace Wallets',
     href: '/cashflow',
     icon: Wallet,
   },

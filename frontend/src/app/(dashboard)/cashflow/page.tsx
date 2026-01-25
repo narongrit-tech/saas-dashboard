@@ -5,6 +5,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { SingleDateRangePicker, type DateRangeResult } from '@/components/shared/SingleDateRangePicker';
 import { ImportOnholdDialog } from '@/components/cashflow/ImportOnholdDialog';
 import { ImportIncomeDialog } from '@/components/cashflow/ImportIncomeDialog';
@@ -17,6 +24,7 @@ import {
   XCircle,
   ChevronLeft,
   ChevronRight,
+  Info,
 } from 'lucide-react';
 import { toZonedTime } from 'date-fns-tz';
 import {
@@ -250,8 +258,10 @@ export default function CashflowPageV3() {
       {/* Header */}
       <div className="flex justify-between items-start">
         <div>
-          <h1 className="text-3xl font-bold">Cashflow Forecast & Actual</h1>
-          <p className="text-muted-foreground">เงินจะเข้าแต่ละวันเท่าไหร่?</p>
+          <h1 className="text-3xl font-bold">Marketplace Wallet Cashflow</h1>
+          <p className="text-muted-foreground">
+            เงินเข้า–ออกจากแพลตฟอร์มขาย (TikTok Shop, Shopee, Lazada)
+          </p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setImportOnholdDialogOpen(true)}>
@@ -267,6 +277,31 @@ export default function CashflowPageV3() {
 
       {/* Single Date Range Picker */}
       <SingleDateRangePicker onChange={setDateRange} />
+
+      {/* Marketplace Filter (Placeholder for future multi-marketplace support) */}
+      <div className="flex items-center gap-3">
+        <label className="text-sm font-medium text-gray-700">Marketplace:</label>
+        <Select disabled defaultValue="tiktok">
+          <SelectTrigger className="w-48">
+            <SelectValue placeholder="Select marketplace" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="tiktok">TikTok Shop</SelectItem>
+            {/* TODO: support multi-marketplace wallets (TikTok, Shopee, Lazada) */}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* Definition Info Box */}
+      <Alert className="border-blue-200 bg-blue-50">
+        <Info className="h-4 w-4 text-blue-600" />
+        <AlertDescription className="text-sm text-gray-700">
+          <strong>Marketplace Wallets</strong> คือเงินที่แพลตฟอร์มขายถือไว้ชั่วคราว
+          เช่น TikTok Shop ก่อนโอนเข้าบัญชีบริษัท
+          หน้านี้ยังไม่ใช่ Cashflow ทั้งบริษัท
+          และยังไม่รวมค่าใช้จ่ายหรือเงินสดในบัญชีบริษัท
+        </AlertDescription>
+      </Alert>
 
       {/* Summary Cards */}
       {summaryError && (
