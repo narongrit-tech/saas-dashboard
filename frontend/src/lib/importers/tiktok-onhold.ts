@@ -28,7 +28,7 @@ export interface NormalizedOnholdRow {
   related_order_id: string | null;
   type: string | null;
   currency: string;
-  estimated_settle_time: Date | null;
+  estimated_settle_time: Date; // Always has value (fallback to today + 7 days)
   estimated_settlement_amount: number | null;
   unsettled_reason: string | null;
 }
@@ -102,13 +102,13 @@ function parseDate(value: unknown): Date | null {
  * Handles:
  * - Direct dates (Excel number or string)
  * - "Delivered + N days" format
- * - Fallback to order_created_date + 3 days
+ * - Fallback to today + 7 days (default settlement window)
  */
 function parseEstimatedSettleTime(
   estimatedSettleValue: string,
   orderCreatedDate: Date | null,
   orderDeliverDate: Date | null
-): Date | null {
+): Date {
   // Try parsing as direct date first
   const directDate = parseDate(estimatedSettleValue);
   if (directDate) {
@@ -126,17 +126,24 @@ function parseEstimatedSettleTime(
         estimated.setDate(estimated.getDate() + daysToAdd);
         return estimated;
       }
+      // Fallback: today + N days if no base date
+      const fallback = new Date();
+      fallback.setDate(fallback.getDate() + daysToAdd);
+      return fallback;
     }
   }
 
-  // Fallback: order_created_date + 3 days
+  // Fallback 1: order_created_date + 7 days
   if (orderCreatedDate) {
-    const fallback = new Date(orderCreatedDate);
-    fallback.setDate(fallback.getDate() + 3);
-    return fallback;
+    const estimated = new Date(orderCreatedDate);
+    estimated.setDate(estimated.getDate() + 7);
+    return estimated;
   }
 
-  return null;
+  // Fallback 2 (last resort): today + 7 days (TikTok default settlement window)
+  const lastResort = new Date();
+  lastResort.setDate(lastResort.getDate() + 7);
+  return lastResort;
 }
 
 /**
