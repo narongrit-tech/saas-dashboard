@@ -154,12 +154,13 @@ $$;
 -- ============================================
 
 -- Marketplace + date indexes (for filtering without created_by)
+-- Note: Use CAST() syntax for expression indexes
 CREATE INDEX IF NOT EXISTS idx_settlement_transactions_marketplace_date
-ON settlement_transactions(marketplace, (settled_time AT TIME ZONE 'Asia/Bangkok')::date)
+ON settlement_transactions(marketplace, CAST((settled_time AT TIME ZONE 'Asia/Bangkok') AS date))
 WHERE settled_time IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_unsettled_transactions_marketplace_date
-ON unsettled_transactions(marketplace, (estimated_settle_time AT TIME ZONE 'Asia/Bangkok')::date)
+ON unsettled_transactions(marketplace, CAST((estimated_settle_time AT TIME ZONE 'Asia/Bangkok') AS date))
 WHERE estimated_settle_time IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_cashflow_daily_summary_date
