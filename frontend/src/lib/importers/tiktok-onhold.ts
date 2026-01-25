@@ -19,6 +19,8 @@ const COLUMN_MAPPINGS: Record<string, string[]> = {
   ],
   unsettled_reason: ['unsettled reason', 'reason'],
   currency: ['currency'],
+  order_created_date: ['order created time', 'created time', 'order create time'],
+  order_deliver_date: ['order delivered time', 'delivered time', 'deliver time'],
 };
 
 export interface NormalizedOnholdRow {
@@ -90,6 +92,48 @@ function parseDate(value: unknown): Date | null {
     if (!isNaN(date.getTime())) {
       return fromZonedTime(toZonedTime(date, BANGKOK_TZ), BANGKOK_TZ);
     }
+  }
+
+  return null;
+}
+
+/**
+ * Parse estimated settle time with fallback logic
+ * Handles:
+ * - Direct dates (Excel number or string)
+ * - "Delivered + N days" format
+ * - Fallback to order_created_date + 3 days
+ */
+function parseEstimatedSettleTime(
+  estimatedSettleValue: string,
+  orderCreatedDate: Date | null,
+  orderDeliverDate: Date | null
+): Date | null {
+  // Try parsing as direct date first
+  const directDate = parseDate(estimatedSettleValue);
+  if (directDate) {
+    return directDate;
+  }
+
+  // Try parsing "Delivered + N days" format
+  if (typeof estimatedSettleValue === 'string' && estimatedSettleValue.toLowerCase().includes('delivered')) {
+    const match = estimatedSettleValue.match(/delivered\s*\+\s*(\d+)\s*days?/i);
+    if (match) {
+      const daysToAdd = parseInt(match[1], 10);
+      const baseDate = orderDeliverDate || orderCreatedDate;
+      if (baseDate) {
+        const estimated = new Date(baseDate);
+        estimated.setDate(estimated.getDate() + daysToAdd);
+        return estimated;
+      }
+    }
+  }
+
+  // Fallback: order_created_date + 3 days
+  if (orderCreatedDate) {
+    const fallback = new Date(orderCreatedDate);
+    fallback.setDate(fallback.getDate() + 3);
+    return fallback;
   }
 
   return null;
@@ -234,6 +278,8 @@ export function parseOnholdExcel(buffer: Buffer): {
     estimated_settlement_amount: findColumn(headers, COLUMN_MAPPINGS.estimated_settlement_amount),
     unsettled_reason: findColumn(headers, COLUMN_MAPPINGS.unsettled_reason),
     currency: findColumn(headers, COLUMN_MAPPINGS.currency),
+    order_created_date: findColumn(headers, COLUMN_MAPPINGS.order_created_date),
+    order_deliver_date: findColumn(headers, COLUMN_MAPPINGS.order_deliver_date),
   };
 
   // Validate required columns
@@ -246,12 +292,37 @@ export function parseOnholdExcel(buffer: Buffer): {
 
   // Parse data rows (from header+1 to endRow)
   const rows: NormalizedOnholdRow[] = [];
+  let nullEstimatedCount = 0;
+
   for (let r = headerRowIndex + 1; r <= endRow; r++) {
     const txnIdStr = getCellValue(worksheet, r, columnIndexes.txn_id);
 
     // Skip empty rows (but don't break - continue to next row)
     if (!txnIdStr || txnIdStr === '') {
       continue;
+    }
+
+    // Parse date fields for fallback logic
+    const orderCreatedDate =
+      columnIndexes.order_created_date !== -1
+        ? parseDate(getCellValue(worksheet, r, columnIndexes.order_created_date))
+        : null;
+
+    const orderDeliverDate =
+      columnIndexes.order_deliver_date !== -1
+        ? parseDate(getCellValue(worksheet, r, columnIndexes.order_deliver_date))
+        : null;
+
+    // Parse estimated_settle_time with fallback
+    const estimatedSettleValue = getCellValue(worksheet, r, columnIndexes.estimated_settle_time);
+    const estimatedSettleTime = parseEstimatedSettleTime(
+      estimatedSettleValue,
+      orderCreatedDate,
+      orderDeliverDate
+    );
+
+    if (!estimatedSettleTime) {
+      nullEstimatedCount++;
     }
 
     const normalizedRow: NormalizedOnholdRow = {
@@ -268,10 +339,7 @@ export function parseOnholdExcel(buffer: Buffer): {
         columnIndexes.currency !== -1
           ? getCellValue(worksheet, r, columnIndexes.currency).toUpperCase() || 'THB'
           : 'THB',
-      estimated_settle_time:
-        columnIndexes.estimated_settle_time !== -1
-          ? parseDate(getCellValue(worksheet, r, columnIndexes.estimated_settle_time))
-          : null,
+      estimated_settle_time: estimatedSettleTime,
       estimated_settlement_amount:
         columnIndexes.estimated_settlement_amount !== -1
           ? parseNumeric(getCellValue(worksheet, r, columnIndexes.estimated_settlement_amount))
@@ -287,8 +355,13 @@ export function parseOnholdExcel(buffer: Buffer): {
 
   console.log(`[Onhold Parser] ========== PARSE COMPLETE ==========`);
   console.log(`[Onhold Parser] Total rows parsed: ${rows.length}`);
+  console.log(`[Onhold Parser] estimated_settle_time NULL count: ${nullEstimatedCount} (${((nullEstimatedCount / rows.length) * 100).toFixed(1)}%)`);
   console.log(`[Onhold Parser] First 3 IDs:`, rows.slice(0, 3).map(r => r.txn_id));
   console.log(`[Onhold Parser] Last 3 IDs:`, rows.slice(-3).map(r => r.txn_id));
+  console.log(
+    `[Onhold Parser] First 3 estimated_settle_time:`,
+    rows.slice(0, 3).map((r) => r.estimated_settle_time?.toISOString() || 'NULL')
+  );
 
   return { rows, warnings };
 }

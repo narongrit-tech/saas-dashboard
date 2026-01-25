@@ -28,6 +28,15 @@ WHERE estimated_settle_time IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_unsettled_transactions_status
 ON unsettled_transactions(status);
 
+-- Composite indexes for cashflow queries (with marketplace filter)
+CREATE INDEX IF NOT EXISTS idx_settlement_transactions_user_marketplace_time
+ON settlement_transactions(created_by, marketplace, settled_time)
+WHERE settled_time IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_unsettled_transactions_user_marketplace_time
+ON unsettled_transactions(created_by, marketplace, estimated_settle_time)
+WHERE estimated_settle_time IS NOT NULL;
+
 -- ============================================
 -- B) PRE-AGGREGATED DAILY SUMMARY TABLE
 -- ============================================
@@ -146,32 +155,36 @@ BEGIN
     generate_series(p_start_date, p_end_date, '1 day'::interval) AS date_gen
   LEFT JOIN (
     SELECT
-      DATE(estimated_settle_time) AS date,
+      (estimated_settle_time AT TIME ZONE 'Asia/Bangkok')::date AS date,
       SUM(estimated_settlement_amount) AS forecast_sum,
       COUNT(*) AS forecast_count
     FROM unsettled_transactions
     WHERE created_by = p_user_id
       AND estimated_settle_time IS NOT NULL
-      AND DATE(estimated_settle_time) >= p_start_date
-      AND DATE(estimated_settle_time) <= p_end_date
+      AND (estimated_settle_time AT TIME ZONE 'Asia/Bangkok')::date >= p_start_date
+      AND (estimated_settle_time AT TIME ZONE 'Asia/Bangkok')::date <= p_end_date
       AND status = 'unsettled'
-    GROUP BY DATE(estimated_settle_time)
+    GROUP BY (estimated_settle_time AT TIME ZONE 'Asia/Bangkok')::date
   ) f ON f.date = date_gen::date
   LEFT JOIN (
     SELECT
-      DATE(settled_time) AS date,
+      (settled_time AT TIME ZONE 'Asia/Bangkok')::date AS date,
       SUM(settlement_amount) AS actual_sum,
       COUNT(*) AS actual_count
     FROM settlement_transactions
     WHERE created_by = p_user_id
       AND settled_time IS NOT NULL
-      AND DATE(settled_time) >= p_start_date
-      AND DATE(settled_time) <= p_end_date
-    GROUP BY DATE(settled_time)
+      AND (settled_time AT TIME ZONE 'Asia/Bangkok')::date >= p_start_date
+      AND (settled_time AT TIME ZONE 'Asia/Bangkok')::date <= p_end_date
+    GROUP BY (settled_time AT TIME ZONE 'Asia/Bangkok')::date
   ) a ON a.date = date_gen::date
   WHERE f.forecast_sum IS NOT NULL OR a.actual_sum IS NOT NULL;
 
   GET DIAGNOSTICS v_rows_affected = ROW_COUNT;
+
+  -- Log rebuild success
+  RAISE NOTICE '[Cashflow] Summary rebuilt: start=%, end=%, rows=%', p_start_date, p_end_date, v_rows_affected;
+
   RETURN v_rows_affected;
 END;
 $$;
