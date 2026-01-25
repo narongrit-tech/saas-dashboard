@@ -19,6 +19,8 @@ import {
   getOverdueForecast,
   getSettledWithoutForecast,
   getNext7DaysForecast,
+  getDailyReconciliation,
+  type DailyReconciliationRow,
 } from './actions';
 
 function formatCurrency(amount: number): string {
@@ -91,7 +93,10 @@ interface ForecastDay {
   transaction_count: number;
 }
 
+type ViewMode = 'summary' | 'daily'
+
 export default function CashflowPage() {
+  const [viewMode, setViewMode] = useState<ViewMode>('summary');
   const [dateRange, setDateRange] = useState<DateRangeResult | null>(null);
   const [unsettledSummary, setUnsettledSummary] = useState<UnsettledSummary | null>(null);
   const [settledSummary, setSettledSummary] = useState<SettledSummary | null>(null);
@@ -100,6 +105,7 @@ export default function CashflowPage() {
   const [overdueTransactions, setOverdueTransactions] = useState<UnsettledTransaction[]>([]);
   const [settledWithoutForecast, setSettledWithoutForecast] = useState<SettledTransaction[]>([]);
   const [forecast, setForecast] = useState<ForecastDay[]>([]);
+  const [dailyReconciliation, setDailyReconciliation] = useState<DailyReconciliationRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [importOnholdDialogOpen, setImportOnholdDialogOpen] = useState(false);
@@ -109,7 +115,7 @@ export default function CashflowPage() {
     if (dateRange) {
       fetchData();
     }
-  }, [dateRange]);
+  }, [dateRange, viewMode]);
 
   useEffect(() => {
     fetchNext7DaysForecast();
@@ -123,37 +129,49 @@ export default function CashflowPage() {
       setLoading(true);
       setError(null);
 
-      const [
-        unsettledSummaryResult,
-        settledSummaryResult,
-        unsettledTxnsResult,
-        settledTxnsResult,
-        settledWithoutForecastResult,
-      ] = await Promise.all([
-        getUnsettledSummary(dateRange.startDate, dateRange.endDate),
-        getSettledSummary(dateRange.startDate, dateRange.endDate),
-        getUnsettledTransactions(dateRange.startDate, dateRange.endDate),
-        getSettledTransactions(dateRange.startDate, dateRange.endDate),
-        getSettledWithoutForecast(dateRange.startDate, dateRange.endDate),
-      ]);
+      if (viewMode === 'summary') {
+        const [
+          unsettledSummaryResult,
+          settledSummaryResult,
+          unsettledTxnsResult,
+          settledTxnsResult,
+          settledWithoutForecastResult,
+        ] = await Promise.all([
+          getUnsettledSummary(dateRange.startDate, dateRange.endDate),
+          getSettledSummary(dateRange.startDate, dateRange.endDate),
+          getUnsettledTransactions(dateRange.startDate, dateRange.endDate),
+          getSettledTransactions(dateRange.startDate, dateRange.endDate),
+          getSettledWithoutForecast(dateRange.startDate, dateRange.endDate),
+        ]);
 
-      if (!unsettledSummaryResult.success) {
-        setError(unsettledSummaryResult.error || 'ไม่สามารถโหลดข้อมูล Forecast ได้');
-        return;
+        if (!unsettledSummaryResult.success) {
+          setError(unsettledSummaryResult.error || 'ไม่สามารถโหลดข้อมูล Forecast ได้');
+          return;
+        }
+
+        if (!settledSummaryResult.success) {
+          setError(settledSummaryResult.error || 'ไม่สามารถโหลดข้อมูล Settled ได้');
+          return;
+        }
+
+        setUnsettledSummary(
+          unsettledSummaryResult.data || { pending_amount: 0, transaction_count: 0 }
+        );
+        setSettledSummary(settledSummaryResult.data || { settled_amount: 0, transaction_count: 0 });
+        setUnsettledTransactions(unsettledTxnsResult.data || []);
+        setSettledTransactions(settledTxnsResult.data || []);
+        setSettledWithoutForecast(settledWithoutForecastResult.data || []);
+      } else {
+        // Daily view
+        const dailyResult = await getDailyReconciliation(dateRange.startDate, dateRange.endDate);
+
+        if (!dailyResult.success) {
+          setError(dailyResult.error || 'ไม่สามารถโหลดข้อมูล Daily Reconciliation ได้');
+          return;
+        }
+
+        setDailyReconciliation(dailyResult.data || []);
       }
-
-      if (!settledSummaryResult.success) {
-        setError(settledSummaryResult.error || 'ไม่สามารถโหลดข้อมูล Settled ได้');
-        return;
-      }
-
-      setUnsettledSummary(
-        unsettledSummaryResult.data || { pending_amount: 0, transaction_count: 0 }
-      );
-      setSettledSummary(settledSummaryResult.data || { settled_amount: 0, transaction_count: 0 });
-      setUnsettledTransactions(unsettledTxnsResult.data || []);
-      setSettledTransactions(settledTxnsResult.data || []);
-      setSettledWithoutForecast(settledWithoutForecastResult.data || []);
     } catch (err) {
       console.error('Error fetching cashflow data:', err);
       setError('เกิดข้อผิดพลาดในการโหลดข้อมูล');
@@ -220,8 +238,26 @@ export default function CashflowPage() {
         </div>
       </div>
 
-      {/* Date Range Filter */}
-      <DateRangeFilter defaultPreset="last7days" onChange={setDateRange} />
+      {/* Date Range Filter + View Mode Toggle */}
+      <div className="flex items-center gap-4">
+        <DateRangeFilter defaultPreset="last7days" onChange={setDateRange} />
+        <div className="flex items-center gap-2 ml-auto">
+          <Button
+            variant={viewMode === 'summary' ? 'default' : 'outline'}
+            onClick={() => setViewMode('summary')}
+            size="sm"
+          >
+            Summary
+          </Button>
+          <Button
+            variant={viewMode === 'daily' ? 'default' : 'outline'}
+            onClick={() => setViewMode('daily')}
+            size="sm"
+          >
+            Daily
+          </Button>
+        </div>
+      </div>
 
       {/* Next 7 Days Forecast (Always visible) */}
       {forecast.length > 0 && (
@@ -276,8 +312,8 @@ export default function CashflowPage() {
         </div>
       )}
 
-      {/* Summary Cards: Forecast vs Actual */}
-      {!loading && unsettledSummary && settledSummary && dateRange && (
+      {/* Summary Cards: Forecast vs Actual (Summary View Only) */}
+      {!loading && viewMode === 'summary' && unsettledSummary && settledSummary && dateRange && (
         <div className="grid gap-4 md:grid-cols-3">
           {/* Forecast (Pending to Settle) */}
           <Card>
@@ -345,8 +381,87 @@ export default function CashflowPage() {
         </div>
       )}
 
-      {/* Tabs: Forecast, Actual, Exceptions */}
-      {!loading && dateRange && (
+      {/* Daily Reconciliation View */}
+      {!loading && viewMode === 'daily' && dateRange && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Daily Reconciliation (Forecast vs Actual)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {dailyReconciliation.length === 0 ? (
+              <p className="text-center text-muted-foreground py-8">
+                ไม่พบข้อมูลในช่วงเวลาที่เลือก
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="border-b bg-muted/50">
+                    <tr className="text-left">
+                      <th className="py-3 px-4 font-medium">Date</th>
+                      <th className="py-3 px-4 font-medium text-right">Forecast Amount</th>
+                      <th className="py-3 px-4 font-medium text-center">Count</th>
+                      <th className="py-3 px-4 font-medium text-right">Actual Amount</th>
+                      <th className="py-3 px-4 font-medium text-center">Count</th>
+                      <th className="py-3 px-4 font-medium text-right">Gap</th>
+                      <th className="py-3 px-4 font-medium">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dailyReconciliation.map((row) => (
+                      <tr key={row.date} className="border-b hover:bg-muted/30">
+                        <td className="py-3 px-4 font-medium">{formatDate(row.date)}</td>
+                        <td className="py-3 px-4 text-right font-mono text-yellow-600">
+                          {row.forecast_amount > 0 ? `฿${formatCurrency(row.forecast_amount)}` : '-'}
+                        </td>
+                        <td className="py-3 px-4 text-center text-muted-foreground">
+                          {row.forecast_count > 0 ? row.forecast_count : '-'}
+                        </td>
+                        <td className="py-3 px-4 text-right font-mono text-green-600">
+                          {row.actual_amount > 0 ? `฿${formatCurrency(row.actual_amount)}` : '-'}
+                        </td>
+                        <td className="py-3 px-4 text-center text-muted-foreground">
+                          {row.actual_count > 0 ? row.actual_count : '-'}
+                        </td>
+                        <td
+                          className={`py-3 px-4 text-right font-mono font-semibold ${
+                            row.gap > 0
+                              ? 'text-green-600'
+                              : row.gap < 0
+                              ? 'text-red-600'
+                              : 'text-muted-foreground'
+                          }`}
+                        >
+                          {row.gap !== 0 ? `฿${formatCurrency(Math.abs(row.gap))}` : '-'}
+                          {row.gap > 0 && ' ↑'}
+                          {row.gap < 0 && ' ↓'}
+                        </td>
+                        <td className="py-3 px-4">
+                          <span
+                            className={`px-2 py-1 rounded-full text-xs ${
+                              row.status === 'matched'
+                                ? 'bg-green-100 text-green-700'
+                                : row.status === 'overdue'
+                                ? 'bg-red-100 text-red-700'
+                                : row.status === 'forecast-only'
+                                ? 'bg-yellow-100 text-yellow-700'
+                                : 'bg-orange-100 text-orange-700'
+                            }`}
+                          >
+                            {row.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Tabs: Forecast, Actual, Exceptions (Summary View Only) */}
+      {!loading && viewMode === 'summary' && dateRange && (
         <Tabs defaultValue="forecast" className="w-full">
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="forecast">

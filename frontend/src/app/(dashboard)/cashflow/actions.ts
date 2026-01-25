@@ -377,3 +377,134 @@ export async function getSettledWithoutForecast(startDate: Date, endDate: Date) 
     return { success: false, error: 'Internal server error' }
   }
 }
+
+/**
+ * Daily Reconciliation Data (Forecast vs Actual)
+ */
+export interface DailyReconciliationRow {
+  date: string
+  forecast_amount: number
+  forecast_count: number
+  actual_amount: number
+  actual_count: number
+  gap: number
+  status: 'forecast-only' | 'actual-only' | 'matched' | 'overdue'
+}
+
+/**
+ * Get Daily Reconciliation (grouped by date)
+ * For debugging and reconciliation with TikTok daily reports
+ */
+export async function getDailyReconciliation(startDate: Date, endDate: Date) {
+  try {
+    const supabase = await createClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) {
+      return { success: false, error: 'Unauthorized' }
+    }
+
+    const now = getBangkokNow()
+
+    // Fetch unsettled transactions (forecast)
+    const { data: unsettledData, error: unsettledError } = await supabase
+      .from('unsettled_transactions')
+      .select('estimated_settle_time, estimated_settlement_amount')
+      .eq('created_by', user.id)
+      .eq('status', 'unsettled')
+      .gte('estimated_settle_time', startDate.toISOString())
+      .lte('estimated_settle_time', endDate.toISOString())
+
+    if (unsettledError) {
+      console.error('Error fetching unsettled for daily reconciliation:', unsettledError)
+      return { success: false, error: unsettledError.message }
+    }
+
+    // Fetch settled transactions (actual)
+    const { data: settledData, error: settledError } = await supabase
+      .from('settlement_transactions')
+      .select('settled_time, settlement_amount')
+      .eq('created_by', user.id)
+      .gte('settled_time', startDate.toISOString())
+      .lte('settled_time', endDate.toISOString())
+
+    if (settledError) {
+      console.error('Error fetching settled for daily reconciliation:', settledError)
+      return { success: false, error: settledError.message }
+    }
+
+    // Group unsettled by date (forecast)
+    const forecastByDate = new Map<string, { amount: number; count: number }>()
+    unsettledData?.forEach((txn) => {
+      if (!txn.estimated_settle_time) return
+
+      const bangkokDate = toBangkokTime(txn.estimated_settle_time)
+      const date = formatBangkok(bangkokDate, 'yyyy-MM-dd')
+      const existing = forecastByDate.get(date) || { amount: 0, count: 0 }
+      forecastByDate.set(date, {
+        amount: existing.amount + (txn.estimated_settlement_amount || 0),
+        count: existing.count + 1,
+      })
+    })
+
+    // Group settled by date (actual)
+    const actualByDate = new Map<string, { amount: number; count: number }>()
+    settledData?.forEach((txn) => {
+      if (!txn.settled_time) return
+
+      const bangkokDate = toBangkokTime(txn.settled_time)
+      const date = formatBangkok(bangkokDate, 'yyyy-MM-dd')
+      const existing = actualByDate.get(date) || { amount: 0, count: 0 }
+      actualByDate.set(date, {
+        amount: existing.amount + (txn.settlement_amount || 0),
+        count: existing.count + 1,
+      })
+    })
+
+    // Merge both maps to create daily reconciliation
+    const allDates = new Set([...forecastByDate.keys(), ...actualByDate.keys()])
+    const dailyData: DailyReconciliationRow[] = []
+
+    allDates.forEach((date) => {
+      const forecast = forecastByDate.get(date) || { amount: 0, count: 0 }
+      const actual = actualByDate.get(date) || { amount: 0, count: 0 }
+      const gap = actual.amount - forecast.amount
+
+      // Determine status
+      let status: DailyReconciliationRow['status']
+      const dateObj = toBangkokTime(date)
+      const isOverdue = dateObj < now
+
+      if (forecast.count > 0 && actual.count === 0) {
+        status = isOverdue ? 'overdue' : 'forecast-only'
+      } else if (forecast.count === 0 && actual.count > 0) {
+        status = 'actual-only'
+      } else {
+        status = 'matched'
+      }
+
+      dailyData.push({
+        date,
+        forecast_amount: forecast.amount,
+        forecast_count: forecast.count,
+        actual_amount: actual.amount,
+        actual_count: actual.count,
+        gap,
+        status,
+      })
+    })
+
+    // Sort by date descending (newest first)
+    dailyData.sort((a, b) => b.date.localeCompare(a.date))
+
+    return {
+      success: true,
+      data: dailyData,
+    }
+  } catch (err) {
+    console.error('Error in getDailyReconciliation:', err)
+    return { success: false, error: 'Internal server error' }
+  }
+}
