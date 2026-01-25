@@ -77,9 +77,18 @@ export function DateRangeFilter({
     }
   };
 
+  const handleCustomDateChange = (start?: Date, end?: Date) => {
+    // Auto-switch to custom preset when dates are picked
+    if (start || end) {
+      setPreset('custom');
+    }
+    if (start) setCustomStartDate(start);
+    if (end) setCustomEndDate(end);
+  };
+
   return (
     <div className={cn('space-y-3', className)}>
-      <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+      <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center">
         <Select value={preset} onValueChange={handlePresetChange}>
           <SelectTrigger className="w-full sm:w-[200px]">
             <SelectValue />
@@ -93,60 +102,71 @@ export function DateRangeFilter({
           </SelectContent>
         </Select>
 
-        {preset === 'custom' && (
-          <div className="flex gap-2 items-center">
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button
-                  variant="outline"
-                  className={cn(
-                    'w-[160px] justify-start text-left font-normal',
-                    !customStartDate && 'text-muted-foreground'
-                  )}
-                >
-                  <CalendarIcon className="mr-2 h-4 w-4" />
-                  {customStartDate ? format(customStartDate, 'dd/MM/yyyy') : 'วันเริ่มต้น'}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0">
-                <Calendar
-                  mode="single"
-                  selected={customStartDate}
-                  onSelect={setCustomStartDate}
-                  initialFocus
-                />
-              </PopoverContent>
-            </Popover>
+        {/* Always show date pickers for easy access */}
+        <div className="flex gap-2 items-center">
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                className={cn(
+                  'w-[160px] justify-start text-left font-normal',
+                  !customStartDate && preset !== 'custom' && 'text-muted-foreground'
+                )}
+              >
+                <CalendarIcon className="mr-2 h-4 w-4" />
+                {customStartDate
+                  ? format(customStartDate, 'dd/MM/yyyy')
+                  : preset !== 'custom'
+                  ? format(currentRange.startDate, 'dd/MM/yyyy')
+                  : 'วันเริ่มต้น'}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+              <Calendar
+                mode="single"
+                selected={customStartDate || currentRange.startDate}
+                onSelect={(date) => handleCustomDateChange(date, customEndDate)}
+                initialFocus
+              />
+            </PopoverContent>
+          </Popover>
 
-            <span className="text-muted-foreground">ถึง</span>
+          <span className="text-muted-foreground">ถึง</span>
 
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button
-                  variant="outline"
-                  className={cn(
-                    'w-[160px] justify-start text-left font-normal',
-                    !customEndDate && 'text-muted-foreground'
-                  )}
-                >
-                  <CalendarIcon className="mr-2 h-4 w-4" />
-                  {customEndDate ? format(customEndDate, 'dd/MM/yyyy') : 'วันสิ้นสุด'}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0">
-                <Calendar
-                  mode="single"
-                  selected={customEndDate}
-                  onSelect={setCustomEndDate}
-                  initialFocus
-                  disabled={(date) =>
-                    customStartDate ? date < customStartDate : false
-                  }
-                />
-              </PopoverContent>
-            </Popover>
-          </div>
-        )}
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                className={cn(
+                  'w-[160px] justify-start text-left font-normal',
+                  !customEndDate && preset !== 'custom' && 'text-muted-foreground'
+                )}
+              >
+                <CalendarIcon className="mr-2 h-4 w-4" />
+                {customEndDate
+                  ? format(customEndDate, 'dd/MM/yyyy')
+                  : preset !== 'custom'
+                  ? format(currentRange.endDate, 'dd/MM/yyyy')
+                  : 'วันสิ้นสุด'}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+              <Calendar
+                mode="single"
+                selected={customEndDate || currentRange.endDate}
+                onSelect={(date) => handleCustomDateChange(customStartDate, date)}
+                initialFocus
+                disabled={(date) =>
+                  customStartDate
+                    ? date < customStartDate
+                    : preset !== 'custom'
+                    ? date < currentRange.startDate
+                    : false
+                }
+              />
+            </PopoverContent>
+          </Popover>
+        </div>
 
         <div className="text-sm text-muted-foreground ml-auto">
           {formatDateRange(currentRange.startDate, currentRange.endDate)}
