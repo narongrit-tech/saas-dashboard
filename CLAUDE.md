@@ -175,22 +175,105 @@ Later: CSV import, inventory, payables, reports, tax, APIs
 - Operating = Expenses where category = 'Operating'
 - Net Profit = Revenue - Advertising - COGS - Operating
 
-### Cashflow View (COMPLETE - MVP Core Feature)
-- ✅ Daily cashflow calculation (cash in/out)
-- ✅ Date range view with running balance
-- ✅ Shows actual money movement (not accounting profit)
-- ✅ Thai formatting
+### Cashflow View (COMPLETE - MVP Core Feature + Phase 2B Optimization)
+- ✅ TikTok Onhold (Forecast) + Income (Actual) Import
+- ✅ Daily forecast vs actual reconciliation
+- ✅ UX v3: Daily Summary First (< 300ms page load)
+- ✅ Timezone-aware bucketing (Asia/Bangkok)
+- ✅ Pre-aggregated daily summary table
+- ✅ Bulk reconciliation (3 queries, not 401)
+- ✅ 0% NULL estimated_settle_time
 
 **Location:**
-- Utilities: `frontend/src/lib/cashflow.ts`
 - Page: `frontend/src/app/(dashboard)/cashflow/page.tsx`
-- Actions: `frontend/src/app/(dashboard)/cashflow/actions.ts`
+- API Actions: `frontend/src/app/(dashboard)/cashflow/cashflow-api-actions.ts`
+- Legacy Actions: `frontend/src/app/(dashboard)/cashflow/actions.ts`
+- TikTok Onhold Parser: `frontend/src/lib/importers/tiktok-onhold.ts`
+- TikTok Income Parser: `frontend/src/lib/importers/tiktok-income.ts`
+- Reconciliation: `frontend/src/lib/reconcile/settlement-reconcile.ts`
+- Types: `frontend/src/types/cashflow-api.ts`
+- Components:
+  - `frontend/src/components/cashflow/ImportOnholdDialog.tsx`
+  - `frontend/src/components/cashflow/ImportIncomeDialog.tsx`
+  - `frontend/src/components/shared/SingleDateRangePicker.tsx`
+- Database:
+  - Migration: `database-scripts/migration-010-cashflow-performance.sql`
+  - Verification: `database-scripts/verify-cashflow-timezone-fix.sql`
 
 **Business Logic:**
-- Cash In = Completed sales ONLY (actual money received)
-- Cash Out = All expenses (actual money spent)
-- Net Change = Cash In - Cash Out
-- Running Balance = Cumulative sum (simple version, no bank API)
+- **Forecast**: unsettled_transactions (TikTok Onhold import)
+- **Actual**: settlement_transactions (TikTok Income import)
+- **Daily Summary**: Pre-aggregated in `cashflow_daily_summary` table
+- **Reconciliation**: Match txn_id between forecast and actual, mark as 'settled'
+
+**UX v3 Features (Phase 2B - Performance First):**
+
+**Primary View - Daily Summary (Always Loaded):**
+- Data source: `cashflow_daily_summary` table ONLY (no raw table joins)
+- Columns: Date, Forecast, Actual, Gap, Status
+- Status badges: actual_over (green), pending (yellow), actual_only (blue), forecast_only (gray)
+- Pagination: 14 rows per page, sorted by date ASC
+- Load time: < 300ms (local)
+
+**Secondary View - Raw Transactions (Lazy Loaded):**
+- Tabs: Forecast / Actual / Overdue / Exceptions
+- Data fetched ONLY when tab clicked (no initial load)
+- Server-side pagination: 50 rows per page
+
+**Date Range Picker:**
+- Single button: "DD MMM YYYY – DD MMM YYYY"
+- Opens 2-month calendar in one popover
+- Presets: Today, Last 7 Days, Last 30 Days, MTD, Last Month
+- Auto-apply on range selection
+- Debounced: 300ms delay before query
+
+**Performance Optimizations:**
+1. **Pre-aggregated Table**: `cashflow_daily_summary`
+   - Daily forecast_sum, actual_sum, gap_sum, status counts
+   - Rebuilt via `rebuild_cashflow_daily_summary()` function
+   - Indexed: (created_by, date)
+
+2. **Timezone-Aware Bucketing**:
+   - Uses `(settled_time AT TIME ZONE 'Asia/Bangkok')::date`
+   - Fixes: UTC 17:00 on 2026-01-24 → Thai date 2026-01-25 (correct)
+   - Applied to both forecast and actual data
+
+3. **Bulk Reconciliation**:
+   - Before: N+1 queries (401 queries for 200 rows, 196 seconds)
+   - After: 3 queries (< 3 seconds, 65x faster)
+   - Fetch all → match in-memory → bulk update
+
+4. **TikTok Onhold Parser Fix**:
+   - Handles "Delivered + N days" format
+   - Fallback chain: Direct date → "Delivered + N" → order_created + 7 → today + 7
+   - Always returns Date (never null)
+   - Target achieved: 0% NULL estimated_settle_time
+
+**Import Features:**
+- **Onhold Import**: TikTok forecast data (xlsx)
+  - Columns: Transaction ID, Amount, Expected Settlement Time
+  - Handles "Delivered + N days" strings
+  - Manual worksheet range scanning (bypass !ref truncation)
+  - In-file deduplication by txn_id
+  - Bulk upsert: 3 queries (not 1400+)
+
+- **Income Import**: TikTok actual settlement data (xlsx)
+  - Columns: Transaction ID, Settlement Amount, Settled Time
+  - Auto-reconciliation with forecast data
+  - Marks matched forecast as 'settled'
+  - Bulk operations: 3 queries for reconciliation
+  - Import time: < 3 seconds (was 196 seconds)
+
+**Database Schema:**
+- `unsettled_transactions`: Forecast data (txn_id, estimated_settle_time, status)
+- `settlement_transactions`: Actual data (txn_id, settled_time, settlement_amount)
+- `cashflow_daily_summary`: Pre-aggregated daily data (date, forecast_sum, actual_sum, gap_sum, status counts)
+- `import_batches`: Import tracking with file_hash deduplication
+
+**Indexes:**
+- `idx_settlement_transactions_user_marketplace_time`: Composite index for date range queries
+- `idx_unsettled_transactions_user_marketplace_time`: Composite index for forecast queries
+- `idx_cashflow_daily_summary_user_date`: Fast daily summary lookup
 
 ### Multi-Wallet System (COMPLETE - Phase 3)
 - ✅ 2 wallets: TikTok Ads, Foreign Subscriptions
@@ -606,9 +689,41 @@ These files contain critical business logic. Changes require careful review:
     - Reuses existing import logic (no duplication)
     - DO NOT MODIFY without understanding preset system
 
+11. **`frontend/src/lib/importers/tiktok-onhold.ts`** ⭐ CORE
+    - **TikTok Onhold (Forecast) parser with timezone handling**
+    - Manual worksheet range scanning (bypasses !ref truncation)
+    - Handles "Delivered + N days" format with fallback chain
+    - Always returns Date (never null) - TARGET: 0% NULL estimated_settle_time
+    - In-file deduplication by txn_id
+    - Bulk upsert: 3 queries (not 1400+)
+    - DO NOT MODIFY without understanding Excel parsing edge cases
+
+12. **`frontend/src/lib/importers/tiktok-income.ts`** ⭐ CORE
+    - **TikTok Income (Actual) parser**
+    - Settlement transactions import
+    - Links to reconciliation logic
+    - Bulk upsert optimization
+    - DO NOT MODIFY without understanding reconciliation flow
+
+13. **`frontend/src/lib/reconcile/settlement-reconcile.ts`** ⭐ CORE
+    - **Bulk reconciliation engine (3 queries, not 401)**
+    - Matches settlement with unsettled by txn_id
+    - In-memory Map lookup for fast matching
+    - Marks matched forecast as 'settled'
+    - Critical for cashflow accuracy
+    - DO NOT MODIFY without understanding performance implications
+
+14. **`frontend/src/app/(dashboard)/cashflow/cashflow-api-actions.ts`** ⭐ CORE
+    - **Cashflow API actions using pre-aggregated table**
+    - Queries `cashflow_daily_summary` ONLY (no raw table joins)
+    - Daily summary with pagination
+    - Transaction fetching (lazy loaded)
+    - DO NOT MODIFY without understanding performance requirements
+
 ### Database Schema Files
-- Supabase migrations (especially `migration-005-wallets.sql`, `migration-006-column-mappings.sql`)
-- RLS policies (wallet access control, preset access control)
+- Supabase migrations (especially `migration-005-wallets.sql`, `migration-006-column-mappings.sql`, `migration-010-cashflow-performance.sql`)
+- RLS policies (wallet access control, preset access control, cashflow summary access)
+- Database functions: `rebuild_cashflow_daily_summary(user_id, start_date, end_date)`
 
 ### What CAN be modified safely:
 - UI components (pages, dialogs, cards)
@@ -649,17 +764,49 @@ These files contain critical business logic. Changes require careful review:
 
 ---
 
-### 🟢 LOW PRIORITY - Performance
+### 🟢 RESOLVED - Cashflow Performance
+**Status:** ✅ FIXED (Phase 2B - 2026-01-25)
+- Pre-aggregated daily summary table (`cashflow_daily_summary`)
+- Bulk reconciliation (3 queries instead of 401)
+- Timezone-aware composite indexes
+- Page load: < 300ms (was slow on large datasets)
+- Import reconciliation: < 3s (was 196s)
+
+**Solution:**
+- Created `cashflow_daily_summary` table with `rebuild_cashflow_daily_summary()` function
+- Optimized reconciliation: fetch all → match in-memory → bulk update
+- Added composite indexes: `idx_settlement_transactions_user_marketplace_time`, `idx_unsettled_transactions_user_marketplace_time`
+- Lazy loading: transactions fetch only on tab click
+
+---
+
+### 🟢 RESOLVED - TikTok Import Issues
+**Status:** ✅ FIXED (Phase 2B - 2026-01-25)
+- estimated_settle_time NULL: 37.2% → 0%
+- Worksheet truncation: Manual range scanning bypasses !ref limit
+- Income import slow: 196s → < 3s (bulk reconciliation)
+- Timezone bucketing: UTC 17:00 → correct Thai date
+
+**Solution:**
+- TikTok Onhold parser: Always returns Date (fallback chain with "Delivered + N days" handling)
+- Bulk upsert: 3 queries instead of 1400+
+- In-file deduplication by txn_id
+- Timezone-aware date casting: `AT TIME ZONE 'Asia/Bangkok'`
+
+---
+
+### 🟢 LOW PRIORITY - Caching Layer
 **Issue:**
-- No query optimization for large datasets
-- No caching layer
+- No Redis or in-memory caching
+- All queries hit database directly
 
 **Impact:**
-- May slow down with thousands of records
+- Acceptable for current scale (< 5 users)
+- Pre-aggregated tables serve as implicit cache
 
 **Status:**
-- Acceptable for MVP (<5 users)
-- Add Redis cache or query optimization later if needed
+- Not needed for MVP
+- Add Redis cache if user base grows beyond 50 users
 
 ---
 
@@ -714,11 +861,19 @@ Read these for context before making changes:
    - Edge case handling strategies
    - Created: Phase 5 (Manual Mapping Wizard)
 
-8. **`CLAUDE.md`** (this file)
+8. **`database-scripts/verify-cashflow-timezone-fix.sql`** ⭐ NEW
+   - SQL verification script for cashflow timezone fixes
+   - Checks: NULL estimated_settle_time count (must be 0%)
+   - Verifies: Timezone bucketing (UTC 17:00 → Thai date correct)
+   - Tests: Daily summary has correct dates
+   - Performance: Index usage verification
+   - Created: Phase 2B (Cashflow Performance Optimization)
+
+9. **`CLAUDE.md`** (this file)
    - Project rules and guidelines
    - Current system state
    - Extension guide
-   - Updated: 2026-01-25 (Phase 6B: Sales Orders UX v2)
+   - Updated: 2026-01-25 (Phase 2B: Cashflow Performance + Import Optimization)
 
 ---
 
