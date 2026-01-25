@@ -27,27 +27,21 @@ DROP POLICY IF EXISTS "Users can update own cashflow summary" ON cashflow_daily_
 -- B) BACKFILL NULL estimated_settle_time
 -- ============================================
 -- Fix rows where estimated_settle_time is NULL
--- Use fallback: order_created_date + 7 days (TikTok standard settlement window)
+-- Use fallback: created_at + 7 days (TikTok standard settlement window)
 
-UPDATE unsettled_transactions
-SET estimated_settle_time = (
-  CASE
-    -- If we have creation date in metadata, use it + 7 days
-    WHEN metadata->>'order_created_date' IS NOT NULL
-      THEN (metadata->>'order_created_date')::timestamptz + interval '7 days'
-    -- Otherwise use import time + 7 days
-    ELSE created_at + interval '7 days'
-  END
-)
-WHERE estimated_settle_time IS NULL
-  AND marketplace = 'tiktok';
-
--- Log result
 DO $$
 DECLARE
   v_updated_count INTEGER;
 BEGIN
+  -- Update NULL rows with fallback: created_at + 7 days
+  UPDATE unsettled_transactions
+  SET estimated_settle_time = created_at + interval '7 days'
+  WHERE estimated_settle_time IS NULL
+    AND marketplace = 'tiktok';
+
   GET DIAGNOSTICS v_updated_count = ROW_COUNT;
+
+  -- Log result
   RAISE NOTICE '[Cashflow] Backfilled % rows with NULL estimated_settle_time', v_updated_count;
 END $$;
 
