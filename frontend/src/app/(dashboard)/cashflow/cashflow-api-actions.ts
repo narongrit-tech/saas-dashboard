@@ -1,0 +1,368 @@
+'use server';
+
+import { createClient } from '@/lib/supabase/server';
+import type {
+  CashflowSummary,
+  TransactionsRequest,
+  TransactionsResponse,
+  RebuildSummaryRequest,
+  RebuildSummaryResponse,
+  DailyAggregate,
+  TransactionRow,
+} from '@/types/cashflow-api';
+
+const IS_DEV = process.env.NODE_ENV === 'development';
+
+/**
+ * Get aggregated cashflow summary (FAST - no raw rows)
+ */
+export async function getCashflowSummary(
+  startDate: Date,
+  endDate: Date
+): Promise<CashflowSummary> {
+  const startTime = Date.now();
+  let dbTime = 0;
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    throw new Error('Unauthorized');
+  }
+
+  // Try to read from pre-aggregated table first
+  const dbStart = Date.now();
+  const { data: dailySummary, error: summaryError } = await supabase
+    .from('cashflow_daily_summary')
+    .select('*')
+    .eq('created_by', user.id)
+    .gte('date', startDate.toISOString().split('T')[0])
+    .lte('date', endDate.toISOString().split('T')[0])
+    .order('date', { ascending: true });
+
+  dbTime += Date.now() - dbStart;
+
+  if (summaryError) {
+    console.error('[Cashflow Summary] Pre-aggregated query failed:', summaryError);
+    throw new Error('Failed to load cashflow summary');
+  }
+
+  // If no pre-aggregated data, fallback to raw queries (slower)
+  if (!dailySummary || dailySummary.length === 0) {
+    if (IS_DEV) {
+      console.warn('[Cashflow Summary] No pre-aggregated data, falling back to raw queries');
+    }
+    return await getCashflowSummaryFallback(user.id, startDate, endDate, dbTime, startTime);
+  }
+
+  // Aggregate from daily summary
+  let forecast_total = 0;
+  let forecast_count = 0;
+  let actual_total = 0;
+  let actual_count = 0;
+  let matched_count = 0;
+  let overdue_count = 0;
+  let forecast_only_count = 0;
+  let actual_only_count = 0;
+
+  const daily_aggregate: DailyAggregate[] = dailySummary.map((row) => {
+    forecast_total += Number(row.forecast_sum);
+    forecast_count += row.forecast_count;
+    actual_total += Number(row.actual_sum);
+    actual_count += row.actual_count;
+    matched_count += row.matched_count;
+    overdue_count += row.overdue_count;
+    forecast_only_count += row.forecast_only_count;
+    actual_only_count += row.actual_only_count;
+
+    return {
+      date: row.date,
+      forecast_sum: Number(row.forecast_sum),
+      actual_sum: Number(row.actual_sum),
+      gap_sum: Number(row.gap_sum),
+    };
+  });
+
+  const gap_total = actual_total - forecast_total;
+  const exceptions_count = overdue_count + forecast_only_count + actual_only_count;
+
+  const totalTime = Date.now() - startTime;
+
+  if (IS_DEV) {
+    console.log(`[Cashflow Summary] Total: ${totalTime}ms, DB: ${dbTime}ms`);
+  }
+
+  return {
+    forecast_total,
+    forecast_count,
+    actual_total,
+    actual_count,
+    gap_total,
+    matched_count,
+    overdue_count,
+    forecast_only_count,
+    actual_only_count,
+    exceptions_count,
+    daily_aggregate,
+    ...(IS_DEV && {
+      _timing: {
+        total_ms: totalTime,
+        db_ms: dbTime,
+      },
+    }),
+  };
+}
+
+/**
+ * Fallback: Calculate summary from raw data (slower, used when pre-aggregation missing)
+ */
+async function getCashflowSummaryFallback(
+  userId: string,
+  startDate: Date,
+  endDate: Date,
+  initialDbTime: number,
+  startTime: number
+): Promise<CashflowSummary> {
+  let dbTime = initialDbTime;
+  const supabase = await createClient();
+
+  // Query forecast
+  const dbStart1 = Date.now();
+  const { data: forecastData } = await supabase
+    .from('unsettled_transactions')
+    .select('estimated_settle_time, estimated_settlement_amount')
+    .eq('created_by', userId)
+    .eq('status', 'unsettled')
+    .gte('estimated_settle_time', startDate.toISOString())
+    .lte('estimated_settle_time', endDate.toISOString());
+  dbTime += Date.now() - dbStart1;
+
+  // Query actual
+  const dbStart2 = Date.now();
+  const { data: actualData } = await supabase
+    .from('settlement_transactions')
+    .select('settled_time, settlement_amount')
+    .eq('created_by', userId)
+    .gte('settled_time', startDate.toISOString())
+    .lte('settled_time', endDate.toISOString());
+  dbTime += Date.now() - dbStart2;
+
+  // Aggregate manually
+  const forecast_total = (forecastData || []).reduce(
+    (sum, r) => sum + Number(r.estimated_settlement_amount || 0),
+    0
+  );
+  const forecast_count = (forecastData || []).length;
+  const actual_total = (actualData || []).reduce(
+    (sum, r) => sum + Number(r.settlement_amount || 0),
+    0
+  );
+  const actual_count = (actualData || []).length;
+  const gap_total = actual_total - forecast_total;
+
+  const totalTime = Date.now() - startTime;
+
+  if (IS_DEV) {
+    console.log(`[Cashflow Summary Fallback] Total: ${totalTime}ms, DB: ${dbTime}ms`);
+  }
+
+  return {
+    forecast_total,
+    forecast_count,
+    actual_total,
+    actual_count,
+    gap_total,
+    matched_count: 0,
+    overdue_count: 0,
+    forecast_only_count: 0,
+    actual_only_count: 0,
+    exceptions_count: 0,
+    daily_aggregate: [],
+    ...(IS_DEV && {
+      _timing: {
+        total_ms: totalTime,
+        db_ms: dbTime,
+      },
+    }),
+  };
+}
+
+/**
+ * Get paginated transaction rows (LAZY LOAD - called when tab clicked)
+ */
+export async function getCashflowTransactions(
+  req: TransactionsRequest
+): Promise<TransactionsResponse> {
+  const startTime = Date.now();
+  let dbTime = 0;
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    throw new Error('Unauthorized');
+  }
+
+  const page = req.page || 1;
+  const pageSize = req.pageSize || 50;
+  const offset = (page - 1) * pageSize;
+  const sortBy = req.sortBy || 'date';
+  const sortOrder = req.sortOrder || 'desc';
+
+  let query;
+  let countQuery;
+  let dateField: string;
+  let amountField: string;
+
+  if (req.type === 'forecast') {
+    dateField = 'estimated_settle_time';
+    amountField = 'estimated_settlement_amount';
+    query = supabase
+      .from('unsettled_transactions')
+      .select('id, txn_id, type, estimated_settle_time, estimated_settlement_amount, currency, status, marketplace')
+      .eq('created_by', user.id)
+      .eq('status', 'unsettled')
+      .gte(dateField, req.startDate)
+      .lte(dateField, req.endDate);
+
+    countQuery = supabase
+      .from('unsettled_transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('created_by', user.id)
+      .eq('status', 'unsettled')
+      .gte(dateField, req.startDate)
+      .lte(dateField, req.endDate);
+  } else if (req.type === 'actual') {
+    dateField = 'settled_time';
+    amountField = 'settlement_amount';
+    query = supabase
+      .from('settlement_transactions')
+      .select('id, txn_id, type, settled_time, settlement_amount, currency, marketplace')
+      .eq('created_by', user.id)
+      .gte(dateField, req.startDate)
+      .lte(dateField, req.endDate);
+
+    countQuery = supabase
+      .from('settlement_transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('created_by', user.id)
+      .gte(dateField, req.startDate)
+      .lte(dateField, req.endDate);
+  } else {
+    // exceptions: forecast without match or overdue
+    dateField = 'estimated_settle_time';
+    amountField = 'estimated_settlement_amount';
+    query = supabase
+      .from('unsettled_transactions')
+      .select('id, txn_id, type, estimated_settle_time, estimated_settlement_amount, currency, status, marketplace')
+      .eq('created_by', user.id)
+      .eq('status', 'unsettled')
+      .gte(dateField, req.startDate)
+      .lte(dateField, req.endDate);
+
+    countQuery = supabase
+      .from('unsettled_transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('created_by', user.id)
+      .eq('status', 'unsettled')
+      .gte(dateField, req.startDate)
+      .lte(dateField, req.endDate);
+  }
+
+  // Sort
+  if (sortBy === 'date') {
+    query = query.order(dateField, { ascending: sortOrder === 'asc' });
+  } else if (sortBy === 'amount') {
+    query = query.order(amountField, { ascending: sortOrder === 'asc' });
+  }
+
+  // Paginate
+  query = query.range(offset, offset + pageSize - 1);
+
+  // Execute queries
+  const dbStart1 = Date.now();
+  const { data: rows, error: queryError } = await query;
+  dbTime += Date.now() - dbStart1;
+
+  const dbStart2 = Date.now();
+  const { count, error: countError } = await countQuery;
+  dbTime += Date.now() - dbStart2;
+
+  if (queryError || countError) {
+    console.error('[Cashflow Transactions] Query failed:', queryError || countError);
+    throw new Error('Failed to load transactions');
+  }
+
+  // Map to TransactionRow
+  const mappedRows: TransactionRow[] = (rows || []).map((r: any) => ({
+    id: r.id,
+    txn_id: r.txn_id,
+    type: r.type || null,
+    date: r.estimated_settle_time || r.settled_time,
+    amount: Number(r.estimated_settlement_amount || r.settlement_amount || 0),
+    currency: r.currency || 'THB',
+    status: r.status,
+    marketplace: r.marketplace || 'tiktok',
+  }));
+
+  const totalCount = count || 0;
+  const totalPages = Math.ceil(totalCount / pageSize);
+  const totalTime = Date.now() - startTime;
+
+  if (IS_DEV) {
+    console.log(`[Cashflow Transactions] Type: ${req.type}, Page: ${page}, Total: ${totalTime}ms, DB: ${dbTime}ms`);
+  }
+
+  return {
+    rows: mappedRows,
+    pagination: {
+      page,
+      pageSize,
+      totalCount,
+      totalPages,
+    },
+    ...(IS_DEV && {
+      _timing: {
+        total_ms: totalTime,
+        db_ms: dbTime,
+      },
+    }),
+  };
+}
+
+/**
+ * Rebuild cashflow daily summary (ADMIN/DEV)
+ */
+export async function rebuildCashflowSummary(
+  req: RebuildSummaryRequest
+): Promise<RebuildSummaryResponse> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    throw new Error('Unauthorized');
+  }
+
+  const { data, error } = await supabase.rpc('rebuild_cashflow_daily_summary', {
+    p_user_id: user.id,
+    p_start_date: req.startDate,
+    p_end_date: req.endDate,
+  });
+
+  if (error) {
+    console.error('[Rebuild Summary] Failed:', error);
+    throw new Error('Failed to rebuild summary');
+  }
+
+  return {
+    success: true,
+    rows_affected: data || 0,
+    message: `Rebuilt ${data || 0} daily summary rows`,
+  };
+}
