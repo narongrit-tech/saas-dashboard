@@ -60,6 +60,7 @@ export async function createManualExpense(input: CreateExpenseInput): Promise<Ac
       .from('expenses')
       .insert({
         category: input.category,
+        subcategory: input.subcategory || null, // Optional subcategory (nullable)
         amount: roundedAmount, // Use rounded amount for financial precision
         expense_date: input.expense_date,
         description: description,
@@ -82,6 +83,7 @@ export async function createManualExpense(input: CreateExpenseInput): Promise<Ac
       p_changes: {
         created: {
           category: input.category,
+          subcategory: input.subcategory || null,
           amount: roundedAmount,
           expense_date: input.expense_date,
           description,
@@ -157,6 +159,7 @@ export async function updateExpense(
       .from('expenses')
       .update({
         category: input.category,
+        subcategory: input.subcategory || null, // Optional subcategory (nullable)
         amount: roundedAmount,
         expense_date: input.expense_date,
         description: description,
@@ -179,12 +182,14 @@ export async function updateExpense(
       p_changes: {
         before: {
           category: existingExpense.category,
+          subcategory: existingExpense.subcategory || null,
           amount: existingExpense.amount,
           expense_date: existingExpense.expense_date,
           description: existingExpense.description,
         },
         after: {
           category: input.category,
+          subcategory: input.subcategory || null,
           amount: roundedAmount,
           expense_date: input.expense_date,
           description,
@@ -239,6 +244,7 @@ export async function deleteExpense(expenseId: string): Promise<ActionResult> {
       p_changes: {
         deleted: {
           category: existingExpense.category,
+          subcategory: existingExpense.subcategory || null,
           amount: existingExpense.amount,
           expense_date: existingExpense.expense_date,
           description: existingExpense.description,
@@ -351,6 +357,7 @@ export async function exportExpenses(filters: ExportFilters): Promise<ExportResu
     const headers = [
       'Expense Date',
       'Category',
+      'Subcategory',
       'Amount',
       'Description',
       'Notes',
@@ -373,6 +380,7 @@ export async function exportExpenses(filters: ExportFilters): Promise<ExportResu
       return [
         escapeCSV(expense.expense_date),
         escapeCSV(expense.category),
+        escapeCSV(expense.subcategory || ''),
         escapeCSV(expense.amount),
         escapeCSV(expense.description),
         escapeCSV(expense.notes || ''),

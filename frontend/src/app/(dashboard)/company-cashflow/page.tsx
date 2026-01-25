@@ -53,6 +53,7 @@ export default function CompanyCashflowPage() {
   }
 
   const [dateRange, setDateRange] = useState<DateRangeResult>(getDefaultRange())
+  const [source, setSource] = useState<'bank' | 'marketplace'>('marketplace')
   const [data, setData] = useState<CompanyCashflowSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -60,14 +61,14 @@ export default function CompanyCashflowPage() {
 
   useEffect(() => {
     fetchData()
-  }, [dateRange])
+  }, [dateRange, source])
 
   const fetchData = async () => {
     try {
       setLoading(true)
       setError(null)
 
-      const result = await getCompanyCashflow(dateRange.startDate, dateRange.endDate)
+      const result = await getCompanyCashflow(dateRange.startDate, dateRange.endDate, source)
 
       if (!result.success || !result.data) {
         setError(result.error || 'ไม่สามารถโหลดข้อมูลได้')
@@ -90,7 +91,7 @@ export default function CompanyCashflowPage() {
       setExportLoading(true)
       setError(null)
 
-      const result = await exportCompanyCashflow(dateRange.startDate, dateRange.endDate)
+      const result = await exportCompanyCashflow(dateRange.startDate, dateRange.endDate, source)
 
       if (!result.success || !result.csv || !result.filename) {
         setError(result.error || 'เกิดข้อผิดพลาดในการ export')
@@ -124,17 +125,50 @@ export default function CompanyCashflowPage() {
         </p>
       </div>
 
+      {/* Source Toggle */}
+      <div className="flex items-center gap-2">
+        <Button
+          variant={source === 'bank' ? 'default' : 'outline'}
+          onClick={() => setSource('bank')}
+        >
+          Bank View
+        </Button>
+        <Button
+          variant={source === 'marketplace' ? 'default' : 'outline'}
+          onClick={() => setSource('marketplace')}
+        >
+          Marketplace View
+        </Button>
+      </div>
+
       {/* Info Alert */}
-      <Alert>
-        <Info className="h-4 w-4" />
-        <AlertDescription>
-          <strong>Cash In:</strong> เงินจริงที่เข้าบริษัทจาก marketplace settlements (ไม่รวม forecast)
-          <br />
-          <strong>Cash Out:</strong> ค่าใช้จ่าย (Expenses) + เงินโอนเข้า Wallet (Top-up)
-          <br />
-          <strong>หมายเหตุ:</strong> Opening Balance = 0 (ยังไม่มีข้อมูลบัญชีธนาคาร)
-        </AlertDescription>
-      </Alert>
+      {source === 'bank' ? (
+        <Alert>
+          <Info className="h-4 w-4" />
+          <AlertDescription>
+            <strong>Bank View:</strong> แสดง cashflow จริงจากบัญชีธนาคาร (source of truth)
+            <br />
+            <strong>Cash In:</strong> Deposits จากบัญชีธนาคาร
+            <br />
+            <strong>Cash Out:</strong> Withdrawals จากบัญชีธนาคาร
+            <br />
+            <strong>หมายเหตุ:</strong> ต้องนำเข้า Bank Statement ก่อนจึงจะมีข้อมูล
+          </AlertDescription>
+        </Alert>
+      ) : (
+        <Alert>
+          <Info className="h-4 w-4" />
+          <AlertDescription>
+            <strong>Marketplace View:</strong> คำนวณ cashflow จาก internal records (supporting)
+            <br />
+            <strong>Cash In:</strong> เงินจริงที่เข้าบริษัทจาก marketplace settlements (ไม่รวม forecast)
+            <br />
+            <strong>Cash Out:</strong> ค่าใช้จ่าย (Expenses) + เงินโอนเข้า Wallet (Top-up)
+            <br />
+            <strong>หมายเหตุ:</strong> Opening Balance = 0 (ยังไม่มีข้อมูลบัญชีธนาคาร)
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Date Range Filter */}
       <div className="flex items-center gap-4">
@@ -144,6 +178,29 @@ export default function CompanyCashflowPage() {
             onChange={setDateRange}
           />
         </div>
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={() => {
+            fetchData()
+            setError(null)
+          }}
+          title="Refresh data"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+          </svg>
+        </Button>
         <Button
           onClick={handleExport}
           variant="outline"

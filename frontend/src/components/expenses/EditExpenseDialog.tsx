@@ -46,6 +46,7 @@ export function EditExpenseDialog({
   const [formData, setFormData] = useState<UpdateExpenseInput>({
     expense_date: '',
     category: 'Advertising',
+    subcategory: '',
     amount: 0,
     note: '',
   })
@@ -56,6 +57,7 @@ export function EditExpenseDialog({
       setFormData({
         expense_date: expense.expense_date.split('T')[0], // Extract YYYY-MM-DD
         category: expense.category,
+        subcategory: expense.subcategory || '',
         amount: expense.amount,
         note: expense.description || '',
       })
@@ -175,6 +177,23 @@ export function EditExpenseDialog({
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+
+            {/* Subcategory */}
+            <div className="grid gap-2">
+              <Label htmlFor="subcategory">
+                หมวดหมู่ย่อย (ถ้ามี)
+              </Label>
+              <Input
+                id="subcategory"
+                type="text"
+                placeholder="เช่น Facebook Ads, Google Ads, Office Rent"
+                value={formData.subcategory || ''}
+                onChange={(e) => handleChange('subcategory', e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                ใช้สำหรับรายงานแยกย่อยเท่านั้น ไม่กระทบการคำนวณ P&L
+              </p>
             </div>
 
             {/* Amount */}

@@ -11,6 +11,22 @@ import * as XLSX from 'xlsx'
 import crypto from 'crypto'
 
 /**
+ * Generate SHA256 hash for expense deduplication
+ */
+function generateExpenseHash(
+  userId: string,
+  expenseDate: string,
+  category: string,
+  amount: number,
+  description: string
+): string {
+  const hashInput = [userId, expenseDate, category, amount.toString(), description || ''].join(
+    '|'
+  )
+  return crypto.createHash('sha256').update(hashInput).digest('hex')
+}
+
+/**
  * Generate and download expense template (.xlsx)
  */
 export async function downloadExpenseTemplate(): Promise<{
@@ -26,9 +42,9 @@ export async function downloadExpenseTemplate(): Promise<{
     // Template sheet
     const templateData = [
       // Header row
-      ['date', 'category', 'description', 'amount', 'payment_method', 'vendor', 'notes', 'reference_id'],
+      ['date', 'category', 'subcategory', 'description', 'amount', 'payment_method', 'vendor', 'notes', 'reference_id'],
       // Example row
-      ['2026-01-25', 'Advertising', 'Facebook Ads Campaign', '5000.00', 'Credit Card', 'Meta', 'Campaign Jan 2026', 'FB-2026-001'],
+      ['2026-01-25', 'Advertising', 'Facebook Ads', 'Facebook Ads Campaign', '5000.00', 'Credit Card', 'Meta', 'Campaign Jan 2026', 'FB-2026-001'],
     ]
 
     const ws = XLSX.utils.aoa_to_sheet(templateData)
@@ -37,6 +53,7 @@ export async function downloadExpenseTemplate(): Promise<{
     ws['!cols'] = [
       { wch: 12 },  // date
       { wch: 15 },  // category
+      { wch: 18 },  // subcategory
       { wch: 30 },  // description
       { wch: 12 },  // amount
       { wch: 18 },  // payment_method
@@ -58,6 +75,7 @@ export async function downloadExpenseTemplate(): Promise<{
       ['amount', 'จำนวนเงิน (ตัวเลข > 0)'],
       [''],
       ['Optional Columns:'],
+      ['subcategory', 'หมวดหมู่ย่อย (เช่น Facebook Ads, Google Ads, TikTok Ads)'],
       ['payment_method', 'วิธีการชำระเงิน (เช่น Credit Card, Bank Transfer)'],
       ['vendor', 'ผู้จำหน่าย/บริษัท'],
       ['notes', 'หมายเหตุเพิ่มเติม'],
@@ -68,6 +86,11 @@ export async function downloadExpenseTemplate(): Promise<{
       ['COGS', 'ต้นทุนขาย (Product Cost, Packaging)'],
       ['Operating', 'ค่าดำเนินงาน (Utilities, Salary, Overhead)'],
       [''],
+      ['Subcategory Examples (ไม่บังคับ):'],
+      ['Advertising → Facebook Ads, Google Ads, TikTok Ads, LINE Ads'],
+      ['COGS → Product A, Product B, Packaging Materials, Shipping'],
+      ['Operating → Office Rent, Utilities, Salaries, Software Subscriptions'],
+      [''],
       ['Example (ดูใน expenses_template sheet):'],
       ['Row 2 แสดงตัวอย่างข้อมูลที่กรอกได้'],
       [''],
@@ -76,6 +99,7 @@ export async function downloadExpenseTemplate(): Promise<{
       ['- Amount ต้องเป็นตัวเลขเท่านั้น (ไม่ต้องใส่ ฿ หรือ ,)'],
       ['- Date ต้องเป็นรูปแบบ YYYY-MM-DD'],
       ['- Category ต้องตรงกับที่กำหนด (case-sensitive)'],
+      ['- Subcategory สามารถเว้นว่างได้ (optional)'],
     ]
 
     const wsInstructions = XLSX.utils.aoa_to_sheet(instructionsData)
@@ -228,9 +252,13 @@ export async function importExpensesFromTemplate(
         return
       }
 
+      // Get subcategory (optional)
+      const subcategory = rowObj.subcategory ? String(rowObj.subcategory).trim() : null
+
       parsed.push({
         ...rowObj,
         category,
+        subcategory,
         amount,
         expense_date: dateStr,
       })
@@ -240,35 +268,59 @@ export async function importExpensesFromTemplate(
     let insertedCount = 0
     const insertErrors: string[] = []
 
+    let skippedCount = 0
+
     for (const row of parsed) {
+      const expenseHash = generateExpenseHash(
+        user.id,
+        row.expense_date as string,
+        row.category as string,
+        row.amount as number,
+        String(row.description).trim()
+      )
+
       const { error: insertError } = await supabase
         .from('expenses')
         .insert({
           category: row.category as string,
+          subcategory: row.subcategory as string | null,
           amount: row.amount as number,
           expense_date: row.expense_date as string,
           description: String(row.description).trim(),
           notes: row.notes ? String(row.notes).trim() : null,
+          expense_hash: expenseHash,
           source: 'imported',
           import_batch_id: batch.id,
           created_by: user.id,
         })
 
       if (insertError) {
-        insertErrors.push(insertError.message)
+        // Check if it's a duplicate
+        if (insertError.code === '23505' || insertError.message.includes('duplicate')) {
+          skippedCount++
+        } else {
+          insertErrors.push(insertError.message)
+        }
       } else {
         insertedCount++
       }
     }
 
     // Update batch status
+    const statusMessage =
+      skippedCount > 0
+        ? `Imported ${insertedCount} rows (${skippedCount} duplicates skipped)`
+        : `Successfully imported ${insertedCount} rows`
+
     await supabase
       .from('import_batches')
       .update({
         status: insertErrors.length > 0 ? 'partial' : 'success',
         row_count: parsed.length,
         inserted_count: insertedCount,
+        skipped_count: skippedCount,
         error_count: insertErrors.length + errors.length,
+        notes: statusMessage,
       })
       .eq('id', batch.id)
 

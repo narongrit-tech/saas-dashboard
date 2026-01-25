@@ -15,6 +15,8 @@ import {
   Settings,
   Coins,
   GitCompare,
+  Landmark,
+  Scale,
 } from 'lucide-react'
 
 const menuItems = [
@@ -44,7 +46,17 @@ const menuItems = [
     icon: Coins,
   },
   {
-    title: 'Reconciliation',
+    title: 'Bank',
+    href: '/bank',
+    icon: Landmark,
+  },
+  {
+    title: 'Bank Reconciliation',
+    href: '/bank-reconciliation',
+    icon: Scale,
+  },
+  {
+    title: 'P&L Reconciliation',
     href: '/reconciliation',
     icon: GitCompare,
   },

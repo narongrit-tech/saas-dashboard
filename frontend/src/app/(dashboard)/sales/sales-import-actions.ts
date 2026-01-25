@@ -12,6 +12,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import * as XLSX from 'xlsx'
+import crypto from 'crypto'
 import {
   ParsedSalesRow,
   SalesImportPreview,
@@ -19,6 +20,35 @@ import {
 } from '@/types/sales-import'
 import { formatBangkok } from '@/lib/bangkok-time'
 import { parse as parseDate, isValid } from 'date-fns'
+
+// ============================================
+// Hash Generation (for deduplication)
+// ============================================
+
+/**
+ * Generate SHA256 hash for sales order line deduplication
+ * Matches PostgreSQL function: public.generate_order_line_hash
+ */
+function generateOrderLineHash(
+  userId: string,
+  sourcePlatform: string,
+  externalOrderId: string,
+  productName: string,
+  quantity: number,
+  totalAmount: number
+): string {
+  // Format: created_by|source_platform|external_order_id|product_name|quantity|total_amount
+  const hashInput = [
+    userId,
+    sourcePlatform || '',
+    externalOrderId || '',
+    productName || '',
+    quantity.toString(),
+    totalAmount.toString(),
+  ].join('|')
+
+  return crypto.createHash('sha256').update(hashInput).digest('hex')
+}
 
 // ============================================
 // Helper Functions
@@ -546,39 +576,55 @@ export async function importSalesChunk(
       }
     }
 
-    // Insert sales orders (chunk)
-    const salesRows = chunkData.map(row => ({
-      order_id: row.order_id,
-      marketplace: row.marketplace,
-      channel: row.channel,
-      product_name: row.product_name,
-      sku: row.sku,
-      quantity: row.quantity,
-      unit_price: row.unit_price,
-      total_amount: row.total_amount,
-      cost_per_unit: row.cost_per_unit,
-      order_date: row.order_date,
-      status: row.status,
-      customer_name: row.customer_name,
-      notes: row.notes,
-      source: 'imported',
-      import_batch_id: batchId,
-      metadata: row.metadata || {},
-      created_by: user.id,
+    // Insert sales orders (chunk) with order_line_hash for deduplication
+    const salesRows = chunkData.map((row) => {
+      const orderLineHash = generateOrderLineHash(
+        user.id,
+        row.source_platform || row.marketplace || '',
+        row.external_order_id || row.order_id || '',
+        row.product_name || '',
+        row.quantity || 0,
+        row.total_amount || 0
+      )
 
-      // UX v2: Platform-specific fields
-      source_platform: row.source_platform,
-      external_order_id: row.external_order_id,
-      platform_status: row.platform_status,
-      status_group: row.status_group,
-      platform_substatus: row.platform_substatus,
-      payment_status: row.payment_status,
-      paid_at: row.paid_at,
-      shipped_at: row.shipped_at,
-      delivered_at: row.delivered_at,
-      seller_sku: row.seller_sku,
-      sku_id: row.sku_id,
-    }))
+      return {
+        order_id: row.order_id,
+        marketplace: row.marketplace,
+        channel: row.channel,
+        product_name: row.product_name,
+        sku: row.sku,
+        quantity: row.quantity,
+        unit_price: row.unit_price,
+        total_amount: row.total_amount,
+        cost_per_unit: row.cost_per_unit,
+        order_date: row.order_date,
+        status: row.status,
+        customer_name: row.customer_name,
+        notes: row.notes,
+        order_line_hash: orderLineHash,
+        source: 'imported',
+        import_batch_id: batchId,
+        metadata: row.metadata || {},
+        created_by: user.id,
+
+        // UX v2: Platform-specific fields
+        source_platform: row.source_platform,
+        external_order_id: row.external_order_id,
+        platform_status: row.platform_status,
+        status_group: row.status_group,
+        platform_substatus: row.platform_substatus,
+        payment_status: row.payment_status,
+        paid_at: row.paid_at,
+        shipped_at: row.shipped_at,
+        delivered_at: row.delivered_at,
+        seller_sku: row.seller_sku,
+        sku_id: row.sku_id,
+      }
+    })
+
+    // Insert with duplicate detection
+    let insertedCount = 0
+    let skippedCount = 0
 
     const { data: insertedRows, error: insertError } = await supabase
       .from('sales_orders')
@@ -586,19 +632,45 @@ export async function importSalesChunk(
       .select()
 
     if (insertError) {
-      console.error(`Insert error (chunk ${chunkIndex + 1}/${totalChunks}):`, insertError)
-      return {
-        success: false,
-        inserted: 0,
-        error: `Insert failed: ${insertError.message}`,
-      }
-    }
+      // Check if it's a duplicate key error
+      if (insertError.code === '23505' || insertError.message.includes('duplicate')) {
+        console.log(
+          `Duplicate orders detected in chunk ${chunkIndex + 1}/${totalChunks}, inserting individually...`
+        )
 
-    const insertedCount = insertedRows?.length || 0
+        // Insert one by one to identify duplicates
+        for (const row of salesRows) {
+          const { data, error } = await supabase.from('sales_orders').insert(row).select()
+
+          if (error) {
+            if (error.code === '23505' || error.message.includes('duplicate')) {
+              skippedCount++
+            } else {
+              console.error('Insert order error:', error)
+            }
+          } else if (data && data.length > 0) {
+            insertedCount++
+          }
+        }
+      } else {
+        // Other error - fail the chunk
+        console.error(`Insert error (chunk ${chunkIndex + 1}/${totalChunks}):`, insertError)
+        return {
+          success: false,
+          inserted: 0,
+          skipped: 0,
+          error: `Insert failed: ${insertError.message}`,
+        }
+      }
+    } else {
+      // Bulk insert succeeded - no duplicates
+      insertedCount = insertedRows?.length || 0
+    }
 
     return {
       success: true,
       inserted: insertedCount,
+      skipped: skippedCount,
     }
   } catch (error: unknown) {
     console.error('Import chunk error:', error)
@@ -779,39 +851,55 @@ export async function importSalesToSystem(
       }
     }
 
-    // Insert sales orders (line-level) with UX v2 fields
-    const salesRows = parsedData.map(row => ({
-      order_id: row.order_id,
-      marketplace: row.marketplace,
-      channel: row.channel,
-      product_name: row.product_name,
-      sku: row.sku,
-      quantity: row.quantity,
-      unit_price: row.unit_price,
-      total_amount: row.total_amount,
-      cost_per_unit: row.cost_per_unit,
-      order_date: row.order_date,
-      status: row.status,
-      customer_name: row.customer_name,
-      notes: row.notes,
-      source: 'imported',
-      import_batch_id: batch.id,
-      metadata: row.metadata || {},
-      created_by: user.id,
+    // Insert sales orders (line-level) with UX v2 fields and order_line_hash
+    const salesRows = parsedData.map((row) => {
+      const orderLineHash = generateOrderLineHash(
+        user.id,
+        row.source_platform || row.marketplace || '',
+        row.external_order_id || row.order_id || '',
+        row.product_name || '',
+        row.quantity || 0,
+        row.total_amount || 0
+      )
 
-      // UX v2: Platform-specific fields
-      source_platform: row.source_platform,
-      external_order_id: row.external_order_id,
-      platform_status: row.platform_status, // Order Substatus (รอจัดส่ง, อยู่ระหว่างงานขนส่ง) - MAIN UI STATUS
-      status_group: row.status_group, // Order Status (ที่จัดส่ง, ชำระเงินแล้ว, ยกเลิกแล้ว) - Group filter
-      platform_substatus: row.platform_substatus, // Deprecated
-      payment_status: row.payment_status,
-      paid_at: row.paid_at,
-      shipped_at: row.shipped_at,
-      delivered_at: row.delivered_at,
-      seller_sku: row.seller_sku,
-      sku_id: row.sku_id,
-    }))
+      return {
+        order_id: row.order_id,
+        marketplace: row.marketplace,
+        channel: row.channel,
+        product_name: row.product_name,
+        sku: row.sku,
+        quantity: row.quantity,
+        unit_price: row.unit_price,
+        total_amount: row.total_amount,
+        cost_per_unit: row.cost_per_unit,
+        order_date: row.order_date,
+        status: row.status,
+        customer_name: row.customer_name,
+        notes: row.notes,
+        order_line_hash: orderLineHash,
+        source: 'imported',
+        import_batch_id: batch.id,
+        metadata: row.metadata || {},
+        created_by: user.id,
+
+        // UX v2: Platform-specific fields
+        source_platform: row.source_platform,
+        external_order_id: row.external_order_id,
+        platform_status: row.platform_status,
+        status_group: row.status_group,
+        platform_substatus: row.platform_substatus,
+        payment_status: row.payment_status,
+        paid_at: row.paid_at,
+        shipped_at: row.shipped_at,
+        delivered_at: row.delivered_at,
+        seller_sku: row.seller_sku,
+        sku_id: row.sku_id,
+      }
+    })
+
+    // Insert with duplicate detection
+    let insertedCount = 0
+    let skippedCount = 0
 
     const { data: insertedRows, error: insertError } = await supabase
       .from('sales_orders')
@@ -819,39 +907,52 @@ export async function importSalesToSystem(
       .select()
 
     if (insertError) {
-      console.error('Insert error:', insertError)
+      // Check if it's a duplicate key error
+      if (insertError.code === '23505' || insertError.message.includes('duplicate')) {
+        console.log('Duplicate orders detected, inserting individually...')
 
-      // Update batch status to failed
-      await supabase
-        .from('import_batches')
-        .update({
-          status: 'failed',
-          error_count: parsedData.length,
-          notes: `Insert failed: ${insertError.message}`,
-        })
-        .eq('id', batch.id)
+        // Insert one by one to identify duplicates
+        for (const row of salesRows) {
+          const { data, error } = await supabase.from('sales_orders').insert(row).select()
 
-      return {
-        success: false,
-        error: `Insert failed: ${insertError.message}`,
-        inserted: 0,
-        skipped: 0,
-        errors: parsedData.length,
+          if (error) {
+            if (error.code === '23505' || error.message.includes('duplicate')) {
+              skippedCount++
+            } else {
+              console.error('Insert order error:', error)
+            }
+          } else if (data && data.length > 0) {
+            insertedCount++
+          }
+        }
+      } else {
+        // Other error - fail the import
+        console.error('Insert error:', insertError)
+
+        await supabase
+          .from('import_batches')
+          .update({
+            status: 'failed',
+            error_count: parsedData.length,
+            notes: `Insert failed: ${insertError.message}`,
+          })
+          .eq('id', batch.id)
+
+        return {
+          success: false,
+          error: `Insert failed: ${insertError.message}`,
+          inserted: 0,
+          skipped: 0,
+          errors: parsedData.length,
+        }
       }
+    } else {
+      // Bulk insert succeeded - no duplicates
+      insertedCount = insertedRows?.length || 0
     }
 
-    const insertedCount = insertedRows?.length || 0
-
-    // Post-insert verification: Count actual rows in database
-    const { count: actualCount } = await supabase
-      .from('sales_orders')
-      .select('*', { count: 'exact', head: true })
-      .eq('import_batch_id', batch.id)
-
-    const verifiedCount = actualCount || 0
-
-    // Check if insert was actually successful
-    if (verifiedCount === 0) {
+    // Check if any rows were inserted
+    if (insertedCount === 0 && skippedCount === 0) {
       // No rows inserted (possible RLS block or silent failure)
       await supabase
         .from('import_batches')
@@ -873,12 +974,18 @@ export async function importSalesToSystem(
     }
 
     // Update batch status to success
+    const statusMessage =
+      skippedCount > 0
+        ? `Imported ${insertedCount} rows (${skippedCount} duplicates skipped)`
+        : `Successfully imported ${insertedCount} rows`
+
     await supabase
       .from('import_batches')
       .update({
         status: 'success',
-        inserted_count: verifiedCount,
-        notes: `Successfully imported ${verifiedCount} rows`,
+        inserted_count: insertedCount,
+        skipped_count: skippedCount,
+        notes: statusMessage,
       })
       .eq('id', batch.id)
 
@@ -893,7 +1000,7 @@ export async function importSalesToSystem(
       success: true,
       batchId: batch.id,
       inserted: insertedCount,
-      skipped: 0,
+      skipped: skippedCount,
       errors: 0,
       summary: {
         dateRange,

@@ -56,9 +56,29 @@ export default function ExpensesPage() {
     perPage: PER_PAGE,
   })
 
+  // Subcategory filter state
+  const [subcategoryFilter, setSubcategoryFilter] = useState<string>('All')
+  const [subcategories, setSubcategories] = useState<string[]>([])
+
   useEffect(() => {
     fetchExpenses()
   }, [filters])
+
+  // Extract unique subcategories when expenses change
+  useEffect(() => {
+    if (expenses.length > 0) {
+      const unique = Array.from(
+        new Set(
+          expenses
+            .map((e) => e.subcategory)
+            .filter((s): s is string => Boolean(s))
+        )
+      )
+      setSubcategories(unique.sort())
+    } else {
+      setSubcategories([])
+    }
+  }, [expenses])
 
   const fetchExpenses = async () => {
     try {
@@ -162,6 +182,11 @@ export default function ExpensesPage() {
       maximumFractionDigits: 2,
     })
   }
+
+  // Apply client-side subcategory filter
+  const displayedExpenses = subcategoryFilter === 'All'
+    ? expenses
+    : expenses.filter((e) => e.subcategory === subcategoryFilter)
 
   const totalPages = Math.ceil(totalCount / PER_PAGE)
 
@@ -305,6 +330,29 @@ export default function ExpensesPage() {
         </div>
 
         <div className="flex-1 space-y-2">
+          <label className="text-sm font-medium">หมวดหมู่ย่อย</label>
+          <Select
+            value={subcategoryFilter}
+            onValueChange={(value) => {
+              setSubcategoryFilter(value)
+              setFilters((prev) => ({ ...prev, page: 1 }))
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="ทุกหมวดหมู่ย่อย" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="All">ทุกหมวดหมู่ย่อย</SelectItem>
+              {subcategories.map((sub) => (
+                <SelectItem key={sub} value={sub}>
+                  {sub}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex-1 space-y-2">
           <label className="text-sm font-medium">ช่วงวันที่</label>
           <SingleDateRangePicker
             defaultRange={
@@ -371,6 +419,7 @@ export default function ExpensesPage() {
             <TableRow>
               <TableHead>วันที่</TableHead>
               <TableHead>ประเภท</TableHead>
+              <TableHead>หมวดหมู่ย่อย</TableHead>
               <TableHead className="text-right">จำนวนเงิน</TableHead>
               <TableHead>รายละเอียด</TableHead>
               <TableHead>บันทึกเมื่อ</TableHead>
@@ -389,6 +438,9 @@ export default function ExpensesPage() {
                     <div className="h-4 w-20 animate-pulse rounded bg-gray-200" />
                   </TableCell>
                   <TableCell>
+                    <div className="h-4 w-20 animate-pulse rounded bg-gray-200" />
+                  </TableCell>
+                  <TableCell>
                     <div className="ml-auto h-4 w-24 animate-pulse rounded bg-gray-200" />
                   </TableCell>
                   <TableCell>
@@ -402,24 +454,31 @@ export default function ExpensesPage() {
                   </TableCell>
                 </TableRow>
               ))
-            ) : expenses.length === 0 ? (
+            ) : displayedExpenses.length === 0 ? (
               // Empty state
               <TableRow>
-                <TableCell colSpan={6} className="h-32 text-center">
+                <TableCell colSpan={7} className="h-32 text-center">
                   <div className="flex flex-col items-center justify-center text-muted-foreground">
                     <p className="text-lg font-medium">ไม่พบข้อมูล</p>
-                    <p className="text-sm">ยังไม่มีรายการค่าใช้จ่าย</p>
+                    <p className="text-sm">
+                      {subcategoryFilter !== 'All'
+                        ? 'ไม่พบรายการที่ตรงกับหมวดหมู่ย่อยที่เลือก'
+                        : 'ยังไม่มีรายการค่าใช้จ่าย'}
+                    </p>
                   </div>
                 </TableCell>
               </TableRow>
             ) : (
               // Data rows
-              expenses.map((expense) => (
+              displayedExpenses.map((expense) => (
                 <TableRow key={expense.id}>
                   <TableCell className="font-medium">
                     {formatDate(expense.expense_date)}
                   </TableCell>
                   <TableCell>{getCategoryBadge(expense.category)}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {expense.subcategory || '-'}
+                  </TableCell>
                   <TableCell className="text-right font-semibold text-red-600">
                     ฿{formatCurrency(expense.amount)}
                   </TableCell>

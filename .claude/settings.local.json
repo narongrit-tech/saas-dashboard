@@ -30,7 +30,8 @@
       "Bash(psql:*)",
       "Bash(git push:*)",
       "Bash(cd:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(New-Item -Path \"D:\\\\Projects\\\\saas-dashboard\\\\frontend\\\\src\\\\app\\\\\\(dashboard\\)\\\\reconciliation\\\\actions.ts\" -ItemType File -Force)"
     ]
   },
   "approvalMode": "auto",

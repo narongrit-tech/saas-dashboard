@@ -4,6 +4,7 @@ export interface Expense {
   id: string
   expense_date: string
   category: ExpenseCategory
+  subcategory?: string | null
   amount: number
   description?: string | null
   notes?: string | null
@@ -25,6 +26,7 @@ export interface ExpenseFilters {
 export interface CreateExpenseInput {
   expense_date: string
   category: ExpenseCategory
+  subcategory?: string
   amount: number
   note?: string
 }
@@ -32,6 +34,7 @@ export interface CreateExpenseInput {
 export interface UpdateExpenseInput {
   expense_date: string
   category: ExpenseCategory
+  subcategory?: string
   amount: number
   note?: string
 }

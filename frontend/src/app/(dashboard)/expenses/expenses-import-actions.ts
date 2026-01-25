@@ -11,6 +11,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import * as XLSX from 'xlsx'
+import crypto from 'crypto'
 import {
   ParsedExpenseRow,
   ExpensesImportPreview,
@@ -20,6 +21,29 @@ import {
 } from '@/types/expenses-import'
 import { formatBangkok } from '@/lib/bangkok-time'
 import { parse as parseDate, isValid } from 'date-fns'
+
+// ============================================
+// Hash Generation (for deduplication)
+// ============================================
+
+/**
+ * Generate SHA256 hash for expense deduplication
+ * Matches PostgreSQL function: public.generate_expense_hash
+ */
+function generateExpenseHash(
+  userId: string,
+  expenseDate: string,
+  category: string,
+  amount: number,
+  description: string
+): string {
+  // Format: created_by|expense_date|category|amount|description
+  const hashInput = [userId, expenseDate, category, amount.toString(), description || ''].join(
+    '|'
+  )
+
+  return crypto.createHash('sha256').update(hashInput).digest('hex')
+}
 
 // ============================================
 // Helper Functions
@@ -456,20 +480,35 @@ export async function importExpensesToSystem(
       }
     }
 
-    // Insert expenses
-    const expenseRows = parsedData.map(row => ({
-      expense_date: row.expense_date,
-      category: row.category,
-      sub_category: row.sub_category,
-      description: row.description,
-      amount: row.amount,
-      vendor: row.vendor,
-      payment_method: row.payment_method,
-      notes: row.notes,
-      source: 'imported',
-      import_batch_id: batch.id,
-      created_by: user.id,
-    }))
+    // Insert expenses with expense_hash for deduplication
+    const expenseRows = parsedData.map((row) => {
+      const expenseHash = generateExpenseHash(
+        user.id,
+        row.expense_date,
+        row.category,
+        row.amount,
+        row.description
+      )
+
+      return {
+        expense_date: row.expense_date,
+        category: row.category,
+        sub_category: row.sub_category,
+        description: row.description,
+        amount: row.amount,
+        vendor: row.vendor,
+        payment_method: row.payment_method,
+        notes: row.notes,
+        expense_hash: expenseHash,
+        source: 'imported',
+        import_batch_id: batch.id,
+        created_by: user.id,
+      }
+    })
+
+    // Insert with duplicate detection
+    let insertedCount = 0
+    let skippedCount = 0
 
     const { data: insertedRows, error: insertError } = await supabase
       .from('expenses')
@@ -477,39 +516,52 @@ export async function importExpensesToSystem(
       .select()
 
     if (insertError) {
-      console.error('Insert error:', insertError)
+      // Check if it's a duplicate key error
+      if (insertError.code === '23505' || insertError.message.includes('duplicate')) {
+        console.log('Duplicate expenses detected, inserting individually...')
 
-      // Update batch status to failed
-      await supabase
-        .from('import_batches')
-        .update({
-          status: 'failed',
-          error_count: parsedData.length,
-          notes: `Insert failed: ${insertError.message}`,
-        })
-        .eq('id', batch.id)
+        // Insert one by one to identify duplicates
+        for (const row of expenseRows) {
+          const { data, error } = await supabase.from('expenses').insert(row).select()
 
-      return {
-        success: false,
-        error: `Insert failed: ${insertError.message}`,
-        inserted: 0,
-        skipped: 0,
-        errors: parsedData.length,
+          if (error) {
+            if (error.code === '23505' || error.message.includes('duplicate')) {
+              skippedCount++
+            } else {
+              console.error('Insert expense error:', error)
+            }
+          } else if (data && data.length > 0) {
+            insertedCount++
+          }
+        }
+      } else {
+        // Other error - fail the import
+        console.error('Insert error:', insertError)
+
+        await supabase
+          .from('import_batches')
+          .update({
+            status: 'failed',
+            error_count: parsedData.length,
+            notes: `Insert failed: ${insertError.message}`,
+          })
+          .eq('id', batch.id)
+
+        return {
+          success: false,
+          error: `Insert failed: ${insertError.message}`,
+          inserted: 0,
+          skipped: 0,
+          errors: parsedData.length,
+        }
       }
+    } else {
+      // Bulk insert succeeded - no duplicates
+      insertedCount = insertedRows?.length || 0
     }
 
-    const insertedCount = insertedRows?.length || 0
-
-    // Post-insert verification: Count actual rows in database
-    const { count: actualCount } = await supabase
-      .from('expenses')
-      .select('*', { count: 'exact', head: true })
-      .eq('import_batch_id', batch.id)
-
-    const verifiedCount = actualCount || 0
-
-    // Check if insert was actually successful
-    if (verifiedCount === 0) {
+    // Check if any rows were inserted
+    if (insertedCount === 0 && skippedCount === 0) {
       // No rows inserted (possible RLS block or silent failure)
       await supabase
         .from('import_batches')
@@ -531,23 +583,29 @@ export async function importExpensesToSystem(
     }
 
     // Update batch status to success
+    const statusMessage =
+      skippedCount > 0
+        ? `Imported ${insertedCount} rows (${skippedCount} duplicates skipped)`
+        : `Successfully imported ${insertedCount} rows`
+
     await supabase
       .from('import_batches')
       .update({
         status: 'success',
-        inserted_count: verifiedCount,
-        notes: `Successfully imported ${verifiedCount} rows`,
+        inserted_count: insertedCount,
+        skipped_count: skippedCount,
+        notes: statusMessage,
       })
       .eq('id', batch.id)
 
-    // Calculate summary
+    // Calculate summary (only from inserted rows)
     const totalAmount = parsedData.reduce((sum, r) => sum + r.amount, 0)
 
     return {
       success: true,
       batchId: batch.id,
       inserted: insertedCount,
-      skipped: 0,
+      skipped: skippedCount,
       errors: 0,
       summary: {
         dateRange,

@@ -785,6 +785,126 @@ CREATE OR REPLACE FUNCTION public.create_expense_audit_log(
 
 ---
 
+### Bank Module (COMPLETE - Phase 8)
+
+**Purpose:** Track company cash flow from bank statements (source of truth)
+
+**Key Characteristics:**
+- ✅ Bank account management (CRUD)
+- ✅ Bank statement import (KBIZ, K PLUS, Generic formats)
+- ✅ Auto-detect format with fallback to manual column mapping
+- ✅ File hash deduplication (prevents duplicate imports)
+- ✅ Daily summary with running balance
+- ✅ Raw transactions table with search and pagination
+- ✅ CSV export (Bangkok timezone)
+
+**Location:**
+- Page: `frontend/src/app/(dashboard)/bank/page.tsx`
+- Actions: `frontend/src/app/(dashboard)/bank/actions.ts`
+- Import Actions: `frontend/src/app/(dashboard)/bank/import-actions.ts`
+- Parser: `frontend/src/lib/parsers/bank-statement-parser.ts`
+- Types: `frontend/src/types/bank.ts`
+- Components:
+  - `frontend/src/components/bank/BankModuleClient.tsx`
+  - `frontend/src/components/bank/BankAccountSelector.tsx`
+  - `frontend/src/components/bank/AddBankAccountDialog.tsx`
+  - `frontend/src/components/bank/ImportBankStatementDialog.tsx`
+  - `frontend/src/components/bank/BankDailySummaryTable.tsx`
+  - `frontend/src/components/bank/BankTransactionsTable.tsx`
+- Database: `database-scripts/migration-014-bank-module.sql`
+
+**Import Features:**
+- **KBIZ Format**: Auto-detects Kasikorn Bank Excel statements
+- **K PLUS Format**: Auto-detects K PLUS CSV statements (UTF-8)
+- **Generic Format**: Detects standard column names (Date, Description, Withdrawal, Deposit)
+- **Manual Mapping**: Fallback wizard if auto-detection fails
+- **File Hash Deduplication**: SHA256 hash per bank account, prevents re-import
+
+**Business Logic:**
+- Opening balance computed from first transaction's running balance
+- Formula: Opening = First Balance - First Deposit + First Withdrawal
+- Daily aggregation: Cash In (deposits), Cash Out (withdrawals), Net, Running Balance
+- Bangkok timezone for all dates
+
+**CSV Export:**
+- Filename format: `bank-{account_name}-YYYYMMDD-HHmmss.csv`
+- Headers: Date, Description, Withdrawal, Deposit, Balance, Channel, Reference ID, Created At
+- Server-side generation, respects date range filter
+
+---
+
+### Bank Reconciliation (COMPLETE - Phase 8)
+
+**Purpose:** Match bank transactions with internal records (settlements, expenses, wallet top-ups)
+
+**Key Characteristics:**
+- ✅ Summary cards: Bank Net (truth), Internal Total, Matched, Unmatched, Gap
+- ✅ Unmatched bank transactions list
+- ✅ Unmatched internal records (3 tabs: Settlements, Expenses, Wallet Top-ups)
+- ✅ Read-only display (v1) - manual matching UI planned for v2
+- ✅ Date range filter
+
+**Location:**
+- Page: `frontend/src/app/(dashboard)/bank-reconciliation/page.tsx`
+- Actions: `frontend/src/app/(dashboard)/reconciliation/bank-reconciliation-actions.ts`
+- Components:
+  - `frontend/src/components/reconciliation/BankReconciliationClient.tsx`
+  - `frontend/src/components/reconciliation/ReconciliationSummaryCards.tsx`
+  - `frontend/src/components/reconciliation/UnmatchedBankTransactionsTable.tsx`
+  - `frontend/src/components/reconciliation/UnmatchedInternalRecordsTabs.tsx`
+- Database: Bank reconciliations table (migration-014)
+
+**Reconciliation Logic:**
+- **Bank Net** = Bank Cash In - Bank Cash Out (source of truth)
+- **Internal Total** = Settlements - Expenses - Wallet Top-ups
+- **Gap** = Bank Net - Internal Total (should be near 0 if fully reconciled)
+- **Matched Count** = Number of reconciled transactions
+- **Unmatched** = Transactions/records without matches
+
+**Auto-Match Engine (v1):**
+- Placeholder implementation (returns 0 matches)
+- Future: Exact match (amount + date), Near match (amount + date +/-1 day), Keyword match (description contains keywords)
+
+---
+
+### Expenses Subcategory (COMPLETE - Phase 8)
+
+**Purpose:** Add optional subcategory field for detailed expense tracking without affecting P&L formula
+
+**Key Characteristics:**
+- ✅ Nullable subcategory field added to expenses table
+- ✅ Add/Edit dialogs updated with subcategory input
+- ✅ Subcategory included in CSV export
+- ✅ Audit logs track subcategory changes
+- ✅ **P&L formula unchanged** (still uses main category only)
+
+**Location:**
+- Database: `database-scripts/migration-015-expenses-subcategory.sql`
+- Actions: `frontend/src/app/(dashboard)/expenses/actions.ts` (updated)
+- Types: `frontend/src/types/expenses.ts` (updated)
+- Dialogs:
+  - `frontend/src/components/expenses/AddExpenseDialog.tsx` (updated)
+  - `frontend/src/components/expenses/EditExpenseDialog.tsx` (updated)
+
+**Business Rule (CRITICAL):**
+- Main category still required: Advertising, COGS, Operating
+- Subcategory is optional (nullable, free text)
+- **Daily P&L formula UNCHANGED**: Revenue - Advertising - COGS - Operating
+- Subcategory used for detailed reporting only, NOT for P&L calculation
+
+**Usage Examples:**
+- Advertising → Subcategory: "Facebook Ads", "Google Ads", "TikTok Ads"
+- Operating → Subcategory: "Office Rent", "Utilities", "Salaries"
+- COGS → Subcategory: "Product A", "Product B", "Packaging"
+
+**CSV Export:**
+- Added "Subcategory" column after "Category"
+- Empty for expenses without subcategory
+
+**See:** `EXPENSES_PAGE_SUBCATEGORY_TODO.md` for main page UI updates (filter + table column)
+
+---
+
 ## 🚀 Future Enhancements (Not in Current MVP)
 
 ### Phase 7 - Advanced Features

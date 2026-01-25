@@ -9,6 +9,7 @@
  * - Cash Out: expenses + wallet_ledger (TOP_UP = cash out from company)
  */
 
+import { unstable_noStore as noStore } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { formatBangkok, startOfDayBangkok, endOfDayBangkok } from '@/lib/bangkok-time'
 
@@ -31,11 +32,15 @@ export interface CompanyCashflowSummary {
 
 /**
  * Get company cashflow for date range
+ * @param source - 'bank' for bank transactions (truth), 'marketplace' for internal records (default)
  */
 export async function getCompanyCashflow(
   startDate: Date,
-  endDate: Date
+  endDate: Date,
+  source: 'bank' | 'marketplace' = 'marketplace'
 ): Promise<{ success: boolean; data?: CompanyCashflowSummary; error?: string }> {
+  noStore(); // Disable caching - always fetch live data
+
   try {
     const supabase = await createClient()
     const {
@@ -50,74 +55,116 @@ export async function getCompanyCashflow(
     const startDateStr = formatBangkok(startOfDayBangkok(startDate), 'yyyy-MM-dd')
     const endDateStr = formatBangkok(endOfDayBangkok(endDate), 'yyyy-MM-dd')
 
-    // Fetch Cash In (settlement_transactions = actual money received from marketplace)
-    const { data: cashInData, error: cashInError } = await supabase
-      .from('settlement_transactions')
-      .select('settled_time, settlement_amount')
-      .gte('settled_time', startDateStr)
-      .lte('settled_time', endDateStr)
-      .order('settled_time', { ascending: true })
-
-    if (cashInError) throw new Error(`Cash In query failed: ${cashInError.message}`)
-
-    // Fetch Cash Out from Expenses (all categories)
-    const { data: expensesData, error: expensesError } = await supabase
-      .from('expenses')
-      .select('expense_date, amount')
-      .gte('expense_date', startDateStr)
-      .lte('expense_date', endDateStr)
-      .order('expense_date', { ascending: true })
-
-    if (expensesError) throw new Error(`Expenses query failed: ${expensesError.message}`)
-
-    // Fetch Cash Out from Wallet TOP_UP (cash transfer from company to wallet)
-    const { data: topupData, error: topupError } = await supabase
-      .from('wallet_ledger')
-      .select('date, amount')
-      .eq('entry_type', 'TOP_UP')
-      .eq('direction', 'IN') // IN to wallet = OUT from company
-      .gte('date', startDateStr)
-      .lte('date', endDateStr)
-      .order('date', { ascending: true })
-
-    if (topupError) throw new Error(`Wallet top-up query failed: ${topupError.message}`)
-
     // Aggregate by date (Bangkok timezone bucketing)
     const dailyMap = new Map<string, { cash_in: number; cash_out: number }>()
+    let openingBalance = 0
 
-    // Process Cash In
-    cashInData?.forEach((row) => {
-      const date = formatBangkok(row.settled_time, 'yyyy-MM-dd')
-      const existing = dailyMap.get(date) || { cash_in: 0, cash_out: 0 }
-      dailyMap.set(date, {
-        ...existing,
-        cash_in: existing.cash_in + (row.settlement_amount || 0),
-      })
-    })
+    if (source === 'bank') {
+      // ========================================================================
+      // Bank View: Use Single Source of Truth (getCashPosition)
+      // Query all bank accounts and aggregate
+      // ========================================================================
+      const { getCompanyCashPosition } = await import(
+        '@/app/(dashboard)/bank/cash-position-actions'
+      )
 
-    // Process Cash Out - Expenses
-    expensesData?.forEach((row) => {
-      const date = formatBangkok(row.expense_date, 'yyyy-MM-dd')
-      const existing = dailyMap.get(date) || { cash_in: 0, cash_out: 0 }
-      dailyMap.set(date, {
-        ...existing,
-        cash_out: existing.cash_out + (row.amount || 0),
+      const cashPositionResult = await getCompanyCashPosition({
+        startDate: startDateStr,
+        endDate: endDateStr,
       })
-    })
 
-    // Process Cash Out - Wallet Top-ups
-    topupData?.forEach((row) => {
-      const date = formatBangkok(row.date, 'yyyy-MM-dd')
-      const existing = dailyMap.get(date) || { cash_in: 0, cash_out: 0 }
-      dailyMap.set(date, {
-        ...existing,
-        cash_out: existing.cash_out + (row.amount || 0),
+      if (!cashPositionResult.success || !cashPositionResult.data) {
+        throw new Error(cashPositionResult.error || 'Failed to get company cash position')
+      }
+
+      const cashPosition = cashPositionResult.data
+
+      // Convert CashPositionResult to CompanyCashflowSummary format
+      return {
+        success: true,
+        data: {
+          total_cash_in: cashPosition.cashInTotal,
+          total_cash_out: cashPosition.cashOutTotal,
+          net_cashflow: cashPosition.netTotal,
+          opening_balance: cashPosition.openingBalance,
+          closing_balance: cashPosition.endingBalance,
+          daily_data: cashPosition.daily.map((day) => ({
+            date: day.date,
+            cash_in: day.cashIn,
+            cash_out: day.cashOut,
+            net: day.net,
+            running_balance: day.runningBalance,
+          })),
+        },
+      }
+    } else {
+      // Marketplace View: Query from internal records
+      // Fetch Cash In (settlement_transactions = actual money received from marketplace)
+      const { data: cashInData, error: cashInError } = await supabase
+        .from('settlement_transactions')
+        .select('settled_time, settlement_amount')
+        .gte('settled_time', startDateStr)
+        .lte('settled_time', endDateStr)
+        .order('settled_time', { ascending: true })
+
+      if (cashInError) throw new Error(`Cash In query failed: ${cashInError.message}`)
+
+      // Fetch Cash Out from Expenses (all categories)
+      const { data: expensesData, error: expensesError } = await supabase
+        .from('expenses')
+        .select('expense_date, amount')
+        .gte('expense_date', startDateStr)
+        .lte('expense_date', endDateStr)
+        .order('expense_date', { ascending: true })
+
+      if (expensesError) throw new Error(`Expenses query failed: ${expensesError.message}`)
+
+      // Fetch Cash Out from Wallet TOP_UP (cash transfer from company to wallet)
+      const { data: topupData, error: topupError } = await supabase
+        .from('wallet_ledger')
+        .select('date, amount')
+        .eq('entry_type', 'TOP_UP')
+        .eq('direction', 'IN') // IN to wallet = OUT from company
+        .gte('date', startDateStr)
+        .lte('date', endDateStr)
+        .order('date', { ascending: true })
+
+      if (topupError) throw new Error(`Wallet top-up query failed: ${topupError.message}`)
+
+      // Process Cash In
+      cashInData?.forEach((row) => {
+        const date = formatBangkok(row.settled_time, 'yyyy-MM-dd')
+        const existing = dailyMap.get(date) || { cash_in: 0, cash_out: 0 }
+        dailyMap.set(date, {
+          ...existing,
+          cash_in: existing.cash_in + (row.settlement_amount || 0),
+        })
       })
-    })
+
+      // Process Cash Out - Expenses
+      expensesData?.forEach((row) => {
+        const date = formatBangkok(row.expense_date, 'yyyy-MM-dd')
+        const existing = dailyMap.get(date) || { cash_in: 0, cash_out: 0 }
+        dailyMap.set(date, {
+          ...existing,
+          cash_out: existing.cash_out + (row.amount || 0),
+        })
+      })
+
+      // Process Cash Out - Wallet Top-ups
+      topupData?.forEach((row) => {
+        const date = formatBangkok(row.date, 'yyyy-MM-dd')
+        const existing = dailyMap.get(date) || { cash_in: 0, cash_out: 0 }
+        dailyMap.set(date, {
+          ...existing,
+          cash_out: existing.cash_out + (row.amount || 0),
+        })
+      })
+    }
 
     // Convert to sorted array with running balance
     const sortedDates = Array.from(dailyMap.keys()).sort()
-    let runningBalance = 0 // TODO: Get opening balance from company bank account when available
+    let runningBalance = openingBalance
 
     const dailyData: CompanyCashflowRow[] = sortedDates.map((date) => {
       const day = dailyMap.get(date)!
@@ -144,7 +191,7 @@ export async function getCompanyCashflow(
         total_cash_in,
         total_cash_out,
         net_cashflow,
-        opening_balance: 0, // TODO: implement
+        opening_balance: openingBalance,
         closing_balance: runningBalance,
         daily_data: dailyData,
       },
@@ -163,10 +210,11 @@ export async function getCompanyCashflow(
  */
 export async function exportCompanyCashflow(
   startDate: Date,
-  endDate: Date
+  endDate: Date,
+  source: 'bank' | 'marketplace' = 'marketplace'
 ): Promise<{ success: boolean; csv?: string; filename?: string; error?: string }> {
   try {
-    const result = await getCompanyCashflow(startDate, endDate)
+    const result = await getCompanyCashflow(startDate, endDate, source)
 
     if (!result.success || !result.data) {
       return { success: false, error: result.error || 'ไม่สามารถโหลดข้อมูลได้' }
@@ -199,7 +247,7 @@ export async function exportCompanyCashflow(
     // Generate filename with Bangkok timezone timestamp
     const now = new Date()
     const timestamp = formatBangkok(now, 'yyyyMMdd-HHmmss')
-    const filename = `company-cashflow-${timestamp}.csv`
+    const filename = `company-cashflow-${source}-${timestamp}.csv`
 
     return {
       success: true,
