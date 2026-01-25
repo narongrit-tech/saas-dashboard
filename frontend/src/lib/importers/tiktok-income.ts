@@ -165,13 +165,13 @@ export function parseIncomeExcel(buffer: Buffer): {
 
   const workbook = XLSX.read(bufferCopy, {
     type: 'buffer',
+    cellDates: true,
     cellFormula: false,
     cellStyles: false,
-    bookVBA: false, // Skip VBA
-    bookImages: false, // Skip images
-    sheetRows: 0, // 0 = unlimited rows
-    cellDates: true,
     raw: false, // Keep as string to prevent precision loss
+    dense: false, // Force full range
+    // NOTE: NOT using sheetRows (would limit range)
+    // NOTE: NOT using bookVBA/bookImages (may cause range truncation)
   });
 
   console.log(`[Income Parser] Workbook loaded successfully`);
@@ -200,28 +200,40 @@ export function parseIncomeExcel(buffer: Buffer): {
   console.log(`[Income Parser] Worksheet loaded`);
   console.log(`[Income Parser] Original !ref: ${sheetRef}`);
 
-  // Force re-decode to ensure range is correct
+  // CRITICAL FIX: !ref may be incorrect for some TikTok files
+  // Manually scan worksheet object to find actual last row
+  let actualEndRow = 1; // Start from 1 (after header at 0)
+  let actualEndCol = 60; // Default to 60 columns (BI = 61st column, index 60)
+
   if (sheetRef) {
-    const testRange = XLSX.utils.decode_range(sheetRef);
-    console.log(`[Income Parser] Range validation: rows=${testRange.e.r + 1}, cols=${testRange.e.c + 1}`);
+    const declaredRange = XLSX.utils.decode_range(sheetRef);
+    actualEndCol = declaredRange.e.c;
+    console.log(`[Income Parser] Declared range: rows=${declaredRange.e.r + 1}, cols=${declaredRange.e.c + 1}`);
   }
 
-  if (!sheetRef) {
-    throw new Error('Worksheet has no range reference (!ref is missing)');
+  // Scan worksheet keys to find actual max row
+  const cellAddressPattern = /^([A-Z]+)(\d+)$/;
+  for (const key of Object.keys(worksheet)) {
+    if (key.startsWith('!')) continue; // Skip metadata keys
+    const match = key.match(cellAddressPattern);
+    if (match) {
+      const rowNum = parseInt(match[2], 10) - 1; // Convert to 0-indexed
+      if (rowNum > actualEndRow) {
+        actualEndRow = rowNum;
+      }
+    }
   }
 
-  const range = XLSX.utils.decode_range(sheetRef);
-  const endRow = range.e.r; // Last row index
-  const endCol = range.e.c; // Last column index
+  const endRow = actualEndRow;
+  const endCol = actualEndCol;
 
-  console.log(`[Income Parser] Decoded range: rows ${range.s.r} to ${endRow} (${endRow + 1} total), cols ${range.s.c} to ${endCol}`);
+  console.log(`[Income Parser] Actual scanned range: rows 0 to ${endRow} (${endRow + 1} total), cols 0 to ${endCol}`);
 
-  // CRITICAL CHECK: If endRow suspiciously small, abort!
+  // CRITICAL CHECK: If endRow suspiciously small after manual scan, log warning (but continue)
   if (endRow < 10) {
-    console.error(`[Income Parser] ERROR: endRow is only ${endRow}! Worksheet was truncated!`);
-    console.error(`[Income Parser] Buffer length: ${buffer.length} bytes`);
-    console.error(`[Income Parser] This indicates buffer was not fully read or XLSX truncated data`);
-    throw new Error(`Worksheet appears truncated (only ${endRow + 1} rows). Expected hundreds of rows. Check file upload and buffer handling.`);
+    console.warn(`[Income Parser] WARNING: endRow is only ${endRow}!`);
+    console.warn(`[Income Parser] Buffer length: ${buffer.length} bytes`);
+    console.warn(`[Income Parser] This may indicate an empty or header-only file`);
   }
 
   // Find header row by scanning first 30 rows
@@ -345,7 +357,7 @@ export function parseIncomeExcel(buffer: Buffer): {
 }
 
 /**
- * Upsert rows into settlement_transactions table
+ * Upsert rows into settlement_transactions table (BULK OPERATION)
  */
 export async function upsertIncomeRows(
   rows: NormalizedIncomeRow[],
@@ -358,58 +370,79 @@ export async function upsertIncomeRows(
   errors: string[];
 }> {
   const supabase = await createClient();
-  let insertedCount = 0;
-  let updatedCount = 0;
-  let errorCount = 0;
   const errors: string[] = [];
 
+  // Deduplicate rows by txn_id (keep last occurrence)
+  console.log(`[Income Upsert] Deduplicating ${rows.length} rows...`);
+  const uniqueMap = new Map<string, NormalizedIncomeRow>();
+  let duplicateCount = 0;
   for (const row of rows) {
-    try {
-      // Check if exists
-      const { data: existing } = await supabase
-        .from('settlement_transactions')
-        .select('id')
-        .eq('marketplace', 'tiktok')
-        .eq('txn_id', row.txn_id)
-        .eq('created_by', userId)
-        .single();
-
-      const dataToUpsert = {
-        marketplace: 'tiktok',
-        txn_id: row.txn_id,
-        order_id: row.order_id,
-        type: row.type,
-        currency: row.currency,
-        settled_time: row.settled_time,
-        settlement_amount: row.settlement_amount,
-        gross_revenue: row.gross_revenue,
-        fees_total: row.fees_total,
-        import_batch_id: batchId,
-        source: 'imported',
-        created_by: userId,
-      };
-
-      const { error } = await supabase
-        .from('settlement_transactions')
-        .upsert(dataToUpsert, {
-          onConflict: 'marketplace,txn_id,created_by',
-        });
-
-      if (error) {
-        errorCount++;
-        errors.push(`Transaction ${row.txn_id}: ${error.message}`);
-      } else {
-        if (existing) {
-          updatedCount++;
-        } else {
-          insertedCount++;
-        }
-      }
-    } catch (err) {
-      errorCount++;
-      errors.push(`Transaction ${row.txn_id}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    if (uniqueMap.has(row.txn_id)) {
+      duplicateCount++;
     }
+    uniqueMap.set(row.txn_id, row); // Overwrite with latest
+  }
+  const uniqueRows = Array.from(uniqueMap.values());
+  console.log(`[Income Upsert] After dedup: ${uniqueRows.length} unique rows (${duplicateCount} duplicates removed)`);
+
+  // Get existing transaction IDs for this user (single query)
+  console.log(`[Income Upsert] Checking existing transactions...`);
+  const txnIds = uniqueRows.map((r) => r.txn_id);
+  const { data: existingTxns } = await supabase
+    .from('settlement_transactions')
+    .select('txn_id')
+    .eq('marketplace', 'tiktok')
+    .eq('created_by', userId)
+    .in('txn_id', txnIds);
+
+  const existingSet = new Set((existingTxns || []).map((t) => t.txn_id));
+  const expectedInsertCount = uniqueRows.length - existingSet.size;
+  const expectedUpdateCount = existingSet.size;
+
+  console.log(`[Income Upsert] Existing: ${existingSet.size}, New: ${expectedInsertCount}`);
+
+  // Prepare bulk data
+  const dataToUpsert = uniqueRows.map((row) => ({
+    marketplace: 'tiktok',
+    txn_id: row.txn_id,
+    order_id: row.order_id,
+    type: row.type,
+    currency: row.currency,
+    settled_time: row.settled_time,
+    settlement_amount: row.settlement_amount,
+    gross_revenue: row.gross_revenue,
+    fees_total: row.fees_total,
+    import_batch_id: batchId,
+    source: 'imported',
+    created_by: userId,
+  }));
+
+  // Bulk upsert (single query for all rows)
+  console.log(`[Income Upsert] Bulk upserting ${uniqueRows.length} rows...`);
+  const { error, count } = await supabase
+    .from('settlement_transactions')
+    .upsert(dataToUpsert, {
+      onConflict: 'marketplace,txn_id,created_by',
+      count: 'exact',
+    });
+
+  if (error) {
+    console.error(`[Income Upsert] Bulk upsert failed:`, error);
+    errors.push(`Bulk upsert failed: ${error.message}`);
+    return {
+      insertedCount: 0,
+      updatedCount: 0,
+      errorCount: uniqueRows.length,
+      errors,
+    };
   }
 
-  return { insertedCount, updatedCount, errorCount, errors };
+  console.log(`[Income Upsert] Bulk upsert complete. Count: ${count}`);
+
+  return {
+    insertedCount: expectedInsertCount,
+    updatedCount: expectedUpdateCount,
+    errorCount: 0,
+    errors: [],
+  };
 }
