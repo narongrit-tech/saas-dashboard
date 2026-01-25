@@ -123,7 +123,16 @@ export function parseOnholdExcel(buffer: Buffer): {
   warnings: string[];
 } {
   const warnings: string[] = [];
-  const workbook = XLSX.read(buffer, { type: 'buffer', cellFormula: false, cellStyles: false });
+
+  // CRITICAL: sheetRows MUST be undefined or 0 to load ALL rows
+  const workbook = XLSX.read(buffer, {
+    type: 'buffer',
+    cellFormula: false,
+    cellStyles: false,
+    sheetRows: 0, // 0 = unlimited rows (default may be 2!)
+    cellDates: true,
+    raw: false, // Keep as string to prevent precision loss
+  });
 
   // Use first sheet
   const sheetName = workbook.SheetNames[0];
@@ -131,14 +140,23 @@ export function parseOnholdExcel(buffer: Buffer): {
     throw new Error('Excel file has no sheets');
   }
 
+  console.log(`[Onhold Parser] Sheet name: "${sheetName}"`);
+
   const worksheet = workbook.Sheets[sheetName];
 
   // Get sheet range
-  const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+  const sheetRef = worksheet['!ref'];
+  console.log(`[Onhold Parser] Sheet !ref: ${sheetRef}`);
+
+  if (!sheetRef) {
+    throw new Error('Worksheet has no range reference (!ref is missing)');
+  }
+
+  const range = XLSX.utils.decode_range(sheetRef);
   const endRow = range.e.r; // Last row index
   const endCol = range.e.c; // Last column index
 
-  console.log(`[Onhold Parser] Sheet range: ${range.s.r} to ${endRow} (${endRow + 1} rows total)`);
+  console.log(`[Onhold Parser] Decoded range: rows ${range.s.r} to ${endRow} (${endRow + 1} total), cols ${range.s.c} to ${endCol}`);
 
   // Find header row by scanning first 30 rows
   let headerRowIndex = -1;
