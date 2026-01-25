@@ -88,16 +88,15 @@ export async function getReconciliationSummary(
     // Get reconciliation stats
     const { data: matchedBankTxns } = await supabase
       .from('bank_reconciliations')
-      .select('bank_transaction_id, matched_amount')
-      .eq('matched_by', user.id)
+      .select('bank_transaction_id')
+      .eq('created_by', user.id)
       .in(
         'bank_transaction_id',
         bankTxns?.map((t) => t.id) || []
       );
 
     const matchedBankIds = new Set(matchedBankTxns?.map((r) => r.bank_transaction_id) || []);
-    const matchedAmount =
-      matchedBankTxns?.reduce((sum, r) => sum + Number(r.matched_amount || 0), 0) || 0;
+    const matchedAmount = 0; // Not tracking matched_amount in new schema
 
     const unmatchedBankTxns = bankTxns?.filter((t) => !matchedBankIds.has(t.id)) || [];
     const unmatchedBankAmount = unmatchedBankTxns.reduce(
@@ -107,10 +106,11 @@ export async function getReconciliationSummary(
 
     const { data: matchedInternal } = await supabase
       .from('bank_reconciliations')
-      .select('entity_type, entity_id')
-      .eq('matched_by', user.id);
+      .select('matched_type, matched_record_id')
+      .eq('created_by', user.id)
+      .not('matched_record_id', 'is', null); // Only count records with linked IDs
 
-    const matchedInternalIds = new Set(matchedInternal?.map((r) => r.entity_id) || []);
+    const matchedInternalIds = new Set(matchedInternal?.map((r) => r.matched_record_id) || []);
 
     const unmatchedSettlements = settlements?.filter((s) => !matchedInternalIds.has(s.id)) || [];
     const unmatchedExpenses = expenses?.filter((e) => !matchedInternalIds.has(e.id)) || [];
@@ -200,7 +200,7 @@ export async function getUnmatchedBankTransactions(
     const { data: matched } = await supabase
       .from('bank_reconciliations')
       .select('bank_transaction_id')
-      .eq('matched_by', user.id)
+      .eq('created_by', user.id)
       .in(
         'bank_transaction_id',
         bankTxns.map((t) => t.id)
@@ -259,15 +259,15 @@ export async function getUnmatchedInternalRecords(
       if (settlements) {
         const { data: matched } = await supabase
           .from('bank_reconciliations')
-          .select('entity_id')
-          .eq('matched_by', user.id)
-          .eq('entity_type', 'settlement')
+          .select('matched_record_id')
+          .eq('created_by', user.id)
+          .eq('matched_type', 'settlement')
           .in(
-            'entity_id',
+            'matched_record_id',
             settlements.map((s) => s.id)
           );
 
-        const matchedIds = new Set(matched?.map((r) => r.entity_id) || []);
+        const matchedIds = new Set(matched?.map((r) => r.matched_record_id) || []);
 
         records = settlements
           .filter((s) => !matchedIds.has(s.id))
@@ -291,15 +291,15 @@ export async function getUnmatchedInternalRecords(
       if (expenses) {
         const { data: matched } = await supabase
           .from('bank_reconciliations')
-          .select('entity_id')
-          .eq('matched_by', user.id)
-          .eq('entity_type', 'expense')
+          .select('matched_record_id')
+          .eq('created_by', user.id)
+          .eq('matched_type', 'expense')
           .in(
-            'entity_id',
+            'matched_record_id',
             expenses.map((e) => e.id)
           );
 
-        const matchedIds = new Set(matched?.map((r) => r.entity_id) || []);
+        const matchedIds = new Set(matched?.map((r) => r.matched_record_id) || []);
 
         records = expenses
           .filter((e) => !matchedIds.has(e.id))
@@ -324,15 +324,15 @@ export async function getUnmatchedInternalRecords(
       if (topups) {
         const { data: matched } = await supabase
           .from('bank_reconciliations')
-          .select('entity_id')
-          .eq('matched_by', user.id)
-          .eq('entity_type', 'wallet_topup')
+          .select('matched_record_id')
+          .eq('created_by', user.id)
+          .eq('matched_type', 'wallet_topup')
           .in(
-            'entity_id',
+            'matched_record_id',
             topups.map((t) => t.id)
           );
 
-        const matchedIds = new Set(matched?.map((r) => r.entity_id) || []);
+        const matchedIds = new Set(matched?.map((r) => r.matched_record_id) || []);
 
         records = topups
           .filter((t) => !matchedIds.has(t.id))
@@ -463,7 +463,7 @@ export async function getSuggestedMatches(
         .not(
           'id',
           'in',
-          `(SELECT entity_id FROM bank_reconciliations WHERE entity_type = 'settlement')`
+          `(SELECT matched_record_id FROM bank_reconciliations WHERE matched_type = 'settlement')`
         );
 
       settlements?.forEach((s) => {
@@ -483,33 +483,46 @@ export async function getSuggestedMatches(
       });
     }
 
-    // 2. Search unmatched expenses (if txnAmount < 0)
+    // 2. Search unmatched expenses (if txnAmount < 0 - bank withdrawal)
     if (txnAmount < 0) {
+      // Get already reconciled expense IDs
+      const { data: reconciledExpenses } = await supabase
+        .from('bank_reconciliations')
+        .select('matched_record_id')
+        .eq('created_by', user.id)
+        .eq('matched_type', 'expense')
+        .not('matched_record_id', 'is', null);
+
+      const reconciledIds = new Set(reconciledExpenses?.map((r) => r.matched_record_id) || []);
+
       const { data: expenses } = await supabase
         .from('expenses')
         .select('id, expense_date, category, description, amount')
         .eq('created_by', user.id)
         .gte('expense_date', startStr)
         .lte('expense_date', endStr)
-        .not(
-          'id',
-          'in',
-          `(SELECT entity_id FROM bank_reconciliations WHERE entity_type = 'expense')`
-        );
+        .order('expense_date', { ascending: false })
+        .limit(20);
 
       expenses?.forEach((e) => {
-        const amount = -Number(e.amount || 0); // Negative for cash out
-        const isExactMatch = Math.abs(amount - txnAmount) < 0.01;
-        const score = isExactMatch ? 100 : 80;
+        // Skip already reconciled expenses
+        if (reconciledIds.has(e.id)) return;
+
+        const expenseAmount = Number(e.amount || 0);
+        const bankAmount = Math.abs(txnAmount);
+        const isExactMatch = Math.abs(expenseAmount - bankAmount) < 0.01;
+        const score = isExactMatch ? 100 : 70; // 100 for exact, 70 for near date
 
         suggestions.push({
           entity_type: 'expense',
           entity_id: e.id,
           date: e.expense_date,
           description: `${e.category} - ${e.description}`,
-          amount: Number(e.amount || 0), // Keep as positive for display
+          amount: expenseAmount, // Keep as positive for display
           match_score: score,
-          match_reason: isExactMatch ? 'Exact amount match' : 'Similar amount',
+          match_reason: isExactMatch
+            ? 'Exact amount + date match'
+            : `Similar date (${e.expense_date})`,
         });
       });
     }
@@ -526,7 +539,7 @@ export async function getSuggestedMatches(
         .not(
           'id',
           'in',
-          `(SELECT entity_id FROM bank_reconciliations WHERE entity_type = 'wallet_topup')`
+          `(SELECT matched_record_id FROM bank_reconciliations WHERE matched_type = 'wallet_topup')`
         );
 
       topups?.forEach((t) => {
@@ -606,12 +619,14 @@ export async function createManualMatch(
     // Create reconciliation record
     const { error: insertError } = await supabase.from('bank_reconciliations').insert({
       bank_transaction_id: bankTransactionId,
-      entity_type: entityType,
-      entity_id: entityId,
-      matched_amount: matchedAmount,
-      matching_rule: 'manual',
-      matched_by: user.id,
+      matched_type: entityType,
+      matched_record_id: entityId,
+      created_by: user.id,
       notes,
+      metadata: {
+        matched_amount: matchedAmount,
+        matching_rule: 'manual',
+      },
     });
 
     if (insertError) {

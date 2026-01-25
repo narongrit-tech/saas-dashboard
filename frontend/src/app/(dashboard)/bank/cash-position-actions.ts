@@ -67,11 +67,11 @@ export async function getCashPosition(params: {
     // ========================================================================
     // 1. Fetch opening balance (latest on or before start date)
     // ========================================================================
-    const openingBalanceResponse = await getOpeningBalance(bankAccountId, startDate);
+    const openingBalanceResponse = await getOpeningBalance(bankAccountId);
     const openingBalanceRow: OpeningBalanceRow = openingBalanceResponse.data
       ? {
           opening_balance: openingBalanceResponse.data.opening_balance,
-          effective_date: openingBalanceResponse.data.effective_date,
+          effective_date: openingBalanceResponse.data.as_of_date,
         }
       : null;
 

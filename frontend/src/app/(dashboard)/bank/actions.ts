@@ -146,10 +146,10 @@ export async function getBankDailySummary(
 
     // Get opening balance from bank_opening_balances table
     // Find the latest opening balance on or before the start date
-    const openingBalanceResponse = await getOpeningBalance(bankAccountId, startStr);
+    const openingBalanceResponse = await getOpeningBalance(bankAccountId);
     const openingBalanceRecord = openingBalanceResponse.data;
     const openingBalance = openingBalanceRecord ? openingBalanceRecord.opening_balance : 0;
-    const openingBalanceDate = openingBalanceRecord ? openingBalanceRecord.effective_date : null;
+    const openingBalanceDate = openingBalanceRecord ? openingBalanceRecord.as_of_date : null;
 
     if (!transactions || transactions.length === 0) {
       return {
@@ -341,10 +341,10 @@ export async function exportBankTransactions(
     }
 
     // Get opening balance
-    const openingBalanceResponse = await getOpeningBalance(bankAccountId, startStr);
+    const openingBalanceResponse = await getOpeningBalance(bankAccountId);
     const openingBalanceRecord = openingBalanceResponse.data;
     const openingBalance = openingBalanceRecord ? openingBalanceRecord.opening_balance : 0;
-    const openingBalanceDate = openingBalanceRecord ? openingBalanceRecord.effective_date : null;
+    const openingBalanceDate = openingBalanceRecord ? openingBalanceRecord.as_of_date : null;
 
     // Generate CSV with running balance
     const headers = [

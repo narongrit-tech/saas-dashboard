@@ -65,9 +65,9 @@ export default function SetOpeningBalanceDialog({
       const response = await getOpeningBalance(bankAccountId)
       if (response.success && response.data) {
         // Found existing opening balance
-        setEffectiveDate(response.data.effective_date)
+        setEffectiveDate(response.data.as_of_date)
         setOpeningBalance(String(response.data.opening_balance))
-        setNote(response.data.note || '')
+        setNote('') // Note field not in BankOpeningBalance type
       }
     } catch (error) {
       console.error('Load existing opening balance error:', error)
@@ -108,8 +108,7 @@ export default function SetOpeningBalanceDialog({
       const response = await upsertOpeningBalance(
         bankAccountId,
         effectiveDate,
-        balance,
-        note || undefined
+        balance
       )
 
       if (response.success) {

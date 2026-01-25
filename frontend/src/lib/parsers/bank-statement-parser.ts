@@ -69,7 +69,7 @@ export function parseBankStatementAuto(
     // CRITICAL: Use header detection to handle files with metadata rows
     // (e.g., KBANK files have 3 meta rows before actual header)
     // ========================================================================
-    const detection = detectHeaderRow(jsonData, 30);
+    const detection = detectHeaderRow(jsonData as any[][], 30);
     const headerRowIndex = detection.headerRowIndex ?? 0;
     const dataStartRowIndex = detection.dataStartRowIndex ?? 1;
     const headerRow = jsonData[headerRowIndex] as string[];

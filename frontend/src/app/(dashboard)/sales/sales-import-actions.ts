@@ -658,7 +658,6 @@ export async function importSalesChunk(
         return {
           success: false,
           inserted: 0,
-          skipped: 0,
           error: `Insert failed: ${insertError.message}`,
         }
       }
@@ -670,7 +669,6 @@ export async function importSalesChunk(
     return {
       success: true,
       inserted: insertedCount,
-      skipped: skippedCount,
     }
   } catch (error: unknown) {
     console.error('Import chunk error:', error)

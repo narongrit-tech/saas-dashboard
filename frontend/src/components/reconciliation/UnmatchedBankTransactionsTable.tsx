@@ -6,7 +6,7 @@ import { UnmatchedBankTransaction } from '@/types/bank'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/hooks/use-toast'
-import ManualMatchDialog from './ManualMatchDialog'
+import { ManualMatchModal } from './ManualMatchModal'
 
 interface UnmatchedBankTransactionsTableProps {
   startDate: Date
@@ -115,15 +115,12 @@ export default function UnmatchedBankTransactionsTable({
         </div>
       )}
 
-      {/* Manual Match Dialog */}
+      {/* Manual Match Modal */}
       {selectedTxn && (
-        <ManualMatchDialog
+        <ManualMatchModal
+          bankTransaction={selectedTxn}
           open={showMatchDialog}
           onOpenChange={setShowMatchDialog}
-          bankTransactionId={selectedTxn.id}
-          bankTxnDescription={selectedTxn.description || 'N/A'}
-          bankTxnAmount={Number(selectedTxn.deposit || 0) - Number(selectedTxn.withdrawal || 0)}
-          bankTxnDate={selectedTxn.txn_date}
           onSuccess={() => {
             loadUnmatched() // Refresh unmatched list
           }}
