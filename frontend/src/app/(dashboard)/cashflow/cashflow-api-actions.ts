@@ -225,7 +225,7 @@ export async function getCashflowTransactions(
       .from('unsettled_transactions')
       .select('id, txn_id, type, estimated_settle_time, estimated_settlement_amount, currency, status, marketplace')
       .eq('created_by', user.id)
-      .eq('status', 'unsettled')
+      .neq('status', 'settled') // Show all except settled (includes unsettled, pending, null)
       .gte(dateField, req.startDate)
       .lte(dateField, req.endDate);
 
@@ -233,7 +233,7 @@ export async function getCashflowTransactions(
       .from('unsettled_transactions')
       .select('id', { count: 'exact', head: true })
       .eq('created_by', user.id)
-      .eq('status', 'unsettled')
+      .neq('status', 'settled') // Show all except settled
       .gte(dateField, req.startDate)
       .lte(dateField, req.endDate);
   } else if (req.type === 'actual') {
@@ -331,6 +331,110 @@ export async function getCashflowTransactions(
         db_ms: dbTime,
       },
     }),
+  };
+}
+
+/**
+ * Get daily cashflow summary table (PRIMARY VIEW - answers "เงินจะเข้าแต่ละวันเท่าไหร่?")
+ */
+export async function getDailyCashflowSummary(
+  startDate: Date,
+  endDate: Date,
+  page: number = 1,
+  pageSize: number = 14
+): Promise<{
+  rows: Array<{
+    date: string;
+    forecast_sum: number;
+    actual_sum: number;
+    gap: number;
+    status: 'actual_over' | 'pending' | 'actual_only' | 'forecast_only';
+  }>;
+  pagination: {
+    page: number;
+    pageSize: number;
+    totalCount: number;
+    totalPages: number;
+  };
+}> {
+  const startTime = Date.now();
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    throw new Error('Unauthorized');
+  }
+
+  const offset = (page - 1) * pageSize;
+
+  // Count total rows
+  const { count } = await supabase
+    .from('cashflow_daily_summary')
+    .select('id', { count: 'exact', head: true })
+    .eq('created_by', user.id)
+    .gte('date', startDate.toISOString().split('T')[0])
+    .lte('date', endDate.toISOString().split('T')[0]);
+
+  // Fetch paginated data
+  const { data, error } = await supabase
+    .from('cashflow_daily_summary')
+    .select('date, forecast_sum, actual_sum, gap_sum')
+    .eq('created_by', user.id)
+    .gte('date', startDate.toISOString().split('T')[0])
+    .lte('date', endDate.toISOString().split('T')[0])
+    .order('date', { ascending: true })
+    .range(offset, offset + pageSize - 1);
+
+  if (error) {
+    console.error('[Daily Summary Table] Query failed:', error);
+    throw new Error('Failed to load daily summary');
+  }
+
+  // Compute status in frontend
+  const rows = (data || []).map((row) => {
+    const forecast = Number(row.forecast_sum);
+    const actual = Number(row.actual_sum);
+    const gap = Number(row.gap_sum);
+
+    let status: 'actual_over' | 'pending' | 'actual_only' | 'forecast_only';
+
+    if (actual > forecast) {
+      status = 'actual_over'; // green
+    } else if (forecast > actual && actual > 0) {
+      status = 'pending'; // yellow
+    } else if (actual > 0 && forecast === 0) {
+      status = 'actual_only'; // blue
+    } else {
+      status = 'forecast_only'; // gray
+    }
+
+    return {
+      date: row.date,
+      forecast_sum: forecast,
+      actual_sum: actual,
+      gap,
+      status,
+    };
+  });
+
+  const totalCount = count || 0;
+  const totalPages = Math.ceil(totalCount / pageSize);
+
+  if (IS_DEV) {
+    console.log(`[Daily Summary Table] Loaded ${rows.length} rows in ${Date.now() - startTime}ms`);
+  }
+
+  return {
+    rows,
+    pagination: {
+      page,
+      pageSize,
+      totalCount,
+      totalPages,
+    },
   };
 }
 

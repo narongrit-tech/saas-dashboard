@@ -1,27 +1,36 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { DateRangeFilter } from '@/components/shared/DateRangeFilter';
+import { SingleDateRangePicker, type DateRangeResult } from '@/components/shared/SingleDateRangePicker';
 import { ImportOnholdDialog } from '@/components/cashflow/ImportOnholdDialog';
 import { ImportIncomeDialog } from '@/components/cashflow/ImportIncomeDialog';
-import { TrendingUp, DollarSign, AlertCircle, Upload, CheckCircle2, XCircle } from 'lucide-react';
-import { type DateRangeResult } from '@/lib/date-range';
+import {
+  TrendingUp,
+  DollarSign,
+  AlertCircle,
+  Upload,
+  CheckCircle2,
+  XCircle,
+  ChevronLeft,
+  ChevronRight,
+} from 'lucide-react';
 import { toZonedTime } from 'date-fns-tz';
 import {
-  getUnsettledSummary,
-  getUnsettledTransactions,
-  getSettledSummary,
-  getSettledTransactions,
-  getOverdueForecast,
-  getSettledWithoutForecast,
-  getNext7DaysForecast,
-  getDailyReconciliation,
-  type DailyReconciliationRow,
-} from './actions';
+  getCashflowSummary,
+  getDailyCashflowSummary,
+  getCashflowTransactions,
+  rebuildCashflowSummary,
+} from './cashflow-api-actions';
+import type {
+  CashflowSummary,
+  TransactionType,
+  TransactionsResponse,
+  TransactionRow,
+} from '@/types/cashflow-api';
 
 function formatCurrency(amount: number): string {
   return amount.toLocaleString('th-TH', {
@@ -30,9 +39,17 @@ function formatCurrency(amount: number): string {
   });
 }
 
+function formatDate(dateStr: string): string {
+  const date = new Date(dateStr);
+  return date.toLocaleDateString('th-TH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
 function formatDateTime(dateStr: string | null): string {
   if (!dateStr) return '-';
-  // Use Bangkok timezone for date formatting
   const bangkokDate = toZonedTime(new Date(dateStr), 'Asia/Bangkok');
   return bangkokDate.toLocaleString('th-TH', {
     year: 'numeric',
@@ -43,188 +60,194 @@ function formatDateTime(dateStr: string | null): string {
   });
 }
 
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '-';
-  // Use Bangkok timezone for date formatting
-  const bangkokDate = toZonedTime(new Date(dateStr), 'Asia/Bangkok');
-  return bangkokDate.toLocaleDateString('th-TH', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  });
-}
-
-interface UnsettledSummary {
-  pending_amount: number;
-  transaction_count: number;
-}
-
-interface SettledSummary {
-  settled_amount: number;
-  transaction_count: number;
-}
-
-interface UnsettledTransaction {
-  id: string;
-  txn_id: string;
-  related_order_id: string | null;
-  estimated_settle_time: string | null;
-  estimated_settlement_amount: number | null;
-  unsettled_reason: string | null;
-  last_seen_at: string;
-  status: string;
-  currency: string;
-}
-
-interface SettledTransaction {
-  id: string;
-  txn_id: string;
-  order_id: string | null;
-  settled_time: string | null;
-  settlement_amount: number;
-  gross_revenue: number | null;
-  type: string | null;
-  currency: string;
-}
-
-interface ForecastDay {
-  date: string;
-  expected_amount: number;
-  transaction_count: number;
-}
-
-type ViewMode = 'summary' | 'daily'
-
-export default function CashflowPage() {
-  const [viewMode, setViewMode] = useState<ViewMode>('summary');
+export default function CashflowPageV3() {
+  // Date range
   const [dateRange, setDateRange] = useState<DateRangeResult | null>(null);
-  const [unsettledSummary, setUnsettledSummary] = useState<UnsettledSummary | null>(null);
-  const [settledSummary, setSettledSummary] = useState<SettledSummary | null>(null);
-  const [unsettledTransactions, setUnsettledTransactions] = useState<UnsettledTransaction[]>([]);
-  const [settledTransactions, setSettledTransactions] = useState<SettledTransaction[]>([]);
-  const [overdueTransactions, setOverdueTransactions] = useState<UnsettledTransaction[]>([]);
-  const [settledWithoutForecast, setSettledWithoutForecast] = useState<SettledTransaction[]>([]);
-  const [forecast, setForecast] = useState<ForecastDay[]>([]);
-  const [dailyReconciliation, setDailyReconciliation] = useState<DailyReconciliationRow[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+
+  // Summary cards (fast)
+  const [summary, setSummary] = useState<CashflowSummary | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+
+  // Daily summary table (PRIMARY CONTENT)
+  const [dailySummary, setDailySummary] = useState<any>(null);
+  const [dailySummaryLoading, setDailySummaryLoading] = useState(false);
+  const [dailySummaryError, setDailySummaryError] = useState<string | null>(null);
+  const [dailyPage, setDailyPage] = useState(1);
+
+  // Transaction tabs (SECONDARY - lazy load)
+  const [activeTab, setActiveTab] = useState<TransactionType | null>(null);
+  const [transactions, setTransactions] = useState<TransactionsResponse | null>(null);
+  const [transactionsLoading, setTransactionsLoading] = useState(false);
+  const [transactionsError, setTransactionsError] = useState<string | null>(null);
+  const [transactionsPage, setTransactionsPage] = useState(1);
+
+  // Dialogs
   const [importOnholdDialogOpen, setImportOnholdDialogOpen] = useState(false);
   const [importIncomeDialogOpen, setImportIncomeDialogOpen] = useState(false);
 
-  useEffect(() => {
-    if (dateRange) {
-      fetchData();
-    }
-  }, [dateRange, viewMode]);
+  // Debounce timer
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  useEffect(() => {
-    fetchNext7DaysForecast();
-    fetchOverdue();
-  }, []);
-
-  const fetchData = async () => {
+  // ============================================
+  // FETCH SUMMARY CARDS
+  // ============================================
+  const fetchSummary = useCallback(async () => {
     if (!dateRange) return;
 
     try {
-      setLoading(true);
-      setError(null);
+      setSummaryLoading(true);
+      setSummaryError(null);
 
-      if (viewMode === 'summary') {
-        const [
-          unsettledSummaryResult,
-          settledSummaryResult,
-          unsettledTxnsResult,
-          settledTxnsResult,
-          settledWithoutForecastResult,
-        ] = await Promise.all([
-          getUnsettledSummary(dateRange.startDate, dateRange.endDate),
-          getSettledSummary(dateRange.startDate, dateRange.endDate),
-          getUnsettledTransactions(dateRange.startDate, dateRange.endDate),
-          getSettledTransactions(dateRange.startDate, dateRange.endDate),
-          getSettledWithoutForecast(dateRange.startDate, dateRange.endDate),
-        ]);
+      const result = await getCashflowSummary(dateRange.startDate, dateRange.endDate);
+      setSummary(result);
 
-        if (!unsettledSummaryResult.success) {
-          setError(unsettledSummaryResult.error || 'ไม่สามารถโหลดข้อมูล Forecast ได้');
-          return;
-        }
-
-        if (!settledSummaryResult.success) {
-          setError(settledSummaryResult.error || 'ไม่สามารถโหลดข้อมูล Settled ได้');
-          return;
-        }
-
-        setUnsettledSummary(
-          unsettledSummaryResult.data || { pending_amount: 0, transaction_count: 0 }
-        );
-        setSettledSummary(settledSummaryResult.data || { settled_amount: 0, transaction_count: 0 });
-        setUnsettledTransactions(unsettledTxnsResult.data || []);
-        setSettledTransactions(settledTxnsResult.data || []);
-        setSettledWithoutForecast(settledWithoutForecastResult.data || []);
-      } else {
-        // Daily view
-        const dailyResult = await getDailyReconciliation(dateRange.startDate, dateRange.endDate);
-
-        if (!dailyResult.success) {
-          setError(dailyResult.error || 'ไม่สามารถโหลดข้อมูล Daily Reconciliation ได้');
-          return;
-        }
-
-        setDailyReconciliation(dailyResult.data || []);
+      if (result._timing) {
+        console.log(`[Summary Cards] ${result._timing.total_ms}ms`);
       }
-    } catch (err) {
-      console.error('Error fetching cashflow data:', err);
-      setError('เกิดข้อผิดพลาดในการโหลดข้อมูล');
+    } catch (err: any) {
+      console.error('Error fetching summary:', err);
+      setSummaryError('ไม่สามารถโหลดสรุปข้อมูลได้');
     } finally {
-      setLoading(false);
+      setSummaryLoading(false);
     }
-  };
+  }, [dateRange]);
 
-  const fetchNext7DaysForecast = async () => {
+  // ============================================
+  // FETCH DAILY SUMMARY TABLE (PRIMARY)
+  // ============================================
+  const fetchDailySummary = useCallback(async () => {
+    if (!dateRange) return;
+
     try {
-      const result = await getNext7DaysForecast();
-      if (result.success && result.data) {
-        setForecast(result.data);
-      }
-    } catch (err) {
-      console.error('Error fetching forecast:', err);
-    }
-  };
+      setDailySummaryLoading(true);
+      setDailySummaryError(null);
 
-  const fetchOverdue = async () => {
+      const result = await getDailyCashflowSummary(
+        dateRange.startDate,
+        dateRange.endDate,
+        dailyPage,
+        14 // 14 rows per page
+      );
+
+      setDailySummary(result);
+    } catch (err: any) {
+      console.error('Error fetching daily summary:', err);
+      setDailySummaryError('ไม่สามารถโหลดตารางรายวันได้');
+    } finally {
+      setDailySummaryLoading(false);
+    }
+  }, [dateRange, dailyPage]);
+
+  // ============================================
+  // FETCH TRANSACTIONS (SECONDARY - lazy)
+  // ============================================
+  const fetchTransactions = useCallback(async () => {
+    if (!dateRange || !activeTab) return;
+
     try {
-      const result = await getOverdueForecast();
-      if (result.success && result.data) {
-        setOverdueTransactions(result.data);
-      }
-    } catch (err) {
-      console.error('Error fetching overdue:', err);
-    }
-  };
+      setTransactionsLoading(true);
+      setTransactionsError(null);
 
-  const handleImportSuccess = () => {
+      const result = await getCashflowTransactions({
+        type: activeTab,
+        startDate: dateRange.startDate.toISOString().split('T')[0],
+        endDate: dateRange.endDate.toISOString().split('T')[0],
+        page: transactionsPage,
+        pageSize: 50,
+        sortBy: 'date',
+        sortOrder: 'desc',
+      });
+
+      setTransactions(result);
+    } catch (err: any) {
+      console.error('Error fetching transactions:', err);
+      setTransactionsError('ไม่สามารถโหลดรายการได้');
+    } finally {
+      setTransactionsLoading(false);
+    }
+  }, [dateRange, activeTab, transactionsPage]);
+
+  // ============================================
+  // EFFECTS
+  // ============================================
+
+  // Fetch summary + daily table when date changes (debounced 300ms)
+  useEffect(() => {
+    if (!dateRange) return;
+
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    debounceTimerRef.current = setTimeout(() => {
+      fetchSummary();
+      fetchDailySummary();
+    }, 300);
+
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, [fetchSummary, fetchDailySummary]);
+
+  // Fetch transactions ONLY when tab clicked
+  useEffect(() => {
+    if (activeTab) {
+      fetchTransactions();
+    }
+  }, [fetchTransactions]);
+
+  // ============================================
+  // HANDLERS
+  // ============================================
+
+  const handleImportSuccess = async () => {
     setImportOnholdDialogOpen(false);
     setImportIncomeDialogOpen(false);
+
     if (dateRange) {
-      fetchData();
+      try {
+        await rebuildCashflowSummary({
+          startDate: dateRange.startDate.toISOString().split('T')[0],
+          endDate: dateRange.endDate.toISOString().split('T')[0],
+        });
+        console.log('[Cashflow] Summary rebuilt');
+      } catch (err) {
+        console.error('[Cashflow] Failed to rebuild:', err);
+      }
+
+      fetchSummary();
+      fetchDailySummary();
+      if (activeTab) {
+        fetchTransactions();
+      }
     }
-    fetchNext7DaysForecast();
-    fetchOverdue();
   };
 
-  const gap =
-    unsettledSummary && settledSummary
-      ? unsettledSummary.pending_amount - settledSummary.settled_amount
-      : 0;
+  const handleTabChange = (tab: string) => {
+    setActiveTab(tab as TransactionType);
+    setTransactionsPage(1);
+  };
+
+  const handleDailyPageChange = (newPage: number) => {
+    setDailyPage(newPage);
+  };
+
+  const handleTransactionsPageChange = (newPage: number) => {
+    setTransactionsPage(newPage);
+  };
+
+  const gap = summary ? summary.gap_total : 0;
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex justify-between items-start">
         <div>
           <h1 className="text-3xl font-bold">Cashflow Forecast & Actual</h1>
-          <p className="text-muted-foreground">
-            ติดตามการคาดการณ์และเงินที่ได้รับจริง (Forecast vs Actual)
-          </p>
+          <p className="text-muted-foreground">เงินจะเข้าแต่ละวันเท่าไหร่?</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setImportOnholdDialogOpen(true)}>
@@ -238,427 +261,307 @@ export default function CashflowPage() {
         </div>
       </div>
 
-      {/* Date Range Filter + View Mode Toggle */}
-      <div className="flex items-center gap-4">
-        <DateRangeFilter defaultPreset="last7days" onChange={setDateRange} />
-        <div className="flex items-center gap-2 ml-auto">
-          <Button
-            variant={viewMode === 'summary' ? 'default' : 'outline'}
-            onClick={() => setViewMode('summary')}
-            size="sm"
-          >
-            Summary
-          </Button>
-          <Button
-            variant={viewMode === 'daily' ? 'default' : 'outline'}
-            onClick={() => setViewMode('daily')}
-            size="sm"
-          >
-            Daily
-          </Button>
-        </div>
-      </div>
+      {/* Single Date Range Picker */}
+      <SingleDateRangePicker onChange={setDateRange} />
 
-      {/* Next 7 Days Forecast (Always visible) */}
-      {forecast.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>คาดการณ์ 7 วันถัดไป</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {forecast.map((day) => (
-                <div
-                  key={day.date}
-                  className="flex justify-between items-center py-2 border-b last:border-0"
-                >
-                  <div>
-                    <div className="font-medium">{formatDate(day.date)}</div>
-                    <div className="text-sm text-muted-foreground">
-                      {day.transaction_count} รายการ
-                    </div>
-                  </div>
-                  <div className="text-lg font-semibold text-green-600">
-                    ฿{formatCurrency(day.expected_amount)}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Error State */}
-      {error && (
+      {/* Summary Cards */}
+      {summaryError && (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>{summaryError}</AlertDescription>
         </Alert>
       )}
 
-      {/* Loading State */}
-      {loading && (
-        <div className="grid gap-4 md:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Card key={i}>
+      {summaryLoading ? (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {[1, 2, 3, 4].map((i) => (
+            <Card key={i} className="animate-pulse">
               <CardHeader>
-                <div className="h-4 w-32 animate-pulse rounded bg-gray-200" />
+                <div className="h-4 bg-gray-200 rounded w-1/2"></div>
               </CardHeader>
               <CardContent>
-                <div className="h-8 w-40 animate-pulse rounded bg-gray-200" />
+                <div className="h-8 bg-gray-200 rounded"></div>
               </CardContent>
             </Card>
           ))}
         </div>
-      )}
-
-      {/* Summary Cards: Forecast vs Actual (Summary View Only) */}
-      {!loading && viewMode === 'summary' && unsettledSummary && settledSummary && dateRange && (
-        <div className="grid gap-4 md:grid-cols-3">
-          {/* Forecast (Pending to Settle) */}
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Forecast (คาดการณ์)</CardTitle>
-              <div className="rounded-lg bg-yellow-50 p-2 text-yellow-600">
-                <DollarSign className="h-4 w-4" />
-              </div>
+              <CardTitle className="text-sm font-medium">Forecast Total</CardTitle>
+              <TrendingUp className="h-4 w-4 text-blue-600" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-yellow-600">
-                ฿{formatCurrency(unsettledSummary.pending_amount)}
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                {unsettledSummary.transaction_count} รายการรอ settle
-              </p>
+              <div className="text-2xl font-bold">฿{formatCurrency(summary?.forecast_total || 0)}</div>
+              <p className="text-xs text-muted-foreground">{summary?.forecast_count || 0} รายการ</p>
             </CardContent>
           </Card>
 
-          {/* Actual (Settled) */}
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Actual (ที่ได้รับจริง)</CardTitle>
-              <div className="rounded-lg bg-green-50 p-2 text-green-600">
-                <CheckCircle2 className="h-4 w-4" />
-              </div>
+              <CardTitle className="text-sm font-medium">Actual Total</CardTitle>
+              <DollarSign className="h-4 w-4 text-green-600" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-green-600">
-                ฿{formatCurrency(settledSummary.settled_amount)}
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                {settledSummary.transaction_count} รายการที่ settled แล้ว
-              </p>
+              <div className="text-2xl font-bold">฿{formatCurrency(summary?.actual_total || 0)}</div>
+              <p className="text-xs text-muted-foreground">{summary?.actual_count || 0} รายการ</p>
             </CardContent>
           </Card>
 
-          {/* Gap (Forecast - Actual) */}
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Gap (ส่วนต่าง)</CardTitle>
-              <div
-                className={`rounded-lg p-2 ${
-                  gap >= 0
-                    ? 'bg-blue-50 text-blue-600'
-                    : 'bg-red-50 text-red-600'
-                }`}
-              >
-                <TrendingUp className="h-4 w-4" />
-              </div>
+              <CardTitle className="text-sm font-medium">Gap</CardTitle>
+              {gap >= 0 ? (
+                <CheckCircle2 className="h-4 w-4 text-green-600" />
+              ) : (
+                <XCircle className="h-4 w-4 text-red-600" />
+              )}
             </CardHeader>
             <CardContent>
-              <div
-                className={`text-2xl font-bold ${
-                  gap >= 0 ? 'text-blue-600' : 'text-red-600'
-                }`}
-              >
+              <div className={`text-2xl font-bold ${gap >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                 ฿{formatCurrency(Math.abs(gap))}
               </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                {gap >= 0 ? 'คาดการณ์สูงกว่า' : 'ได้รับมากกว่าคาดการณ์'}
+              <p className="text-xs text-muted-foreground">
+                {gap >= 0 ? 'Actual > Forecast' : 'Actual < Forecast'}
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Exceptions</CardTitle>
+              <AlertCircle className="h-4 w-4 text-orange-600" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{summary?.exceptions_count || 0}</div>
+              <p className="text-xs text-muted-foreground">
+                Overdue: {summary?.overdue_count || 0}, Unmatched: {summary?.forecast_only_count || 0}
               </p>
             </CardContent>
           </Card>
         </div>
       )}
 
-      {/* Daily Reconciliation View */}
-      {!loading && viewMode === 'daily' && dateRange && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Daily Reconciliation (Forecast vs Actual)</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {dailyReconciliation.length === 0 ? (
-              <p className="text-center text-muted-foreground py-8">
-                ไม่พบข้อมูลในช่วงเวลาที่เลือก
-              </p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="border-b bg-muted/50">
-                    <tr className="text-left">
-                      <th className="py-3 px-4 font-medium">Date</th>
-                      <th className="py-3 px-4 font-medium text-right">Forecast Amount</th>
-                      <th className="py-3 px-4 font-medium text-center">Count</th>
-                      <th className="py-3 px-4 font-medium text-right">Actual Amount</th>
-                      <th className="py-3 px-4 font-medium text-center">Count</th>
-                      <th className="py-3 px-4 font-medium text-right">Gap</th>
-                      <th className="py-3 px-4 font-medium">Status</th>
+      {/* PRIMARY SECTION: Daily Cash In Summary */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Daily Cash In Summary (Forecast vs Actual)</CardTitle>
+          <p className="text-sm text-muted-foreground">เงินจะเข้าแต่ละวันเท่าไหร่? (Timeline view)</p>
+        </CardHeader>
+        <CardContent>
+          {dailySummaryError && (
+            <Alert variant="destructive" className="mb-4">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{dailySummaryError}</AlertDescription>
+            </Alert>
+          )}
+
+          {dailySummaryLoading ? (
+            <div className="flex justify-center py-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+            </div>
+          ) : dailySummary && dailySummary.rows.length > 0 ? (
+            <>
+              <div className="border rounded-lg overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
+                        Forecast
+                      </th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actual</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Gap</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                     </tr>
                   </thead>
-                  <tbody>
-                    {dailyReconciliation.map((row) => (
-                      <tr key={row.date} className="border-b hover:bg-muted/30">
-                        <td className="py-3 px-4 font-medium">{formatDate(row.date)}</td>
-                        <td className="py-3 px-4 text-right font-mono text-yellow-600">
-                          {row.forecast_amount > 0 ? `฿${formatCurrency(row.forecast_amount)}` : '-'}
-                        </td>
-                        <td className="py-3 px-4 text-center text-muted-foreground">
-                          {row.forecast_count > 0 ? row.forecast_count : '-'}
-                        </td>
-                        <td className="py-3 px-4 text-right font-mono text-green-600">
-                          {row.actual_amount > 0 ? `฿${formatCurrency(row.actual_amount)}` : '-'}
-                        </td>
-                        <td className="py-3 px-4 text-center text-muted-foreground">
-                          {row.actual_count > 0 ? row.actual_count : '-'}
-                        </td>
-                        <td
-                          className={`py-3 px-4 text-right font-mono font-semibold ${
-                            row.gap > 0
-                              ? 'text-green-600'
-                              : row.gap < 0
-                              ? 'text-red-600'
-                              : 'text-muted-foreground'
-                          }`}
-                        >
-                          {row.gap !== 0 ? `฿${formatCurrency(Math.abs(row.gap))}` : '-'}
-                          {row.gap > 0 && ' ↑'}
-                          {row.gap < 0 && ' ↓'}
-                        </td>
-                        <td className="py-3 px-4">
-                          <span
-                            className={`px-2 py-1 rounded-full text-xs ${
-                              row.status === 'matched'
-                                ? 'bg-green-100 text-green-700'
-                                : row.status === 'overdue'
-                                ? 'bg-red-100 text-red-700'
-                                : row.status === 'forecast-only'
-                                ? 'bg-yellow-100 text-yellow-700'
-                                : 'bg-orange-100 text-orange-700'
+                  <tbody className="divide-y divide-gray-200">
+                    {dailySummary.rows.map((row: any) => {
+                      const statusConfig = {
+                        actual_over: { label: 'Actual > Forecast', color: 'text-green-600 bg-green-50' },
+                        pending: { label: 'Pending', color: 'text-yellow-600 bg-yellow-50' },
+                        actual_only: { label: 'Actual only', color: 'text-blue-600 bg-blue-50' },
+                        forecast_only: { label: 'Forecast only', color: 'text-gray-600 bg-gray-50' },
+                      };
+
+                      const status = statusConfig[row.status];
+
+                      return (
+                        <tr key={row.date} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 text-sm font-medium">{formatDate(row.date)}</td>
+                          <td className="px-4 py-3 text-sm text-right">
+                            ฿{formatCurrency(row.forecast_sum)}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-right font-semibold">
+                            ฿{formatCurrency(row.actual_sum)}
+                          </td>
+                          <td
+                            className={`px-4 py-3 text-sm text-right font-semibold ${
+                              row.gap >= 0 ? 'text-green-600' : 'text-red-600'
                             }`}
                           >
-                            {row.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                            {row.gap >= 0 ? '+' : ''}฿{formatCurrency(row.gap)}
+                          </td>
+                          <td className="px-4 py-3 text-sm">
+                            <span
+                              className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${status.color}`}
+                            >
+                              {status.label}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
+
+              {/* Pagination */}
+              <div className="flex items-center justify-between mt-4">
+                <div className="text-sm text-muted-foreground">
+                  Showing {(dailyPage - 1) * 14 + 1}-
+                  {Math.min(dailyPage * 14, dailySummary.pagination.totalCount)} of{' '}
+                  {dailySummary.pagination.totalCount} days
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleDailyPageChange(dailyPage - 1)}
+                    disabled={dailyPage === 1}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Previous
+                  </Button>
+                  <span className="text-sm">
+                    Page {dailyPage} of {dailySummary.pagination.totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleDailyPageChange(dailyPage + 1)}
+                    disabled={dailyPage === dailySummary.pagination.totalPages}
+                  >
+                    Next
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="text-center py-8 text-muted-foreground">No data for selected date range</div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* SECONDARY SECTION: Raw Transaction Lists */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Transaction Details (Drill-down)</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Click a tab to view raw transaction rows (lazy loaded)
+          </p>
+        </CardHeader>
+        <CardContent>
+          <Tabs value={activeTab || ''} onValueChange={handleTabChange}>
+            <TabsList>
+              <TabsTrigger value="forecast">Forecast ({summary?.forecast_count || 0})</TabsTrigger>
+              <TabsTrigger value="actual">Actual ({summary?.actual_count || 0})</TabsTrigger>
+              <TabsTrigger value="exceptions">Exceptions ({summary?.exceptions_count || 0})</TabsTrigger>
+            </TabsList>
+
+            {activeTab && (
+              <TabsContent value={activeTab} className="mt-4">
+                {transactionsError && (
+                  <Alert variant="destructive" className="mb-4">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>{transactionsError}</AlertDescription>
+                  </Alert>
+                )}
+
+                {transactionsLoading ? (
+                  <div className="flex justify-center py-8">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+                  </div>
+                ) : transactions && transactions.rows.length > 0 ? (
+                  <>
+                    <div className="border rounded-lg overflow-hidden">
+                      <table className="w-full">
+                        <thead className="bg-gray-50 border-b">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                              Transaction ID
+                            </th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                              Date
+                            </th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
+                              Amount
+                            </th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                              Type
+                            </th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                              Platform
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200">
+                          {transactions.rows.map((row: TransactionRow) => (
+                            <tr key={row.id} className="hover:bg-gray-50">
+                              <td className="px-4 py-3 text-sm font-mono">{row.txn_id}</td>
+                              <td className="px-4 py-3 text-sm">{formatDateTime(row.date)}</td>
+                              <td className="px-4 py-3 text-sm text-right font-semibold">
+                                ฿{formatCurrency(row.amount)}
+                              </td>
+                              <td className="px-4 py-3 text-sm">{row.type || '-'}</td>
+                              <td className="px-4 py-3 text-sm uppercase">{row.marketplace}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="flex items-center justify-between mt-4">
+                      <div className="text-sm text-muted-foreground">
+                        Showing {(transactionsPage - 1) * 50 + 1}-
+                        {Math.min(transactionsPage * 50, transactions.pagination.totalCount)} of{' '}
+                        {transactions.pagination.totalCount} transactions
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleTransactionsPageChange(transactionsPage - 1)}
+                          disabled={transactionsPage === 1}
+                        >
+                          <ChevronLeft className="h-4 w-4" />
+                          Previous
+                        </Button>
+                        <span className="text-sm">
+                          Page {transactionsPage} of {transactions.pagination.totalPages}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleTransactionsPageChange(transactionsPage + 1)}
+                          disabled={transactionsPage === transactions.pagination.totalPages}
+                        >
+                          Next
+                          <ChevronRight className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground">No transactions</div>
+                )}
+              </TabsContent>
             )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Tabs: Forecast, Actual, Exceptions (Summary View Only) */}
-      {!loading && viewMode === 'summary' && dateRange && (
-        <Tabs defaultValue="forecast" className="w-full">
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="forecast">
-              Forecast ({unsettledTransactions.length})
-            </TabsTrigger>
-            <TabsTrigger value="actual">Actual ({settledTransactions.length})</TabsTrigger>
-            <TabsTrigger value="exceptions">
-              Exceptions ({overdueTransactions.length + settledWithoutForecast.length})
-            </TabsTrigger>
-          </TabsList>
-
-          {/* Forecast Tab */}
-          <TabsContent value="forecast">
-            <Card>
-              <CardHeader>
-                <CardTitle>Unsettled Transactions (Forecast)</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {unsettledTransactions.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">
-                    ไม่พบรายการ Forecast ในช่วงเวลาที่เลือก
-                  </p>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="border-b">
-                        <tr className="text-left">
-                          <th className="py-3 px-2 font-medium">Transaction ID</th>
-                          <th className="py-3 px-2 font-medium">Related Order</th>
-                          <th className="py-3 px-2 font-medium">Estimated Settle Time</th>
-                          <th className="py-3 px-2 font-medium text-right">Amount</th>
-                          <th className="py-3 px-2 font-medium">Reason</th>
-                          <th className="py-3 px-2 font-medium">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {unsettledTransactions.map((txn) => (
-                          <tr key={txn.id} className="border-b">
-                            <td className="py-3 px-2 font-mono text-xs">{txn.txn_id}</td>
-                            <td className="py-3 px-2 font-mono text-xs">
-                              {txn.related_order_id || '-'}
-                            </td>
-                            <td className="py-3 px-2">{formatDateTime(txn.estimated_settle_time)}</td>
-                            <td className="py-3 px-2 text-right font-mono text-yellow-600">
-                              {txn.currency} {formatCurrency(txn.estimated_settlement_amount || 0)}
-                            </td>
-                            <td className="py-3 px-2 text-xs">{txn.unsettled_reason || '-'}</td>
-                            <td className="py-3 px-2">
-                              <span className="px-2 py-1 rounded-full text-xs bg-yellow-100 text-yellow-700">
-                                {txn.status}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* Actual Tab */}
-          <TabsContent value="actual">
-            <Card>
-              <CardHeader>
-                <CardTitle>Settled Transactions (Actual)</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {settledTransactions.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">
-                    ไม่พบรายการ Settled ในช่วงเวลาที่เลือก
-                  </p>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="border-b">
-                        <tr className="text-left">
-                          <th className="py-3 px-2 font-medium">Transaction ID</th>
-                          <th className="py-3 px-2 font-medium">Order ID</th>
-                          <th className="py-3 px-2 font-medium">Settled Time</th>
-                          <th className="py-3 px-2 font-medium text-right">Settlement Amount</th>
-                          <th className="py-3 px-2 font-medium text-right">Gross Revenue</th>
-                          <th className="py-3 px-2 font-medium">Type</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {settledTransactions.map((txn) => (
-                          <tr key={txn.id} className="border-b">
-                            <td className="py-3 px-2 font-mono text-xs">{txn.txn_id}</td>
-                            <td className="py-3 px-2 font-mono text-xs">{txn.order_id || '-'}</td>
-                            <td className="py-3 px-2">{formatDateTime(txn.settled_time)}</td>
-                            <td className="py-3 px-2 text-right font-mono text-green-600">
-                              {txn.currency} {formatCurrency(txn.settlement_amount)}
-                            </td>
-                            <td className="py-3 px-2 text-right font-mono">
-                              {txn.gross_revenue ? formatCurrency(txn.gross_revenue) : '-'}
-                            </td>
-                            <td className="py-3 px-2 text-xs">{txn.type || '-'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* Exceptions Tab */}
-          <TabsContent value="exceptions" className="space-y-4">
-            {/* Overdue Forecast */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <XCircle className="h-5 w-5 text-red-600" />
-                  Overdue Forecast ({overdueTransactions.length})
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {overdueTransactions.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-4">
-                    ไม่มีรายการที่เลยกำหนด settle แล้ว
-                  </p>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="border-b">
-                        <tr className="text-left">
-                          <th className="py-3 px-2 font-medium">Transaction ID</th>
-                          <th className="py-3 px-2 font-medium">Estimated Settle Time</th>
-                          <th className="py-3 px-2 font-medium text-right">Amount</th>
-                          <th className="py-3 px-2 font-medium">Reason</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {overdueTransactions.map((txn) => (
-                          <tr key={txn.id} className="border-b">
-                            <td className="py-3 px-2 font-mono text-xs">{txn.txn_id}</td>
-                            <td className="py-3 px-2 text-red-600">
-                              {formatDateTime(txn.estimated_settle_time)}
-                            </td>
-                            <td className="py-3 px-2 text-right font-mono">
-                              {txn.currency} {formatCurrency(txn.estimated_settlement_amount || 0)}
-                            </td>
-                            <td className="py-3 px-2 text-xs">{txn.unsettled_reason || '-'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Settled Without Forecast */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <AlertCircle className="h-5 w-5 text-orange-600" />
-                  Settled Without Forecast ({settledWithoutForecast.length})
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {settledWithoutForecast.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-4">
-                    ทุกรายการที่ settled มีการคาดการณ์ไว้แล้ว
-                  </p>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="border-b">
-                        <tr className="text-left">
-                          <th className="py-3 px-2 font-medium">Transaction ID</th>
-                          <th className="py-3 px-2 font-medium">Settled Time</th>
-                          <th className="py-3 px-2 font-medium text-right">Settlement Amount</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {settledWithoutForecast.map((txn) => (
-                          <tr key={txn.id} className="border-b">
-                            <td className="py-3 px-2 font-mono text-xs">{txn.txn_id}</td>
-                            <td className="py-3 px-2">{formatDateTime(txn.settled_time)}</td>
-                            <td className="py-3 px-2 text-right font-mono text-orange-600">
-                              {txn.currency} {formatCurrency(txn.settlement_amount)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
-      )}
+          </Tabs>
+        </CardContent>
+      </Card>
 
       {/* Import Dialogs */}
       <ImportOnholdDialog
