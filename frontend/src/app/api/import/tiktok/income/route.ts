@@ -27,10 +27,13 @@ export async function POST(request: NextRequest) {
     // Parse multipart form data
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
+    const allowDuplicate = formData.get('allowDuplicate') === 'true';
 
     if (!file) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 });
     }
+
+    console.log(`[Income API] Allow duplicate mode: ${allowDuplicate}`);
 
     // Validate file type
     if (!file.name.match(/\.(xlsx|xls)$/i)) {
@@ -58,24 +61,28 @@ export async function POST(request: NextRequest) {
     // Calculate file hash
     const fileHash = calculateFileHash(buffer);
 
-    // Check for duplicate import
-    const { data: existingBatch } = await supabase
-      .from('import_batches')
-      .select('id, status, created_at')
-      .eq('created_by', user.id)
-      .eq('marketplace', 'tiktok')
-      .eq('report_type', 'tiktok_income')
-      .eq('file_hash', fileHash)
-      .eq('status', 'success')
-      .single();
+    // Check for duplicate import (skip if allowDuplicate = true)
+    if (!allowDuplicate) {
+      const { data: existingBatch } = await supabase
+        .from('import_batches')
+        .select('id, status, created_at')
+        .eq('created_by', user.id)
+        .eq('marketplace', 'tiktok')
+        .eq('report_type', 'tiktok_income')
+        .eq('file_hash', fileHash)
+        .eq('status', 'success')
+        .single();
 
-    if (existingBatch) {
-      return NextResponse.json({
-        success: false,
-        error: 'Duplicate file',
-        message: `This file has already been imported successfully on ${new Date(existingBatch.created_at).toLocaleString('th-TH')}`,
-        batchId: existingBatch.id,
-      });
+      if (existingBatch) {
+        return NextResponse.json({
+          success: false,
+          error: 'Duplicate file',
+          message: `This file has already been imported successfully on ${new Date(existingBatch.created_at).toLocaleString('th-TH')}`,
+          batchId: existingBatch.id,
+        });
+      }
+    } else {
+      console.log(`[Income API] Duplicate check skipped (testing mode)`);
     }
 
     // Create import batch record

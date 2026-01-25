@@ -60,6 +60,11 @@ export function ImportIncomeDialog({ open, onOpenChange, onSuccess }: ImportInco
       const formData = new FormData();
       formData.append('file', file);
 
+      // Send allowDuplicate flag when testing mode is enabled
+      if (allowReupload) {
+        formData.append('allowDuplicate', 'true');
+      }
+
       const response = await fetch('/api/import/tiktok/income', {
         method: 'POST',
         body: formData,

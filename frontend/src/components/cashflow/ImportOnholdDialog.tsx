@@ -58,6 +58,11 @@ export function ImportOnholdDialog({ open, onOpenChange, onSuccess }: ImportOnho
       const formData = new FormData();
       formData.append('file', file);
 
+      // Send allowDuplicate flag when testing mode is enabled
+      if (allowReupload) {
+        formData.append('allowDuplicate', 'true');
+      }
+
       const response = await fetch('/api/import/tiktok/onhold', {
         method: 'POST',
         body: formData,
