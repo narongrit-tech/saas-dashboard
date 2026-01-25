@@ -25,11 +25,11 @@ export async function reconcileSettlements(
 
   try {
     // Get all settlement_transactions from this batch
+    // Note: Removed created_by filter (migration-011: RLS disabled, internal dashboard)
     const { data: settlements, error: settlementsError } = await supabase
       .from('settlement_transactions')
       .select('id, marketplace, txn_id, settled_time')
-      .eq('import_batch_id', batchId)
-      .eq('created_by', userId);
+      .eq('import_batch_id', batchId);
 
     if (settlementsError) {
       throw new Error(`Failed to fetch settlements: ${settlementsError.message}`);
@@ -39,23 +39,35 @@ export async function reconcileSettlements(
       return { reconciledCount: 0, notFoundInOnholdCount: 0, errors: [] };
     }
 
-    console.log(`[Reconcile] Processing ${settlements.length} settlements (BULK mode)`);
+    console.log(`[Reconcile] Processing ${settlements.length} settlements (BULK mode with batching)`);
 
-    // OPTIMIZATION: Fetch ALL matching unsettled transactions in ONE query
+    // OPTIMIZATION: Fetch ALL matching unsettled transactions in BATCHED queries
     // Build list of txn_ids to search for
     const txnIds = settlements.map((s) => s.txn_id);
 
-    const { data: unsettledList, error: unsettledError } = await supabase
-      .from('unsettled_transactions')
-      .select('id, marketplace, txn_id, status')
-      .eq('created_by', userId)
-      .in('txn_id', txnIds);
+    // BATCHING: Split into chunks of 500 to avoid query limits
+    const BATCH_SIZE = 500;
+    const unsettledList: Array<{ id: string; marketplace: string; txn_id: string; status: string }> = [];
 
-    if (unsettledError) {
-      throw new Error(`Failed to fetch unsettled transactions: ${unsettledError.message}`);
+    for (let i = 0; i < txnIds.length; i += BATCH_SIZE) {
+      const batch = txnIds.slice(i, i + BATCH_SIZE);
+      console.log(`[Reconcile] Fetching batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(txnIds.length / BATCH_SIZE)} (${batch.length} items)`);
+
+      const { data, error } = await supabase
+        .from('unsettled_transactions')
+        .select('id, marketplace, txn_id, status')
+        .in('txn_id', batch);
+
+      if (error) {
+        throw new Error(`Failed to fetch unsettled transactions (batch ${i}): ${error.message}`);
+      }
+
+      if (data) {
+        unsettledList.push(...data);
+      }
     }
 
-    console.log(`[Reconcile] Found ${unsettledList?.length || 0} matching unsettled records`);
+    console.log(`[Reconcile] Found ${unsettledList.length} matching unsettled records`);
 
     // Build a Map for fast lookup: (marketplace + txn_id) -> unsettled record
     const unsettledMap = new Map<string, { id: string; status: string }>();
@@ -91,26 +103,32 @@ export async function reconcileSettlements(
 
     console.log(`[Reconcile] ${toUpdate.length} records to reconcile`);
 
-    // OPTIMIZATION: Bulk update in ONE query
+    // OPTIMIZATION: Bulk update in BATCHED queries
     if (toUpdate.length > 0) {
-      // Supabase doesn't support bulk update with different values per row
-      // So we need to update by IDs
       const idsToUpdate = toUpdate.map((u) => u.id);
 
-      // Note: This sets ALL to same settled_at (last settlement time)
-      // If we need different settled_at per record, we'd need row-by-row or use SQL function
-      // For now, batch update by IDs is acceptable (much faster than N queries)
-      const { error: updateError } = await supabase
-        .from('unsettled_transactions')
-        .update({ status: 'settled' })
-        .in('id', idsToUpdate);
+      // BATCHING: Split updates into chunks of 500 to avoid query limits
+      const UPDATE_BATCH_SIZE = 500;
+      let totalUpdated = 0;
 
-      if (updateError) {
-        errors.push(`Bulk update failed: ${updateError.message}`);
-      } else {
-        reconciledCount = toUpdate.length;
-        console.log(`[Reconcile] Successfully reconciled ${reconciledCount} records`);
+      for (let i = 0; i < idsToUpdate.length; i += UPDATE_BATCH_SIZE) {
+        const batch = idsToUpdate.slice(i, i + UPDATE_BATCH_SIZE);
+        console.log(`[Reconcile] Updating batch ${Math.floor(i / UPDATE_BATCH_SIZE) + 1}/${Math.ceil(idsToUpdate.length / UPDATE_BATCH_SIZE)} (${batch.length} items)`);
+
+        const { error: updateError } = await supabase
+          .from('unsettled_transactions')
+          .update({ status: 'settled' })
+          .in('id', batch);
+
+        if (updateError) {
+          errors.push(`Bulk update failed (batch ${i}): ${updateError.message}`);
+        } else {
+          totalUpdated += batch.length;
+        }
       }
+
+      reconciledCount = totalUpdated;
+      console.log(`[Reconcile] Successfully reconciled ${reconciledCount} records`);
     }
 
     console.log(`[Reconcile] Not found in forecast: ${notFoundInOnholdCount}`);
@@ -139,19 +157,17 @@ export async function getReconcileStatus(
 }> {
   const supabase = await createClient();
 
-  // Count settled transactions
+  // Count settled transactions (removed created_by filter)
   const { count: settledCount } = await supabase
     .from('settlement_transactions')
     .select('*', { count: 'exact', head: true })
-    .eq('created_by', userId)
     .gte('settled_time', startDate)
     .lte('settled_time', endDate);
 
-  // Count unsettled transactions
+  // Count unsettled transactions (removed created_by filter)
   const { count: unsettledCount } = await supabase
     .from('unsettled_transactions')
     .select('*', { count: 'exact', head: true })
-    .eq('created_by', userId)
     .eq('status', 'unsettled')
     .gte('estimated_settle_time', startDate)
     .lte('estimated_settle_time', endDate);
