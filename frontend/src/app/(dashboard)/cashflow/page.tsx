@@ -347,7 +347,9 @@ export default function CashflowPageV3() {
       <Card>
         <CardHeader>
           <CardTitle>Daily Cash In Summary (Forecast vs Actual)</CardTitle>
-          <p className="text-sm text-muted-foreground">เงินจะเข้าแต่ละวันเท่าไหร่? (Timeline view)</p>
+          <p className="text-sm text-muted-foreground">
+            แสดงตามวันเงินเข้าจริง (เวลาประเทศไทย – Asia/Bangkok)
+          </p>
         </CardHeader>
         <CardContent>
           {dailySummaryError && (
