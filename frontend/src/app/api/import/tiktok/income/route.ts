@@ -41,8 +41,19 @@ export async function POST(request: NextRequest) {
     }
 
     // Read file buffer
+    console.log(`[Income API] File name: ${file.name}`);
+    console.log(`[Income API] File size: ${file.size} bytes`);
+
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
+
+    console.log(`[Income API] ArrayBuffer size: ${arrayBuffer.byteLength} bytes`);
+    console.log(`[Income API] Buffer length: ${buffer.length} bytes`);
+
+    // CRITICAL CHECK: If buffer is tiny, file was truncated!
+    if (buffer.length < 1000) {
+      console.error(`[Income API] WARNING: Buffer suspiciously small (${buffer.length} bytes)`);
+    }
 
     // Calculate file hash
     const fileHash = calculateFileHash(buffer);

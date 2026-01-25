@@ -25,6 +25,8 @@ export function ImportIncomeDialog({ open, onOpenChange, onSuccess }: ImportInco
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [allowReupload, setAllowReupload] = useState(false);
+  const [inputKey, setInputKey] = useState(0); // For re-mounting input
   const [result, setResult] = useState<{
     rowCount: number;
     insertedCount: number;
@@ -73,14 +75,34 @@ export function ImportIncomeDialog({ open, onOpenChange, onSuccess }: ImportInco
       setSuccess(true);
       setResult(data);
 
-      // Call onSuccess after a short delay
-      setTimeout(() => {
-        onSuccess();
-        handleClose();
-      }, 2000);
+      // If re-upload enabled, reset input after delay
+      if (allowReupload) {
+        setTimeout(() => {
+          setFile(null);
+          setSuccess(false);
+          setResult(null);
+          setError(null);
+          setInputKey(prev => prev + 1); // Re-mount input
+        }, 2000);
+      } else {
+        // Call onSuccess after a short delay
+        setTimeout(() => {
+          onSuccess();
+          handleClose();
+        }, 2000);
+      }
     } catch (err) {
       console.error('Upload error:', err);
       setError('เกิดข้อผิดพลาดในการนำเข้าข้อมูล');
+
+      // If re-upload enabled, reset input after error
+      if (allowReupload) {
+        setTimeout(() => {
+          setFile(null);
+          setError(null);
+          setInputKey(prev => prev + 1); // Re-mount input
+        }, 3000);
+      }
     } finally {
       setUploading(false);
     }
@@ -109,17 +131,32 @@ export function ImportIncomeDialog({ open, onOpenChange, onSuccess }: ImportInco
           <div className="space-y-2">
             <Label htmlFor="file">เลือกไฟล์ Excel (.xlsx)</Label>
             <Input
+              key={inputKey}
               id="file"
               type="file"
               accept=".xlsx,.xls"
               onChange={handleFileChange}
-              disabled={uploading || success}
+              disabled={uploading || (success && !allowReupload)}
             />
             {file && (
               <p className="text-sm text-muted-foreground">
                 ไฟล์ที่เลือก: {file.name} ({(file.size / 1024).toFixed(2)} KB)
               </p>
             )}
+          </div>
+
+          {/* Re-upload Checkbox */}
+          <div className="flex items-center space-x-2">
+            <input
+              id="allow-reupload"
+              type="checkbox"
+              checked={allowReupload}
+              onChange={(e) => setAllowReupload(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300"
+            />
+            <Label htmlFor="allow-reupload" className="text-sm text-muted-foreground cursor-pointer">
+              Allow re-upload same file (testing mode)
+            </Label>
           </div>
 
           {/* Error Alert */}

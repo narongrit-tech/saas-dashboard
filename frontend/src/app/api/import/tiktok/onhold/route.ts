@@ -40,8 +40,19 @@ export async function POST(request: NextRequest) {
     }
 
     // Read file buffer
+    console.log(`[Onhold API] File name: ${file.name}`);
+    console.log(`[Onhold API] File size: ${file.size} bytes`);
+
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
+
+    console.log(`[Onhold API] ArrayBuffer size: ${arrayBuffer.byteLength} bytes`);
+    console.log(`[Onhold API] Buffer length: ${buffer.length} bytes`);
+
+    // CRITICAL CHECK: If buffer is tiny, file was truncated!
+    if (buffer.length < 1000) {
+      console.error(`[Onhold API] WARNING: Buffer suspiciously small (${buffer.length} bytes)`);
+    }
 
     // Calculate file hash
     const fileHash = calculateFileHash(buffer);

@@ -124,15 +124,21 @@ export function parseOnholdExcel(buffer: Buffer): {
 } {
   const warnings: string[] = [];
 
-  // CRITICAL: sheetRows MUST be undefined or 0 to load ALL rows
+  console.log(`[Onhold Parser] Buffer size: ${buffer.length} bytes`);
+
+  // CRITICAL: sheetRows MUST be 0 to load ALL rows
   const workbook = XLSX.read(buffer, {
     type: 'buffer',
     cellFormula: false,
     cellStyles: false,
-    sheetRows: 0, // 0 = unlimited rows (default may be 2!)
+    bookVBA: false, // Skip VBA
+    bookImages: false, // Skip images
+    sheetRows: 0, // 0 = unlimited rows
     cellDates: true,
     raw: false, // Keep as string to prevent precision loss
   });
+
+  console.log(`[Onhold Parser] Workbook loaded, sheets: ${workbook.SheetNames.length}`);
 
   // Use first sheet
   const sheetName = workbook.SheetNames[0];
@@ -157,6 +163,14 @@ export function parseOnholdExcel(buffer: Buffer): {
   const endCol = range.e.c; // Last column index
 
   console.log(`[Onhold Parser] Decoded range: rows ${range.s.r} to ${endRow} (${endRow + 1} total), cols ${range.s.c} to ${endCol}`);
+
+  // CRITICAL CHECK: If endRow suspiciously small, abort!
+  if (endRow < 10) {
+    console.error(`[Onhold Parser] ERROR: endRow is only ${endRow}! Worksheet was truncated!`);
+    console.error(`[Onhold Parser] Buffer length: ${buffer.length} bytes`);
+    console.error(`[Onhold Parser] This indicates buffer was not fully read or XLSX truncated data`);
+    throw new Error(`Worksheet appears truncated (only ${endRow + 1} rows). Expected hundreds of rows. Check file upload and buffer handling.`);
+  }
 
   // Find header row by scanning first 30 rows
   let headerRowIndex = -1;
