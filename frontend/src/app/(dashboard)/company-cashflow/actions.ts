@@ -73,12 +73,12 @@ export async function getCompanyCashflow(
     // Fetch Cash Out from Wallet TOP_UP (cash transfer from company to wallet)
     const { data: topupData, error: topupError } = await supabase
       .from('wallet_ledger')
-      .select('transaction_date, amount')
+      .select('date, amount')
       .eq('entry_type', 'TOP_UP')
       .eq('direction', 'IN') // IN to wallet = OUT from company
-      .gte('transaction_date', startDateStr)
-      .lte('transaction_date', endDateStr)
-      .order('transaction_date', { ascending: true })
+      .gte('date', startDateStr)
+      .lte('date', endDateStr)
+      .order('date', { ascending: true })
 
     if (topupError) throw new Error(`Wallet top-up query failed: ${topupError.message}`)
 
@@ -107,7 +107,7 @@ export async function getCompanyCashflow(
 
     // Process Cash Out - Wallet Top-ups
     topupData?.forEach((row) => {
-      const date = formatBangkok(row.transaction_date, 'yyyy-MM-dd')
+      const date = formatBangkok(row.date, 'yyyy-MM-dd')
       const existing = dailyMap.get(date) || { cash_in: 0, cash_out: 0 }
       dailyMap.set(date, {
         ...existing,
