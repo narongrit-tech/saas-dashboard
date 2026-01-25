@@ -25,7 +25,9 @@
       "Bash(npm run typecheck:*)",
       "Bash(npm run:*)",
       "Bash(git commit:*)",
-      "Bash(npx supabase db reset)"
+      "Bash(npx supabase db reset)",
+      "Bash(head:*)",
+      "Bash(psql:*)"
     ]
   },
   "approvalMode": "auto",
