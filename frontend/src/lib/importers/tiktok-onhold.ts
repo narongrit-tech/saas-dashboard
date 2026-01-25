@@ -124,10 +124,18 @@ export function parseOnholdExcel(buffer: Buffer): {
 } {
   const warnings: string[] = [];
 
+  console.log(`[Onhold Parser] ========== PARSE START ==========`);
   console.log(`[Onhold Parser] Buffer size: ${buffer.length} bytes`);
+  console.log(`[Onhold Parser] Buffer first 10 bytes: ${buffer.slice(0, 10).toString('hex')}`);
 
   // CRITICAL: sheetRows MUST be 0 to load ALL rows
-  const workbook = XLSX.read(buffer, {
+  // Force fresh parse by cloning buffer internally
+  const bufferCopy = Buffer.alloc(buffer.length);
+  buffer.copy(bufferCopy);
+
+  console.log(`[Onhold Parser] Buffer cloned for parsing`);
+
+  const workbook = XLSX.read(bufferCopy, {
     type: 'buffer',
     cellFormula: false,
     cellStyles: false,
@@ -138,7 +146,8 @@ export function parseOnholdExcel(buffer: Buffer): {
     raw: false, // Keep as string to prevent precision loss
   });
 
-  console.log(`[Onhold Parser] Workbook loaded, sheets: ${workbook.SheetNames.length}`);
+  console.log(`[Onhold Parser] Workbook loaded successfully`);
+  console.log(`[Onhold Parser] Total sheets: ${workbook.SheetNames.length}`);
 
   // Use first sheet
   const sheetName = workbook.SheetNames[0];
@@ -152,7 +161,14 @@ export function parseOnholdExcel(buffer: Buffer): {
 
   // Get sheet range
   const sheetRef = worksheet['!ref'];
-  console.log(`[Onhold Parser] Sheet !ref: ${sheetRef}`);
+  console.log(`[Onhold Parser] Worksheet loaded`);
+  console.log(`[Onhold Parser] Original !ref: ${sheetRef}`);
+
+  // Force re-decode to ensure range is correct
+  if (sheetRef) {
+    const testRange = XLSX.utils.decode_range(sheetRef);
+    console.log(`[Onhold Parser] Range validation: rows=${testRange.e.r + 1}, cols=${testRange.e.c + 1}`);
+  }
 
   if (!sheetRef) {
     throw new Error('Worksheet has no range reference (!ref is missing)');
@@ -257,8 +273,10 @@ export function parseOnholdExcel(buffer: Buffer): {
     rows.push(normalizedRow);
   }
 
+  console.log(`[Onhold Parser] ========== PARSE COMPLETE ==========`);
   console.log(`[Onhold Parser] Total rows parsed: ${rows.length}`);
   console.log(`[Onhold Parser] First 3 IDs:`, rows.slice(0, 3).map(r => r.txn_id));
+  console.log(`[Onhold Parser] Last 3 IDs:`, rows.slice(-3).map(r => r.txn_id));
 
   return { rows, warnings };
 }

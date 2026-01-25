@@ -152,10 +152,18 @@ export function parseIncomeExcel(buffer: Buffer): {
 } {
   const warnings: string[] = [];
 
+  console.log(`[Income Parser] ========== PARSE START ==========`);
   console.log(`[Income Parser] Buffer size: ${buffer.length} bytes`);
+  console.log(`[Income Parser] Buffer first 10 bytes: ${buffer.slice(0, 10).toString('hex')}`);
 
   // CRITICAL: sheetRows MUST be 0 to load ALL rows
-  const workbook = XLSX.read(buffer, {
+  // Force fresh parse by cloning buffer internally
+  const bufferCopy = Buffer.alloc(buffer.length);
+  buffer.copy(bufferCopy);
+
+  console.log(`[Income Parser] Buffer cloned for parsing`);
+
+  const workbook = XLSX.read(bufferCopy, {
     type: 'buffer',
     cellFormula: false,
     cellStyles: false,
@@ -166,7 +174,8 @@ export function parseIncomeExcel(buffer: Buffer): {
     raw: false, // Keep as string to prevent precision loss
   });
 
-  console.log(`[Income Parser] Workbook loaded, sheets: ${workbook.SheetNames.length}`);
+  console.log(`[Income Parser] Workbook loaded successfully`);
+  console.log(`[Income Parser] Total sheets: ${workbook.SheetNames.length}`);
   console.log(`[Income Parser] Available sheets: ${workbook.SheetNames.join(', ')}`);
 
   // Explicitly select "Order details" sheet first, fallback to first sheet
@@ -188,7 +197,14 @@ export function parseIncomeExcel(buffer: Buffer): {
 
   // Get sheet range
   const sheetRef = worksheet['!ref'];
-  console.log(`[Income Parser] Sheet !ref: ${sheetRef}`);
+  console.log(`[Income Parser] Worksheet loaded`);
+  console.log(`[Income Parser] Original !ref: ${sheetRef}`);
+
+  // Force re-decode to ensure range is correct
+  if (sheetRef) {
+    const testRange = XLSX.utils.decode_range(sheetRef);
+    console.log(`[Income Parser] Range validation: rows=${testRange.e.r + 1}, cols=${testRange.e.c + 1}`);
+  }
 
   if (!sheetRef) {
     throw new Error('Worksheet has no range reference (!ref is missing)');
@@ -320,8 +336,10 @@ export function parseIncomeExcel(buffer: Buffer): {
     rows.push(normalizedRow);
   }
 
+  console.log(`[Income Parser] ========== PARSE COMPLETE ==========`);
   console.log(`[Income Parser] Total rows parsed: ${rows.length}`);
   console.log(`[Income Parser] First 3 IDs:`, rows.slice(0, 3).map(r => r.txn_id));
+  console.log(`[Income Parser] Last 3 IDs:`, rows.slice(-3).map(r => r.txn_id));
 
   return { rows, warnings };
 }

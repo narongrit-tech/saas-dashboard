@@ -47,10 +47,15 @@ export async function POST(request: NextRequest) {
     console.log(`[Onhold API] File size: ${file.size} bytes`);
 
     const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+
+    // CRITICAL: Clone buffer to ensure fresh copy (prevent shared state)
+    const sourceBuffer = Buffer.from(arrayBuffer);
+    const buffer = Buffer.alloc(sourceBuffer.length);
+    sourceBuffer.copy(buffer);
 
     console.log(`[Onhold API] ArrayBuffer size: ${arrayBuffer.byteLength} bytes`);
     console.log(`[Onhold API] Buffer length: ${buffer.length} bytes`);
+    console.log(`[Onhold API] Buffer cloned: true`);
 
     // CRITICAL CHECK: If buffer is tiny, file was truncated!
     if (buffer.length < 1000) {
