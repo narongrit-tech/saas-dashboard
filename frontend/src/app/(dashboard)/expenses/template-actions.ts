@@ -15,7 +15,7 @@ import crypto from 'crypto'
  */
 export async function downloadExpenseTemplate(): Promise<{
   success: boolean
-  buffer?: ArrayBuffer
+  base64?: string
   filename?: string
   error?: string
 }> {
@@ -82,8 +82,9 @@ export async function downloadExpenseTemplate(): Promise<{
     wsInstructions['!cols'] = [{ wch: 20 }, { wch: 60 }]
     XLSX.utils.book_append_sheet(wb, wsInstructions, 'Instructions')
 
-    // Generate buffer
+    // Generate buffer and convert to base64 (Server Actions cannot return ArrayBuffer)
     const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+    const base64 = Buffer.from(buffer).toString('base64')
 
     // Generate filename
     const timestamp = formatBangkok(getBangkokNow(), 'yyyyMMdd')
@@ -91,7 +92,7 @@ export async function downloadExpenseTemplate(): Promise<{
 
     return {
       success: true,
-      buffer: buffer.buffer,
+      base64,
       filename,
     }
   } catch (error) {

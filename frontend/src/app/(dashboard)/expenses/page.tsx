@@ -245,13 +245,19 @@ export default function ExpensesPage() {
     try {
       const result = await downloadExpenseTemplate()
 
-      if (!result.success || !result.buffer || !result.filename) {
+      if (!result.success || !result.base64 || !result.filename) {
         setError(result.error || 'เกิดข้อผิดพลาดในการดาวน์โหลด template')
         return
       }
 
-      // Create blob and download
-      const blob = new Blob([result.buffer], {
+      // Convert base64 to blob
+      const binaryString = atob(result.base64)
+      const bytes = new Uint8Array(binaryString.length)
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i)
+      }
+
+      const blob = new Blob([bytes], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       })
       const url = URL.createObjectURL(blob)

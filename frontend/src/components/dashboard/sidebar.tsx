@@ -13,6 +13,8 @@ import {
   Wallet,
   TrendingUp,
   Settings,
+  Coins,
+  GitCompare,
 } from 'lucide-react'
 
 const menuItems = [
@@ -35,6 +37,16 @@ const menuItems = [
     title: 'Daily P&L',
     href: '/daily-pl',
     icon: BarChart3,
+  },
+  {
+    title: 'Company Cashflow',
+    href: '/company-cashflow',
+    icon: Coins,
+  },
+  {
+    title: 'Reconciliation',
+    href: '/reconciliation',
+    icon: GitCompare,
   },
   {
     title: 'Marketplace Wallets',
