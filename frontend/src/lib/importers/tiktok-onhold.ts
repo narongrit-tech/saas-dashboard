@@ -96,35 +96,34 @@ function parseDate(value: unknown): Date | null {
 }
 
 /**
- * Safe conversion to string (prevents precision loss for large numbers)
+ * Get cell value as string (direct cell access)
  */
-function safeToString(value: unknown): string {
-  if (value === null || value === undefined) return '';
+function getCellValue(worksheet: XLSX.WorkSheet, row: number, col: number): string {
+  const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
+  const cell = worksheet[cellAddress];
 
-  // If it's a number with >15 digits, it's likely a transaction ID
-  // Use scientific notation check to detect large numbers
-  if (typeof value === 'number') {
-    const str = value.toString();
-    // If number is in scientific notation (e.g., 1.23e+17) or has >15 digits
-    if (str.includes('e+') || str.includes('E+') || Math.abs(value) > Number.MAX_SAFE_INTEGER) {
-      // Already precision loss - but keep as string
-      console.warn(`Large number detected (precision may be lost): ${str}`);
-      return str.replace(/e\+\d+/, ''); // Remove scientific notation
-    }
+  if (!cell) return '';
+
+  // Get raw value to prevent precision loss
+  if (cell.w) {
+    return String(cell.w).trim(); // Formatted value
+  }
+  if (cell.v !== null && cell.v !== undefined) {
+    return String(cell.v).trim(); // Raw value
   }
 
-  return String(value).trim();
+  return '';
 }
 
 /**
- * Parse Excel buffer and normalize rows
+ * Parse Excel buffer and normalize rows (robust cell-by-cell parsing)
  */
 export function parseOnholdExcel(buffer: Buffer): {
   rows: NormalizedOnholdRow[];
   warnings: string[];
 } {
   const warnings: string[] = [];
-  const workbook = XLSX.read(buffer, { type: 'buffer', raw: false }); // Force string conversion
+  const workbook = XLSX.read(buffer, { type: 'buffer', cellFormula: false, cellStyles: false });
 
   // Use first sheet
   const sheetName = workbook.SheetNames[0];
@@ -133,26 +132,27 @@ export function parseOnholdExcel(buffer: Buffer): {
   }
 
   const worksheet = workbook.Sheets[sheetName];
-  const data = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false, defval: '' }) as unknown[][];
 
-  if (data.length < 2) {
-    throw new Error('Excel file is empty or has no data rows');
-  }
+  // Get sheet range
+  const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+  const endRow = range.e.r; // Last row index
+  const endCol = range.e.c; // Last column index
 
-  // Find header row (scan first 30 rows for disclaimer/metadata)
+  console.log(`[Onhold Parser] Sheet range: ${range.s.r} to ${endRow} (${endRow + 1} rows total)`);
+
+  // Find header row by scanning first 30 rows
   let headerRowIndex = -1;
-  for (let i = 0; i < Math.min(30, data.length); i++) {
-    const row = data[i];
-    if (Array.isArray(row) && row.length > 0) {
-      const hasRequiredColumn = findColumn(
-        row.map(String),
-        COLUMN_MAPPINGS.txn_id
-      );
-      if (hasRequiredColumn !== -1) {
-        headerRowIndex = i;
-        console.log(`[Onhold Import] Header detected at row ${i + 1}`);
-        break;
-      }
+  for (let r = 0; r < Math.min(30, endRow + 1); r++) {
+    const headerCandidates: string[] = [];
+    for (let c = 0; c <= endCol; c++) {
+      headerCandidates.push(getCellValue(worksheet, r, c));
+    }
+
+    const hasRequiredColumn = findColumn(headerCandidates, COLUMN_MAPPINGS.txn_id);
+    if (hasRequiredColumn !== -1) {
+      headerRowIndex = r;
+      console.log(`[Onhold Parser] Header detected at row ${r + 1} (0-indexed: ${r})`);
+      break;
     }
   }
 
@@ -160,7 +160,12 @@ export function parseOnholdExcel(buffer: Buffer): {
     throw new Error('Could not find header row with required columns (scanned first 30 rows)');
   }
 
-  const headers = data[headerRowIndex].map(String);
+  // Build header map
+  const headers: string[] = [];
+  for (let c = 0; c <= endCol; c++) {
+    headers.push(getCellValue(worksheet, headerRowIndex, c));
+  }
+
   const columnIndexes = {
     txn_id: findColumn(headers, COLUMN_MAPPINGS.txn_id),
     related_order_id: findColumn(headers, COLUMN_MAPPINGS.related_order_id),
@@ -176,49 +181,52 @@ export function parseOnholdExcel(buffer: Buffer): {
     throw new Error('Required column "Order/adjustment ID" not found');
   }
 
-  // Parse data rows
-  const rows: NormalizedOnholdRow[] = [];
-  for (let i = headerRowIndex + 1; i < data.length; i++) {
-    const row = data[i];
-    if (!row || row.length === 0) continue;
+  console.log(`[Onhold Parser] Column indexes:`, columnIndexes);
+  console.log(`[Onhold Parser] Data starts at row ${headerRowIndex + 2} (Excel row number)`);
 
-    const txnId = row[columnIndexes.txn_id];
-    const txnIdStr = safeToString(txnId);
+  // Parse data rows (from header+1 to endRow)
+  const rows: NormalizedOnholdRow[] = [];
+  for (let r = headerRowIndex + 1; r <= endRow; r++) {
+    const txnIdStr = getCellValue(worksheet, r, columnIndexes.txn_id);
+
+    // Skip empty rows (but don't break - continue to next row)
     if (!txnIdStr || txnIdStr === '') {
-      warnings.push(`Row ${i + 1}: Missing transaction ID, skipping`);
       continue;
     }
 
     const normalizedRow: NormalizedOnholdRow = {
       txn_id: txnIdStr,
       related_order_id:
-        columnIndexes.related_order_id !== -1 && row[columnIndexes.related_order_id]
-          ? safeToString(row[columnIndexes.related_order_id])
+        columnIndexes.related_order_id !== -1
+          ? getCellValue(worksheet, r, columnIndexes.related_order_id) || null
           : null,
       type:
-        columnIndexes.type !== -1 && row[columnIndexes.type]
-          ? String(row[columnIndexes.type]).trim()
+        columnIndexes.type !== -1
+          ? getCellValue(worksheet, r, columnIndexes.type) || null
           : null,
       currency:
-        columnIndexes.currency !== -1 && row[columnIndexes.currency]
-          ? String(row[columnIndexes.currency]).trim().toUpperCase()
+        columnIndexes.currency !== -1
+          ? getCellValue(worksheet, r, columnIndexes.currency).toUpperCase() || 'THB'
           : 'THB',
       estimated_settle_time:
         columnIndexes.estimated_settle_time !== -1
-          ? parseDate(row[columnIndexes.estimated_settle_time])
+          ? parseDate(getCellValue(worksheet, r, columnIndexes.estimated_settle_time))
           : null,
       estimated_settlement_amount:
         columnIndexes.estimated_settlement_amount !== -1
-          ? parseNumeric(row[columnIndexes.estimated_settlement_amount])
+          ? parseNumeric(getCellValue(worksheet, r, columnIndexes.estimated_settlement_amount))
           : null,
       unsettled_reason:
-        columnIndexes.unsettled_reason !== -1 && row[columnIndexes.unsettled_reason]
-          ? String(row[columnIndexes.unsettled_reason]).trim()
+        columnIndexes.unsettled_reason !== -1
+          ? getCellValue(worksheet, r, columnIndexes.unsettled_reason) || null
           : null,
     };
 
     rows.push(normalizedRow);
   }
+
+  console.log(`[Onhold Parser] Total rows parsed: ${rows.length}`);
+  console.log(`[Onhold Parser] First 3 IDs:`, rows.slice(0, 3).map(r => r.txn_id));
 
   return { rows, warnings };
 }

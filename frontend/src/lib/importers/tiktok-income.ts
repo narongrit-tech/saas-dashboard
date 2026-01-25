@@ -100,27 +100,6 @@ function parseNumeric(value: unknown): number | null {
 }
 
 /**
- * Safe conversion to string (prevents precision loss for large numbers)
- */
-function safeToString(value: unknown): string {
-  if (value === null || value === undefined) return '';
-
-  // If it's a number with >15 digits, it's likely a transaction ID
-  // Use scientific notation check to detect large numbers
-  if (typeof value === 'number') {
-    const str = value.toString();
-    // If number is in scientific notation (e.g., 1.23e+17) or has >15 digits
-    if (str.includes('e+') || str.includes('E+') || Math.abs(value) > Number.MAX_SAFE_INTEGER) {
-      // Already precision loss - but keep as string
-      console.warn(`Large number detected (precision may be lost): ${str}`);
-      return str.replace(/e\+\d+/, ''); // Remove scientific notation
-    }
-  }
-
-  return String(value).trim();
-}
-
-/**
  * Safe parse date value (handles Excel dates and string dates)
  */
 function parseDate(value: unknown): Date | null {
@@ -145,16 +124,36 @@ function parseDate(value: unknown): Date | null {
 }
 
 /**
- * Parse Excel buffer and normalize rows
+ * Get cell value as string (direct cell access)
+ */
+function getCellValue(worksheet: XLSX.WorkSheet, row: number, col: number): string {
+  const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
+  const cell = worksheet[cellAddress];
+
+  if (!cell) return '';
+
+  // Get raw value to prevent precision loss
+  if (cell.w) {
+    return String(cell.w).trim(); // Formatted value
+  }
+  if (cell.v !== null && cell.v !== undefined) {
+    return String(cell.v).trim(); // Raw value
+  }
+
+  return '';
+}
+
+/**
+ * Parse Excel buffer and normalize rows (robust cell-by-cell parsing)
  */
 export function parseIncomeExcel(buffer: Buffer): {
   rows: NormalizedIncomeRow[];
   warnings: string[];
 } {
   const warnings: string[] = [];
-  const workbook = XLSX.read(buffer, { type: 'buffer', raw: false }); // Force string conversion
+  const workbook = XLSX.read(buffer, { type: 'buffer', cellFormula: false, cellStyles: false });
 
-  // Try to find "Order details" sheet first, otherwise use first sheet
+  // Explicitly select "Order details" sheet first, fallback to first sheet
   let sheetName = workbook.SheetNames.find(
     (name) => name.toLowerCase().includes('order') || name.toLowerCase().includes('detail')
   );
@@ -167,27 +166,30 @@ export function parseIncomeExcel(buffer: Buffer): {
     throw new Error('Excel file has no sheets');
   }
 
+  console.log(`[Income Parser] Using sheet: ${sheetName}`);
+
   const worksheet = workbook.Sheets[sheetName];
-  const data = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false, defval: '' }) as unknown[][];
 
-  if (data.length < 2) {
-    throw new Error('Excel file is empty or has no data rows');
-  }
+  // Get sheet range
+  const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+  const endRow = range.e.r; // Last row index
+  const endCol = range.e.c; // Last column index
 
-  // Find header row (scan first 30 rows for disclaimer/metadata)
+  console.log(`[Income Parser] Sheet range: ${range.s.r} to ${endRow} (${endRow + 1} rows total)`);
+
+  // Find header row by scanning first 30 rows
   let headerRowIndex = -1;
-  for (let i = 0; i < Math.min(30, data.length); i++) {
-    const row = data[i];
-    if (Array.isArray(row) && row.length > 0) {
-      const hasRequiredColumn = findColumn(
-        row.map(String),
-        COLUMN_MAPPINGS.txn_id
-      );
-      if (hasRequiredColumn !== -1) {
-        headerRowIndex = i;
-        console.log(`[Income Import] Header detected at row ${i + 1}`);
-        break;
-      }
+  for (let r = 0; r < Math.min(30, endRow + 1); r++) {
+    const headerCandidates: string[] = [];
+    for (let c = 0; c <= endCol; c++) {
+      headerCandidates.push(getCellValue(worksheet, r, c));
+    }
+
+    const hasRequiredColumn = findColumn(headerCandidates, COLUMN_MAPPINGS.txn_id);
+    if (hasRequiredColumn !== -1) {
+      headerRowIndex = r;
+      console.log(`[Income Parser] Header detected at row ${r + 1} (0-indexed: ${r})`);
+      break;
     }
   }
 
@@ -195,7 +197,12 @@ export function parseIncomeExcel(buffer: Buffer): {
     throw new Error('Could not find header row with required columns (scanned first 30 rows)');
   }
 
-  const headers = data[headerRowIndex].map(String);
+  // Build header map
+  const headers: string[] = [];
+  for (let c = 0; c <= endCol; c++) {
+    headers.push(getCellValue(worksheet, headerRowIndex, c));
+  }
+
   const columnIndexes = {
     txn_id: findColumn(headers, COLUMN_MAPPINGS.txn_id),
     order_id: findColumn(headers, COLUMN_MAPPINGS.order_id),
@@ -216,22 +223,25 @@ export function parseIncomeExcel(buffer: Buffer): {
     throw new Error('Required column "Total settlement amount" not found');
   }
 
-  // Parse data rows
-  const rows: NormalizedIncomeRow[] = [];
-  for (let i = headerRowIndex + 1; i < data.length; i++) {
-    const row = data[i];
-    if (!row || row.length === 0) continue;
+  console.log(`[Income Parser] Column indexes:`, columnIndexes);
+  console.log(`[Income Parser] Fee columns found: ${feeColumnIndexes.length}`);
+  console.log(`[Income Parser] Data starts at row ${headerRowIndex + 2} (Excel row number)`);
 
-    const txnId = row[columnIndexes.txn_id];
-    const txnIdStr = safeToString(txnId);
+  // Parse data rows (from header+1 to endRow)
+  const rows: NormalizedIncomeRow[] = [];
+  for (let r = headerRowIndex + 1; r <= endRow; r++) {
+    const txnIdStr = getCellValue(worksheet, r, columnIndexes.txn_id);
+
+    // Skip empty rows (but don't break - continue to next row)
     if (!txnIdStr || txnIdStr === '') {
-      warnings.push(`Row ${i + 1}: Missing transaction ID, skipping`);
       continue;
     }
 
-    const settlementAmount = parseNumeric(row[columnIndexes.settlement_amount]);
+    const settlementAmountStr = getCellValue(worksheet, r, columnIndexes.settlement_amount);
+    const settlementAmount = parseNumeric(settlementAmountStr);
+
     if (settlementAmount === null) {
-      warnings.push(`Row ${i + 1}: Missing or invalid settlement amount, skipping`);
+      warnings.push(`Row ${r + 1}: Missing or invalid settlement amount, skipping`);
       continue;
     }
 
@@ -241,7 +251,7 @@ export function parseIncomeExcel(buffer: Buffer): {
       let sum = 0;
       let hasAnyFee = false;
       for (const feeIdx of feeColumnIndexes) {
-        const feeVal = parseNumeric(row[feeIdx]);
+        const feeVal = parseNumeric(getCellValue(worksheet, r, feeIdx));
         if (feeVal !== null) {
           sum += feeVal;
           hasAnyFee = true;
@@ -253,31 +263,34 @@ export function parseIncomeExcel(buffer: Buffer): {
     const normalizedRow: NormalizedIncomeRow = {
       txn_id: txnIdStr,
       order_id:
-        columnIndexes.order_id !== -1 && row[columnIndexes.order_id]
-          ? safeToString(row[columnIndexes.order_id])
+        columnIndexes.order_id !== -1
+          ? getCellValue(worksheet, r, columnIndexes.order_id) || null
           : null,
       type:
-        columnIndexes.type !== -1 && row[columnIndexes.type]
-          ? String(row[columnIndexes.type]).trim()
+        columnIndexes.type !== -1
+          ? getCellValue(worksheet, r, columnIndexes.type) || null
           : null,
       currency:
-        columnIndexes.currency !== -1 && row[columnIndexes.currency]
-          ? String(row[columnIndexes.currency]).trim().toUpperCase()
+        columnIndexes.currency !== -1
+          ? getCellValue(worksheet, r, columnIndexes.currency).toUpperCase() || 'THB'
           : 'THB',
       settled_time:
         columnIndexes.settled_time !== -1
-          ? parseDate(row[columnIndexes.settled_time])
+          ? parseDate(getCellValue(worksheet, r, columnIndexes.settled_time))
           : null,
       settlement_amount: settlementAmount,
       gross_revenue:
         columnIndexes.gross_revenue !== -1
-          ? parseNumeric(row[columnIndexes.gross_revenue])
+          ? parseNumeric(getCellValue(worksheet, r, columnIndexes.gross_revenue))
           : null,
       fees_total: feesTotal,
     };
 
     rows.push(normalizedRow);
   }
+
+  console.log(`[Income Parser] Total rows parsed: ${rows.length}`);
+  console.log(`[Income Parser] First 3 IDs:`, rows.slice(0, 3).map(r => r.txn_id));
 
   return { rows, warnings };
 }
