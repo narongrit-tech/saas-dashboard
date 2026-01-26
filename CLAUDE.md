@@ -124,6 +124,22 @@ Later: CSV import, inventory, payables, reports, tax, APIs
 - Headers: Order ID, External Order ID, Platform, Product Name, Quantity, Unit Price, Total Amount, Internal Status, Platform Status, Payment Status, Paid Date, Order Date, Created At
 - Respects all UX v2 filters (platform, status multi-select, payment)
 
+**Re-import UX (COMPLETE - 2026-01-26):**
+- ✅ Smart duplicate file detection via SHA256 hash
+- ✅ User-friendly prompt when duplicate file detected
+- ✅ Shows filename + import timestamp in warning alert
+- ✅ Two actions: Cancel (reset) or Re-import (update)
+- ✅ Idempotent upsert (no duplicates, updates existing rows)
+- ✅ Use cases: Status updates, incremental import, accidental re-upload
+- ✅ Audit logging: `[RE-IMPORT]` in server console
+- **Safety:** Default blocks duplicates, user must explicitly confirm
+- **Database:** Uses `(created_by, order_line_hash)` unique index for idempotency
+- **Location:**
+  - Actions: `frontend/src/app/(dashboard)/sales/sales-import-actions.ts`
+  - Dialog: `frontend/src/components/sales/SalesImportDialog.tsx`
+  - Docs: `SALES_REIMPORT_UX.md`, `QA_SALES_REIMPORT_UX.md`
+  - Migration: `database-scripts/migration-025-sales-order-line-hash-full-unique-index.sql`
+
 **Daily Sales Summary Bar (NEW - 2026-01-26):**
 - **Default Date Range:** Today (paid_at basis, not order_date)
 - **Layout:** 2 large cards (Revenue, Orders) + 3 small cards (Units, AOV, Cancelled Amount)
