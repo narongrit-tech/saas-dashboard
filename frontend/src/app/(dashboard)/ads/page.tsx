@@ -4,10 +4,10 @@ import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { DateRangeFilter } from '@/components/shared/DateRangeFilter';
+import { SingleDateRangePicker, type DateRangeResult } from '@/components/shared/SingleDateRangePicker';
 import { ImportAdsDialog } from '@/components/ads/ImportAdsDialog';
 import { TrendingUp, DollarSign, ShoppingCart, AlertCircle, Upload } from 'lucide-react';
-import { type DateRangeResult } from '@/lib/date-range';
+import { format } from 'date-fns';
 import { getAdsSummary, getAdsPerformance } from './actions';
 
 function formatCurrency(amount: number): string {
@@ -60,6 +60,11 @@ export default function AdsPage() {
   const fetchData = async () => {
     if (!dateRange) return;
 
+    console.log('[ADS_PAGE] Fetching data for date range:', {
+      startDate: format(dateRange.startDate, 'yyyy-MM-dd'),
+      endDate: format(dateRange.endDate, 'yyyy-MM-dd'),
+    });
+
     try {
       setLoading(true);
       setError(null);
@@ -68,6 +73,12 @@ export default function AdsPage() {
         getAdsSummary(dateRange.startDate, dateRange.endDate),
         getAdsPerformance(dateRange.startDate, dateRange.endDate),
       ]);
+
+      console.log('[ADS_PAGE] Summary result:', summaryResult);
+      console.log('[ADS_PAGE] Performance result:', {
+        success: perfResult.success,
+        rowCount: perfResult.data?.length || 0,
+      });
 
       if (!summaryResult.success) {
         setError(summaryResult.error || 'ไม่สามารถโหลดข้อมูลได้');
@@ -79,17 +90,22 @@ export default function AdsPage() {
         return;
       }
 
-      setSummary(
-        summaryResult.data || {
-          total_spend: 0,
-          total_revenue: 0,
-          total_orders: 0,
-          blended_roi: 0,
-        }
-      );
+      const summaryData = summaryResult.data || {
+        total_spend: 0,
+        total_revenue: 0,
+        total_orders: 0,
+        blended_roi: 0,
+      };
+
+      console.log('[ADS_PAGE] Setting state:', {
+        summary: summaryData,
+        performanceRowCount: perfResult.data?.length || 0,
+      });
+
+      setSummary(summaryData);
       setPerformance(perfResult.data || []);
     } catch (err) {
-      console.error('Error fetching ads data:', err);
+      console.error('[ADS_PAGE] Error fetching ads data:', err);
       setError('เกิดข้อผิดพลาดในการโหลดข้อมูล');
     } finally {
       setLoading(false);
@@ -117,7 +133,36 @@ export default function AdsPage() {
       </div>
 
       {/* Date Range Filter */}
-      <DateRangeFilter defaultPreset="last7days" onChange={setDateRange} />
+      <SingleDateRangePicker
+        presets={[
+          {
+            label: 'วันนี้',
+            getValue: () => {
+              const today = new Date();
+              return { startDate: today, endDate: today };
+            },
+          },
+          {
+            label: '7 วันล่าสุด',
+            getValue: () => {
+              const now = new Date();
+              const start = new Date(now);
+              start.setDate(start.getDate() - 6);
+              return { startDate: start, endDate: now };
+            },
+          },
+          {
+            label: '30 วันล่าสุด',
+            getValue: () => {
+              const now = new Date();
+              const start = new Date(now);
+              start.setDate(start.getDate() - 29);
+              return { startDate: start, endDate: now };
+            },
+          },
+        ]}
+        onChange={setDateRange}
+      />
 
       {/* Error State */}
       {error && (
@@ -261,7 +306,7 @@ export default function AdsPage() {
                           {row.campaign_type || '-'}
                         </span>
                       </td>
-                      <td className="py-3 px-2 text-xs">{row.campaign_name || '-'}</td>
+                      <td className="py-3 px-2 text-xs max-w-xs truncate">{row.campaign_name || '-'}</td>
                       <td className="py-3 px-2 text-right font-mono text-red-600">
                         ฿{formatCurrency(row.spend)}
                       </td>
