@@ -1,5 +1,4 @@
 'use client'
-import { DateRangeValue } from "@/components/shared/UnifiedDateRangePicker";
 
 import { useState, useEffect } from 'react'
 import { exportBankTransactions } from '@/app/(dashboard)/bank/actions'
@@ -9,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Download } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 import { subDays } from 'date-fns'
-import { UnifiedDateRangePicker } from '@/components/shared/UnifiedDateRangePicker'
+import { SingleDateRangePicker } from '@/components/shared/SingleDateRangePicker'
 import OpeningBalanceCard from './OpeningBalanceCard'
 import SetOpeningBalanceDialog from './SetOpeningBalanceDialog'
 import BankBalanceSummaryCard from './BankBalanceSummaryCard'
@@ -22,9 +21,9 @@ export default function BankDailySummaryTable({ bankAccountId }: BankDailySummar
   const [cashPosition, setCashPosition] = useState<CashPositionResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
-  const [dateRange, setDateRange] = useState<DateRangeValue>({
-    from: subDays(new Date(), 7),
-    to: new Date(),
+  const [dateRange, setDateRange] = useState<{ startDate: Date; endDate: Date }>({
+    startDate: subDays(new Date(), 7),
+    endDate: new Date(),
   })
   const [showSetOpeningBalance, setShowSetOpeningBalance] = useState(false)
   const [page, setPage] = useState(1)
@@ -41,8 +40,8 @@ export default function BankDailySummaryTable({ bankAccountId }: BankDailySummar
     setLoading(true)
     const result = await getCashPositionFromDates(
       bankAccountId,
-      dateRange.from,
-      dateRange.to
+      dateRange.startDate,
+      dateRange.endDate
     )
 
     if (result.success && result.data) {
@@ -59,7 +58,7 @@ export default function BankDailySummaryTable({ bankAccountId }: BankDailySummar
 
   async function handleExport() {
     setExporting(true)
-    const result = await exportBankTransactions(bankAccountId, dateRange.from, dateRange.to)
+    const result = await exportBankTransactions(bankAccountId, dateRange.startDate, dateRange.endDate)
 
     if (result.success && result.csv && result.filename) {
       const blob = new Blob([result.csv], { type: 'text/csv;charset=utf-8;' })
@@ -90,8 +89,8 @@ export default function BankDailySummaryTable({ bankAccountId }: BankDailySummar
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold">Daily Summary</h2>
         <div className="flex items-center gap-2">
-          <UnifiedDateRangePicker
-            value={dateRange}
+          <SingleDateRangePicker
+            defaultRange={dateRange}
             onChange={setDateRange}
           />
           <Button
@@ -134,8 +133,8 @@ export default function BankDailySummaryTable({ bankAccountId }: BankDailySummar
       {/* Bank Balance Summary Card (with Delta) */}
       <BankBalanceSummaryCard
         bankAccountId={bankAccountId}
-        startDate={dateRange.from}
-        endDate={dateRange.to}
+        startDate={dateRange.startDate}
+        endDate={dateRange.endDate}
         onUpdate={loadSummary}
       />
 
@@ -217,7 +216,7 @@ export default function BankDailySummaryTable({ bankAccountId }: BankDailySummar
         open={showSetOpeningBalance}
         onOpenChange={setShowSetOpeningBalance}
         bankAccountId={bankAccountId}
-        defaultDate={dateRange.from}
+        defaultDate={dateRange.startDate}
         onSuccess={loadSummary}
       />
     </div>

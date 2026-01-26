@@ -20,7 +20,7 @@ import {
   CheckCircle2,
   XCircle,
 } from 'lucide-react'
-import { UnifiedDateRangePicker, DateRangeValue } from '@/components/shared/UnifiedDateRangePicker'
+import { SingleDateRangePicker, DateRangeResult } from '@/components/shared/SingleDateRangePicker'
 import { getBangkokNow, startOfDayBangkok } from '@/lib/bangkok-time'
 import { getReconciliationReport, exportReconciliationReport, ReconciliationReport } from './actions'
 
@@ -33,17 +33,17 @@ function formatCurrency(amount: number): string {
 
 export default function ReconciliationPage() {
   // Default: Last 7 days
-  const getDefaultRange = (): DateRangeValue => {
+  const getDefaultRange = (): DateRangeResult => {
     const now = getBangkokNow()
     const start = new Date(now)
     start.setDate(start.getDate() - 6)
     return {
-      from: startOfDayBangkok(start),
-      to: getBangkokNow(),
+      startDate: startOfDayBangkok(start),
+      endDate: getBangkokNow(),
     }
   }
 
-  const [dateRange, setDateRange] = useState<DateRangeValue>(getDefaultRange())
+  const [dateRange, setDateRange] = useState<DateRangeResult>(getDefaultRange())
   const [data, setData] = useState<ReconciliationReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -58,7 +58,7 @@ export default function ReconciliationPage() {
       setLoading(true)
       setError(null)
 
-      const result = await getReconciliationReport(dateRange.from, dateRange.to)
+      const result = await getReconciliationReport(dateRange.startDate, dateRange.endDate)
 
       if (!result.success || !result.data) {
         setError(result.error || 'ไม่สามารถโหลดข้อมูลได้')
@@ -81,7 +81,7 @@ export default function ReconciliationPage() {
       setExportLoading(true)
       setError(null)
 
-      const result = await exportReconciliationReport(dateRange.from, dateRange.to)
+      const result = await exportReconciliationReport(dateRange.startDate, dateRange.endDate)
 
       if (!result.success || !result.csv || !result.filename) {
         setError(result.error || 'เกิดข้อผิดพลาดในการ export')
@@ -130,8 +130,8 @@ export default function ReconciliationPage() {
       {/* Date Range Filter */}
       <div className="flex items-center gap-4">
         <div className="flex-1">
-          <UnifiedDateRangePicker
-            value={dateRange}
+          <SingleDateRangePicker
+            defaultRange={dateRange}
             onChange={setDateRange}
           />
         </div>

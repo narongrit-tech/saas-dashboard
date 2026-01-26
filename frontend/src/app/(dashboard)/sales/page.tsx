@@ -7,7 +7,7 @@ import { SalesOrder, SalesOrderFilters } from '@/types/sales'
 import { endOfDayBangkok, formatBangkok } from '@/lib/bangkok-time'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { UnifiedDateRangePicker, DateRangeValue } from '@/components/shared/UnifiedDateRangePicker';
+import { SingleDateRangePicker, DateRangeResult } from '@/components/shared/SingleDateRangePicker'
 import {
   Select,
   SelectContent,
@@ -202,11 +202,11 @@ export default function SalesPage() {
     updateURL(newFilters)
   }
 
-  const handleDateRangeChange = (range: DateRangeValue) => {
+  const handleDateRangeChange = (range: DateRangeResult) => {
     const newFilters = {
       ...filters,
-      startDate: formatBangkok(range.from, 'yyyy-MM-dd'),
-      endDate: formatBangkok(range.to, 'yyyy-MM-dd'),
+      startDate: formatBangkok(range.startDate, 'yyyy-MM-dd'),
+      endDate: formatBangkok(range.endDate, 'yyyy-MM-dd'),
       page: 1
     }
     setFilters(newFilters)
@@ -475,17 +475,16 @@ export default function SalesPage() {
         <div className="flex flex-col gap-4 md:flex-row md:items-end">
           <div className="flex-1 space-y-2">
             <label className="text-sm font-medium">ช่วงวันที่</label>
-            <UnifiedDateRangePicker
-              value={
+            <SingleDateRangePicker
+              defaultRange={
                 filters.startDate && filters.endDate
                   ? {
-                      from: new Date(filters.startDate),
-                      to: new Date(filters.endDate)
+                      startDate: new Date(filters.startDate),
+                      endDate: new Date(filters.endDate)
                     }
                   : undefined
               }
               onChange={handleDateRangeChange}
-              defaultPreset="last7"
             />
           </div>
 
