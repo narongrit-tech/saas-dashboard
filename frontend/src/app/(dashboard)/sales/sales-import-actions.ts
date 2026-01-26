@@ -484,9 +484,10 @@ export async function createImportBatch(
   success: boolean;
   batchId?: string;
   error?: string;
-  status?: 'duplicate_file' | 'created';
+  status?: 'duplicate_file' | 'already_processing' | 'created';
   fileName?: string;
   importedAt?: string;
+  createdAt?: string;
   message?: string;
 }> {
   const supabase = createClient()
@@ -516,33 +517,66 @@ export async function createImportBatch(
       }
     }
 
-    // Check for duplicate import (skip if allowReimport=true)
+    // STEP 2: Check for existing SUCCESSFUL batch (skip if allowReimport=true)
     if (!allowReimport) {
-      const { data: existingBatch } = await supabase
+      const { data: existingSuccess, error: checkError } = await supabase
         .from('import_batches')
         .select('id, file_name, created_at, status, inserted_count')
         .eq('file_hash', fileHash)
         .eq('marketplace', 'tiktok_shop')
+        .eq('report_type', 'sales_order_sku_list')
+        .eq('created_by', user.id)
         .eq('status', 'success')
         .gt('inserted_count', 0)
-        .single()
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
 
-      if (existingBatch) {
-        // Return structured response (not error) for duplicate detection
+      if (existingSuccess) {
+        // Duplicate file detected, user hasn't confirmed re-import yet
         return {
           success: false,
           status: 'duplicate_file',
-          fileName: existingBatch.file_name,
-          importedAt: existingBatch.created_at, // Return ISO timestamp (backend format)
+          fileName: existingSuccess.file_name || fileName,
+          importedAt: existingSuccess.created_at,
           message: 'ไฟล์นี้ถูก import ไปแล้ว'
         }
       }
-    } else {
-      // Re-import mode: log for audit
+    }
+
+    // STEP 3: Check for existing PROCESSING batch (within last 30 min)
+    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+    const { data: existingProcessing, error: procError } = await supabase
+      .from('import_batches')
+      .select('id, created_at, file_name')
+      .eq('file_hash', fileHash)
+      .eq('marketplace', 'tiktok_shop')
+      .eq('report_type', 'sales_order_sku_list')
+      .eq('created_by', user.id)
+      .eq('status', 'processing')
+      .gte('created_at', thirtyMinAgo)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (existingProcessing) {
+      // Import already in progress
+      return {
+        success: false,
+        status: 'already_processing',
+        batchId: existingProcessing.id,
+        fileName: existingProcessing.file_name || fileName,
+        createdAt: existingProcessing.created_at,
+        message: 'กำลัง import ไฟล์นี้อยู่ กรุณารอสักครู่'
+      }
+    }
+
+    // Re-import mode: log for audit (only if allowReimport=true)
+    if (allowReimport) {
       console.log(`[RE-IMPORT] User: ${user.id} | File: ${fileName} | FileHash: ${fileHash.substring(0, 8)}...`)
     }
 
-    // Create import batch record
+    // STEP 4: NOW create new batch
     const { data: batch, error: batchError } = await supabase
       .from('import_batches')
       .insert({
@@ -603,6 +637,17 @@ export async function importSalesChunk(
 
     // Validate required fields
     if (!batchId || !chunkDataJson || isNaN(chunkIndex) || isNaN(totalChunks)) {
+      // Mark batch as failed
+      if (batchId) {
+        await supabase
+          .from('import_batches')
+          .update({
+            status: 'failed',
+            notes: 'Chunk import failed: Missing required fields'
+          })
+          .eq('id', batchId)
+      }
+
       return {
         success: false,
         inserted: 0,
@@ -616,6 +661,15 @@ export async function importSalesChunk(
     // Get current user
     const { data: { user }, error: authError } = await supabase.auth.getUser()
     if (authError || !user) {
+      // Mark batch as failed
+      await supabase
+        .from('import_batches')
+        .update({
+          status: 'failed',
+          notes: 'Authentication failed during chunk import'
+        })
+        .eq('id', batchId)
+
       return {
         success: false,
         inserted: 0,
@@ -683,6 +737,16 @@ export async function importSalesChunk(
 
     if (upsertError) {
       console.error(`Upsert error (chunk ${chunkIndex + 1}/${totalChunks}):`, upsertError)
+
+      // Mark batch as failed
+      await supabase
+        .from('import_batches')
+        .update({
+          status: 'failed',
+          notes: `Chunk ${chunkIndex + 1}/${totalChunks} failed: ${upsertError.message}`
+        })
+        .eq('id', batchId)
+
       return {
         success: false,
         inserted: 0,
@@ -702,6 +766,19 @@ export async function importSalesChunk(
   } catch (error: unknown) {
     console.error('Import chunk error:', error)
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+
+    // Mark batch as failed
+    const batchId = formData.get('batchId') as string
+    if (batchId) {
+      await supabase
+        .from('import_batches')
+        .update({
+          status: 'failed',
+          notes: `Chunk import error: ${errorMessage}`
+        })
+        .eq('id', batchId)
+    }
+
     return {
       success: false,
       inserted: 0,
@@ -727,6 +804,17 @@ export async function finalizeImportBatch(
 
     // Validate required fields
     if (!batchId || isNaN(totalInserted) || !parsedDataJson) {
+      // Mark batch as failed before returning
+      if (batchId) {
+        await supabase
+          .from('import_batches')
+          .update({
+            status: 'failed',
+            notes: 'Finalization failed: Missing required fields'
+          })
+          .eq('id', batchId)
+      }
+
       return {
         success: false,
         error: 'Missing required fields: batchId, totalInserted, or parsedDataJson',
@@ -740,10 +828,30 @@ export async function finalizeImportBatch(
     const parsedData: ParsedSalesRow[] = JSON.parse(parsedDataJson)
 
     // Post-insert verification: Count actual rows in database
-    const { count: actualCount } = await supabase
+    const { count: actualCount, error: countError } = await supabase
       .from('sales_orders')
       .select('*', { count: 'exact', head: true })
       .eq('import_batch_id', batchId)
+
+    if (countError) {
+      console.error('Count verification error:', countError)
+      // Mark batch as failed
+      await supabase
+        .from('import_batches')
+        .update({
+          status: 'failed',
+          notes: `Verification error: ${countError.message}`
+        })
+        .eq('id', batchId)
+
+      return {
+        success: false,
+        error: `Verification failed: ${countError.message}`,
+        inserted: 0,
+        skipped: 0,
+        errors: parsedData.length,
+      }
+    }
 
     const verifiedCount = actualCount || 0
 
@@ -770,7 +878,7 @@ export async function finalizeImportBatch(
     }
 
     // Update batch status to success
-    await supabase
+    const { error: updateError } = await supabase
       .from('import_batches')
       .update({
         status: 'success',
@@ -778,6 +886,26 @@ export async function finalizeImportBatch(
         notes: `Successfully imported ${verifiedCount} rows (chunked import)`,
       })
       .eq('id', batchId)
+
+    if (updateError) {
+      console.error('Failed to update batch status:', updateError)
+      // Still mark as failed to avoid stuck processing
+      await supabase
+        .from('import_batches')
+        .update({
+          status: 'failed',
+          notes: `Status update error: ${updateError.message}`
+        })
+        .eq('id', batchId)
+
+      return {
+        success: false,
+        error: 'Failed to finalize import batch',
+        inserted: 0,
+        skipped: 0,
+        errors: parsedData.length,
+      }
+    }
 
     // Calculate summary
     const totalRevenue = parsedData
@@ -805,6 +933,19 @@ export async function finalizeImportBatch(
   } catch (error: unknown) {
     console.error('Finalize batch error:', error)
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+
+    // Mark batch as failed to avoid stuck processing
+    const batchId = formData.get('batchId') as string
+    if (batchId) {
+      await supabase
+        .from('import_batches')
+        .update({
+          status: 'failed',
+          notes: `Unexpected error: ${errorMessage}`
+        })
+        .eq('id', batchId)
+    }
+
     return {
       success: false,
       error: errorMessage,

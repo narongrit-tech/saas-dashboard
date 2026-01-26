@@ -16,7 +16,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { FileSpreadsheet, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
+import { FileSpreadsheet, CheckCircle2, AlertCircle, Loader2, Info } from 'lucide-react'
 import {
   createImportBatch,
   importSalesChunk,
@@ -32,7 +32,7 @@ interface SalesImportDialogProps {
   onSuccess: () => void
 }
 
-type Step = 'upload' | 'preview' | 'duplicate' | 'importing' | 'result'
+type Step = 'upload' | 'preview' | 'duplicate' | 'already_processing' | 'importing' | 'result'
 
 /**
  * Helper: Build FormData for createImportBatch Server Action
@@ -96,6 +96,7 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
   const [isProcessing, setIsProcessing] = useState(false)
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null)
   const [duplicateInfo, setDuplicateInfo] = useState<{ fileName: string; importedAt: string } | null>(null)
+  const [processingInfo, setProcessingInfo] = useState<{ batchId?: string; fileName?: string; createdAt?: string } | null>(null)
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
@@ -171,7 +172,7 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
       const batchResult = await createImportBatch(batchFormData)
 
       // Handle duplicate file detection
-      if (batchResult.status === 'duplicate_file' && !allowReimport) {
+      if (batchResult.status === 'duplicate_file') {
         // Format timestamp from ISO to Thai format
         let formattedDate = 'Unknown'
         if (batchResult.importedAt) {
@@ -196,6 +197,36 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
         })
         setIsProcessing(false)
         setStep('duplicate')
+        return
+      }
+
+      // Handle already processing detection
+      if (batchResult.status === 'already_processing') {
+        // Format timestamp from ISO to Thai format
+        let formattedDate = 'Unknown'
+        if (batchResult.createdAt) {
+          try {
+            const date = new Date(batchResult.createdAt)
+            formattedDate = new Intl.DateTimeFormat('th-TH', {
+              year: 'numeric',
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+              timeZone: 'Asia/Bangkok'
+            }).format(date)
+          } catch {
+            formattedDate = 'Unknown'
+          }
+        }
+
+        setProcessingInfo({
+          batchId: batchResult.batchId,
+          fileName: batchResult.fileName || file.name,
+          createdAt: formattedDate,
+        })
+        setIsProcessing(false)
+        setStep('already_processing')
         return
       }
 
@@ -288,6 +319,7 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
     setIsProcessing(false)
     setImportProgress(null)
     setDuplicateInfo(null)
+    setProcessingInfo(null)
     onOpenChange(false)
   }
 
@@ -436,7 +468,7 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
                 Cancel
               </Button>
               <Button
-                onClick={handleConfirmImport}
+                onClick={() => handleConfirmImport(false)}
                 disabled={!preview.success || isProcessing}
               >
                 {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
@@ -476,6 +508,39 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
               <Button onClick={handleReimport} disabled={isProcessing}>
                 {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                 นำเข้าซ้ำเพื่ออัปเดตข้อมูล
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 3.5: Already Processing */}
+        {step === 'already_processing' && processingInfo && (
+          <div className="space-y-4">
+            <Alert className="border-blue-500 bg-blue-50 text-blue-900 dark:bg-blue-950 dark:text-blue-100">
+              <Info className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+              <AlertDescription>
+                <div className="space-y-2">
+                  <p className="font-semibold text-blue-900 dark:text-blue-100">
+                    กำลัง import ไฟล์นี้อยู่
+                  </p>
+                  <p className="text-sm text-blue-800 dark:text-blue-200">
+                    <strong>ไฟล์:</strong> {processingInfo.fileName}
+                  </p>
+                  {processingInfo.createdAt && (
+                    <p className="text-sm text-blue-800 dark:text-blue-200">
+                      <strong>เริ่มเมื่อ:</strong> {processingInfo.createdAt}
+                    </p>
+                  )}
+                  <p className="text-sm text-blue-700 dark:text-blue-300">
+                    ไฟล์นี้กำลังถูก import อยู่ กรุณารอให้เสร็จก่อนแล้วค่อย import ใหม่
+                  </p>
+                </div>
+              </AlertDescription>
+            </Alert>
+
+            <div className="flex justify-end">
+              <Button variant="outline" onClick={handleClose}>
+                ปิด
               </Button>
             </div>
           </div>
