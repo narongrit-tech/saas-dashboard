@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Button } from '@/components/ui/button';
-import { CalendarIcon, X } from 'lucide-react';
+import { CalendarIcon } from 'lucide-react';
 import { format } from 'date-fns';
 import { DateRange } from 'react-day-picker';
 import { getBangkokNow, startOfDayBangkok, endOfDayBangkok } from '@/lib/bangkok-time';
@@ -125,7 +125,7 @@ export function UnifiedDateRangePicker({
   // Draft range (internal calendar selection)
   const [draftRange, setDraftRange] = useState<DateRange | undefined>(appliedRange);
 
-  // Initialize with default preset if no value
+  // Initialize with default preset if no value (runs once on mount)
   useEffect(() => {
     if (!value) {
       const defaultPresetData = presets.find((p) =>
@@ -139,12 +139,12 @@ export function UnifiedDateRangePicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Sync draftRange with appliedRange when popover opens
+  // Sync draftRange with appliedRange ONLY when popover opens
   useEffect(() => {
     if (open) {
       setDraftRange(appliedRange);
     }
-  }, [open, appliedRange]);
+  }, [open]);
 
   // Commit range: apply and close
   const commitRange = (range: DateRange) => {
@@ -164,20 +164,18 @@ export function UnifiedDateRangePicker({
       return;
     }
 
-    // First click: from only
+    // Case 1: First click (from only, no to)
     if (range.from && !range.to) {
       setDraftRange(range);
+      // DO NOT apply, DO NOT close
       return;
     }
 
-    // Second click: from + to
+    // Case 2: Second click (from + to)
     if (range.from && range.to) {
-      // Check single-day selection
-      if (range.from.getTime() === range.to.getTime()) {
-        commitRange(range);
-      } else {
-        commitRange(range);
-      }
+      // Apply range and close popover
+      commitRange(range);
+      return;
     }
   };
 
@@ -185,17 +183,6 @@ export function UnifiedDateRangePicker({
   const handlePresetClick = (preset: { getValue: () => DateRangeValue }) => {
     const range = preset.getValue();
     onChange(range);
-    setOpen(false);
-  };
-
-  // Handle clear
-  const handleClear = () => {
-    // Reset to Last 7 Days
-    const last7 = presets.find((p) => p.label === 'Last 7 days');
-    if (last7) {
-      const range = last7.getValue();
-      onChange(range);
-    }
     setOpen(false);
   };
 
@@ -247,17 +234,6 @@ export function UnifiedDateRangePicker({
                 {preset.label}
               </Button>
             ))}
-            <div className="pt-2 border-t">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start text-sm font-normal text-red-600 hover:text-red-700 hover:bg-red-50"
-                onClick={handleClear}
-              >
-                <X className="mr-2 h-3 w-3" />
-                Clear
-              </Button>
-            </div>
           </div>
 
           {/* Calendar (Right) */}
