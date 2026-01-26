@@ -54,6 +54,7 @@ export default function AdsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [modalInstanceKey, setModalInstanceKey] = useState(0);
 
   // Get campaign type from URL (default: 'all')
   const campaignType = (searchParams.get('tab') as CampaignTypeFilter) || 'all';
@@ -121,10 +122,17 @@ export default function AdsPage() {
   };
 
   const handleImportSuccess = () => {
-    setImportDialogOpen(false);
+    // Don't close modal - let user see result and close manually
+    // Just refresh data
     if (dateRange) {
       fetchData();
     }
+  };
+
+  const handleOpenImportDialog = () => {
+    // Force remount by incrementing key (resets all internal state)
+    setModalInstanceKey((k) => k + 1);
+    setImportDialogOpen(true);
   };
 
   const handleTabChange = (value: string) => {
@@ -145,7 +153,7 @@ export default function AdsPage() {
           <h1 className="text-3xl font-bold">Ads Performance</h1>
           <p className="text-muted-foreground">ติดตามประสิทธิภาพโฆษณา TikTok รายวัน</p>
         </div>
-        <Button onClick={() => setImportDialogOpen(true)}>
+        <Button onClick={handleOpenImportDialog}>
           <Upload className="mr-2 h-4 w-4" />
           Import Ads Data (.xlsx)
         </Button>
@@ -371,6 +379,7 @@ export default function AdsPage() {
 
       {/* Import Dialog */}
       <ImportAdsDialog
+        key={modalInstanceKey}
         open={importDialogOpen}
         onOpenChange={setImportDialogOpen}
         onSuccess={handleImportSuccess}

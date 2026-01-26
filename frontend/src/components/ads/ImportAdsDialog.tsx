@@ -252,10 +252,17 @@ export function ImportAdsDialog({ open, onOpenChange, onSuccess }: ImportAdsDial
       setResult(data);
       setStep('result');
 
+      // Show success toast
+      toast({
+        title: '✓ Import สำเร็จ',
+        description: `นำเข้าข้อมูล ${data.insertedCount} rows (Updated: ${data.updatedCount})`,
+        variant: 'default',
+      });
+
       // Refresh page data immediately (force revalidate server components)
       router.refresh();
 
-      // Call onSuccess callback
+      // Call onSuccess callback (refetch data without closing modal)
       onSuccess();
     } catch (err) {
       console.error('Import error:', err);
@@ -277,7 +284,7 @@ export function ImportAdsDialog({ open, onOpenChange, onSuccess }: ImportAdsDial
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ batchId: rollbackBatchId }),
+        body: JSON.stringify({ batch_id: rollbackBatchId }),
       });
 
       const data: RollbackResponse = await response.json();
