@@ -426,3 +426,152 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
     }
   }
 }
+
+/**
+ * Get Sales Aggregates (Summary Metrics)
+ * Computes summary metrics for Sales Orders page
+ * Uses SAME filters as getSalesOrders to prevent drift
+ *
+ * CRITICAL: Uses paid_at for date filtering (not order_date)
+ * Only paid orders contribute to revenue metrics
+ */
+export interface SalesAggregates {
+  revenue_paid_excl_cancel: number // Revenue (paid, exclude cancelled)
+  cancelled_amount: number // Total cancelled amount
+  net_after_cancel: number // Net revenue after cancellations
+  orders_excl_cancel: number // Order count (exclude cancelled)
+  cancelled_orders: number // Cancelled order count
+  units_excl_cancel: number // Total units (exclude cancelled)
+  aov_net: number // Average Order Value (net / orders)
+}
+
+export async function getSalesAggregates(filters: ExportFilters): Promise<{
+  success: boolean
+  data?: SalesAggregates
+  error?: string
+}> {
+  try {
+    // 1. Authenticate user
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+    }
+
+    // 2. Build base query with filters (SAME as exportSalesOrders)
+    let baseQuery = supabase
+      .from('sales_orders')
+      .select('*')
+
+    // Platform filter (UX v2)
+    if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
+      baseQuery = baseQuery.eq('source_platform', filters.sourcePlatform)
+    } else if (filters.marketplace && filters.marketplace !== 'All') {
+      // Legacy fallback
+      baseQuery = baseQuery.eq('marketplace', filters.marketplace)
+    }
+
+    // Status filter (multi-select, UX v2) - filters by platform_status (Thai values)
+    if (filters.status && filters.status.length > 0) {
+      baseQuery = baseQuery.in('platform_status', filters.status)
+    }
+
+    // Payment status filter (UX v2)
+    if (filters.paymentStatus && filters.paymentStatus !== 'all') {
+      baseQuery = baseQuery.eq('payment_status', filters.paymentStatus)
+    }
+
+    // CRITICAL: Use paid_at for date filtering (not order_date)
+    // Only orders with paid_at contribute to revenue
+    if (filters.startDate) {
+      baseQuery = baseQuery.gte('paid_at', filters.startDate)
+    }
+
+    if (filters.endDate) {
+      // Use Bangkok timezone for end of day
+      const { toZonedTime } = await import('date-fns-tz')
+      const { endOfDay } = await import('date-fns')
+      const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
+      const endOfDayBangkok = endOfDay(bangkokDate)
+      baseQuery = baseQuery.lte('paid_at', endOfDayBangkok.toISOString())
+    }
+
+    // Apply search filter (UX v2 includes external_order_id)
+    if (filters.search && filters.search.trim()) {
+      baseQuery = baseQuery.or(
+        `order_id.ilike.%${filters.search}%,product_name.ilike.%${filters.search}%,external_order_id.ilike.%${filters.search}%`
+      )
+    }
+
+    // 3. Fetch all matching orders (we need to compute aggregates in code)
+    const { data: orders, error: fetchError } = await baseQuery
+
+    if (fetchError) {
+      console.error('Error fetching orders for aggregates:', fetchError)
+      return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+    }
+
+    if (!orders || orders.length === 0) {
+      // Return zero aggregates if no data
+      return {
+        success: true,
+        data: {
+          revenue_paid_excl_cancel: 0,
+          cancelled_amount: 0,
+          net_after_cancel: 0,
+          orders_excl_cancel: 0,
+          cancelled_orders: 0,
+          units_excl_cancel: 0,
+          aov_net: 0,
+        },
+      }
+    }
+
+    // 4. Compute aggregates
+    let revenuePaidExclCancel = 0
+    let cancelledAmount = 0
+    let ordersExclCancel = 0
+    let cancelledOrders = 0
+    let unitsExclCancel = 0
+
+    for (const order of orders) {
+      const isCancelled = order.platform_status?.toLowerCase().includes('ยกเลิก')
+
+      if (isCancelled) {
+        cancelledAmount += order.total_amount || 0
+        cancelledOrders += 1
+      } else {
+        revenuePaidExclCancel += order.total_amount || 0
+        ordersExclCancel += 1
+        unitsExclCancel += order.quantity || 0
+      }
+    }
+
+    // 5. Calculate derived metrics
+    const netAfterCancel = revenuePaidExclCancel - cancelledAmount
+    const aovNet = ordersExclCancel > 0 ? netAfterCancel / ordersExclCancel : 0
+
+    return {
+      success: true,
+      data: {
+        revenue_paid_excl_cancel: Math.round(revenuePaidExclCancel * 100) / 100,
+        cancelled_amount: Math.round(cancelledAmount * 100) / 100,
+        net_after_cancel: Math.round(netAfterCancel * 100) / 100,
+        orders_excl_cancel: ordersExclCancel,
+        cancelled_orders: cancelledOrders,
+        units_excl_cancel: unitsExclCancel,
+        aov_net: Math.round(aovNet * 100) / 100,
+      },
+    }
+  } catch (error) {
+    console.error('Unexpected error in getSalesAggregates:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}

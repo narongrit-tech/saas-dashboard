@@ -4,10 +4,12 @@ import { useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SalesOrder, SalesOrderFilters } from '@/types/sales'
-import { endOfDayBangkok, formatBangkok } from '@/lib/bangkok-time'
+import { endOfDayBangkok, formatBangkok, getBangkokNow, startOfDayBangkok } from '@/lib/bangkok-time'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SingleDateRangePicker, DateRangeResult } from '@/components/shared/SingleDateRangePicker'
+import { SalesSummaryBar } from '@/components/sales/SalesSummaryBar'
+import { getSalesAggregates, SalesAggregates } from '@/app/(dashboard)/sales/actions'
 import {
   Select,
   SelectContent,
@@ -73,16 +75,25 @@ export default function SalesPage() {
   const [selectedOrder, setSelectedOrder] = useState<SalesOrder | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
+  const [aggregates, setAggregates] = useState<SalesAggregates | null>(null)
+  const [aggregatesLoading, setAggregatesLoading] = useState(true)
+  const [aggregatesError, setAggregatesError] = useState<string | null>(null)
 
   // Parse filters from URL params
   const getFiltersFromURL = (): SalesOrderFilters => {
     const statusParam = searchParams.get('status')
+
+    // Default date range: Today (Bangkok timezone) if no params
+    const hasDateParams = searchParams.get('startDate') || searchParams.get('endDate')
+    const todayStart = hasDateParams ? undefined : formatBangkok(startOfDayBangkok(), 'yyyy-MM-dd')
+    const todayEnd = hasDateParams ? undefined : formatBangkok(getBangkokNow(), 'yyyy-MM-dd')
+
     return {
       sourcePlatform: searchParams.get('platform') || undefined,
       status: statusParam ? statusParam.split(',') : undefined,
       paymentStatus: searchParams.get('paymentStatus') || undefined,
-      startDate: searchParams.get('startDate') || undefined,
-      endDate: searchParams.get('endDate') || undefined,
+      startDate: searchParams.get('startDate') || todayStart,
+      endDate: searchParams.get('endDate') || todayEnd,
       search: searchParams.get('search') || undefined,
       page: parseInt(searchParams.get('page') || '1', 10),
       perPage: parseInt(searchParams.get('perPage') || '20', 10),
@@ -131,7 +142,38 @@ export default function SalesPage() {
 
   useEffect(() => {
     fetchOrders()
+    fetchAggregates()
   }, [filters])
+
+  const fetchAggregates = async () => {
+    try {
+      setAggregatesLoading(true)
+      setAggregatesError(null)
+
+      const result = await getSalesAggregates({
+        sourcePlatform: filters.sourcePlatform,
+        status: filters.status,
+        paymentStatus: filters.paymentStatus,
+        startDate: filters.startDate,
+        endDate: filters.endDate,
+        search: filters.search,
+      })
+
+      if (!result.success) {
+        setAggregatesError(result.error || 'เกิดข้อผิดพลาดในการโหลดสรุปข้อมูล')
+        setAggregates(null)
+        return
+      }
+
+      setAggregates(result.data || null)
+    } catch (err) {
+      console.error('Error fetching aggregates:', err)
+      setAggregatesError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการโหลดสรุปข้อมูล')
+      setAggregates(null)
+    } finally {
+      setAggregatesLoading(false)
+    }
+  }
 
   const fetchOrders = async () => {
     try {
@@ -142,7 +184,7 @@ export default function SalesPage() {
       let query = supabase
         .from('sales_orders')
         .select('*', { count: 'exact' })
-        .order('order_date', { ascending: false })
+        .order('paid_at', { ascending: false })
 
       // Platform filter (UX v2)
       if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
@@ -159,15 +201,16 @@ export default function SalesPage() {
         query = query.eq('payment_status', filters.paymentStatus)
       }
 
-      // Date range filters
+      // CRITICAL: Date range filters now use paid_at (not order_date)
+      // Only paid orders contribute to revenue
       if (filters.startDate) {
-        query = query.gte('order_date', filters.startDate)
+        query = query.gte('paid_at', filters.startDate)
       }
 
       if (filters.endDate) {
         // Use Bangkok timezone for end of day
         const endBangkok = endOfDayBangkok(filters.endDate)
-        query = query.lte('order_date', endBangkok.toISOString())
+        query = query.lte('paid_at', endBangkok.toISOString())
       }
 
       // Search filter (order_id, product_name, external_order_id)
@@ -402,6 +445,13 @@ export default function SalesPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">Sales Orders</h1>
       </div>
+
+      {/* Summary Bar - Above Filters */}
+      <SalesSummaryBar
+        aggregates={aggregates}
+        loading={aggregatesLoading}
+        error={aggregatesError}
+      />
 
       {/* Filters - UX v2 */}
       <div className="space-y-4">

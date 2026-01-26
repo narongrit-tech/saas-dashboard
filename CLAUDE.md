@@ -124,6 +124,35 @@ Later: CSV import, inventory, payables, reports, tax, APIs
 - Headers: Order ID, External Order ID, Platform, Product Name, Quantity, Unit Price, Total Amount, Internal Status, Platform Status, Payment Status, Paid Date, Order Date, Created At
 - Respects all UX v2 filters (platform, status multi-select, payment)
 
+**Daily Sales Summary Bar (NEW - 2026-01-26):**
+- **Default Date Range:** Today (paid_at basis, not order_date)
+- **Layout:** 2 large cards (Revenue, Orders) + 3 small cards (Units, AOV, Cancelled Amount)
+- **Key Metrics:**
+  - Revenue (Paid): Sum of total_amount (exclude cancelled), with "Net after cancel" subtext
+  - Orders: Count of orders (exclude cancelled), with "Cancelled: N orders" subtext
+  - Units (Qty): Sum of quantity (exclude cancelled)
+  - AOV: Net Revenue / Orders (handles divide-by-zero)
+  - Cancelled Amount: Sum of cancelled order amounts (red text)
+- **Critical:** Summary uses SAME filters as table (no drift)
+  - Date filter: paid_at column (only paid orders contribute to revenue)
+  - Platform filter: source_platform
+  - Status filter: platform_status (Thai values, multi-select)
+  - Payment filter: payment_status
+  - Search filter: order_id/product_name/external_order_id
+- **Cancelled Orders Handling:** Detected by `platform_status.toLowerCase().includes('ยกเลิก')`
+  - Excluded from main metrics (revenue, orders, units)
+  - Shown separately in "Cancelled Amount" card and order subtext
+- **Component:** `frontend/src/components/sales/SalesSummaryBar.tsx`
+- **Server Action:** `getSalesAggregates()` in `frontend/src/app/(dashboard)/sales/actions.ts`
+- **Loading State:** Skeleton cards during fetch
+- **Zero Handling:** Returns zero metrics (not NaN) when no data
+
+**Why paid_at Basis:**
+- Revenue recognition: Only orders with payment received count toward revenue
+- Cash flow accuracy: Matches when money actually entered business
+- Prevents inflated revenue from unpaid orders
+- Aligns with accounting standards (accrual basis with payment verification)
+
 ### Expenses (COMPLETE - MVP Core Feature)
 - ✅ View: Paginated list with filters (category, date range, search)
 - ✅ Add: Manual expense entry with category validation
