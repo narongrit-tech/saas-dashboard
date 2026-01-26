@@ -3,7 +3,13 @@
 import { createClient } from '@/lib/supabase/server';
 import { format } from 'date-fns';
 
-export async function getAdsSummary(startDate: Date, endDate: Date) {
+export type CampaignTypeFilter = 'all' | 'product' | 'live';
+
+export async function getAdsSummary(
+  startDate: Date,
+  endDate: Date,
+  campaignType: CampaignTypeFilter = 'all'
+) {
   try {
     const supabase = await createClient();
     const {
@@ -21,14 +27,22 @@ export async function getAdsSummary(startDate: Date, endDate: Date) {
       userId: user.id,
       startDate: startDateStr,
       endDate: endDateStr,
+      campaignType,
     });
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('ad_daily_performance')
       .select('spend, revenue, orders')
       .eq('created_by', user.id)
       .gte('ad_date', startDateStr)
       .lte('ad_date', endDateStr);
+
+    // Apply campaign type filter if not 'all'
+    if (campaignType === 'product' || campaignType === 'live') {
+      query = query.eq('campaign_type', campaignType);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       console.error('[ADS_SUMMARY] Query error:', error);
@@ -67,7 +81,11 @@ export async function getAdsSummary(startDate: Date, endDate: Date) {
   }
 }
 
-export async function getAdsPerformance(startDate: Date, endDate: Date) {
+export async function getAdsPerformance(
+  startDate: Date,
+  endDate: Date,
+  campaignType: CampaignTypeFilter = 'all'
+) {
   try {
     const supabase = await createClient();
     const {
@@ -85,15 +103,24 @@ export async function getAdsPerformance(startDate: Date, endDate: Date) {
       userId: user.id,
       startDate: startDateStr,
       endDate: endDateStr,
+      campaignType,
     });
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('ad_daily_performance')
       .select('*')
       .eq('created_by', user.id)
       .gte('ad_date', startDateStr)
-      .lte('ad_date', endDateStr)
-      .order('ad_date', { ascending: false });
+      .lte('ad_date', endDateStr);
+
+    // Apply campaign type filter if not 'all'
+    if (campaignType === 'product' || campaignType === 'live') {
+      query = query.eq('campaign_type', campaignType);
+    }
+
+    query = query.order('ad_date', { ascending: false });
+
+    const { data, error } = await query;
 
     if (error) {
       console.error('[ADS_PERFORMANCE] Query error:', error);
