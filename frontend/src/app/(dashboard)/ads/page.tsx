@@ -1,14 +1,16 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { SingleDateRangePicker, type DateRangeResult } from '@/components/shared/SingleDateRangePicker';
 import { ImportAdsDialog } from '@/components/ads/ImportAdsDialog';
 import { TrendingUp, DollarSign, ShoppingCart, AlertCircle, Upload } from 'lucide-react';
 import { format } from 'date-fns';
-import { getAdsSummary, getAdsPerformance } from './actions';
+import { getAdsSummary, getAdsPerformance, type CampaignTypeFilter } from './actions';
 
 function formatCurrency(amount: number): string {
   return amount.toLocaleString('th-TH', {
@@ -44,6 +46,8 @@ interface AdsPerformance {
 }
 
 export default function AdsPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [dateRange, setDateRange] = useState<DateRangeResult | null>(null);
   const [summary, setSummary] = useState<AdsSummary | null>(null);
   const [performance, setPerformance] = useState<AdsPerformance[]>([]);
@@ -51,11 +55,14 @@ export default function AdsPage() {
   const [error, setError] = useState<string | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
 
+  // Get campaign type from URL (default: 'all')
+  const campaignType = (searchParams.get('tab') as CampaignTypeFilter) || 'all';
+
   useEffect(() => {
     if (dateRange) {
       fetchData();
     }
-  }, [dateRange]);
+  }, [dateRange, campaignType]);
 
   const fetchData = async () => {
     if (!dateRange) return;
@@ -63,6 +70,7 @@ export default function AdsPage() {
     console.log('[ADS_PAGE] Fetching data for date range:', {
       startDate: format(dateRange.startDate, 'yyyy-MM-dd'),
       endDate: format(dateRange.endDate, 'yyyy-MM-dd'),
+      campaignType,
     });
 
     try {
@@ -70,8 +78,8 @@ export default function AdsPage() {
       setError(null);
 
       const [summaryResult, perfResult] = await Promise.all([
-        getAdsSummary(dateRange.startDate, dateRange.endDate),
-        getAdsPerformance(dateRange.startDate, dateRange.endDate),
+        getAdsSummary(dateRange.startDate, dateRange.endDate, campaignType),
+        getAdsPerformance(dateRange.startDate, dateRange.endDate, campaignType),
       ]);
 
       console.log('[ADS_PAGE] Summary result:', summaryResult);
@@ -119,6 +127,17 @@ export default function AdsPage() {
     }
   };
 
+  const handleTabChange = (value: string) => {
+    // Update URL without full page reload
+    const params = new URLSearchParams(searchParams.toString());
+    if (value === 'all') {
+      params.delete('tab'); // Default, no need in URL
+    } else {
+      params.set('tab', value);
+    }
+    router.replace(`?${params.toString()}`, { scroll: false });
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-start">
@@ -132,37 +151,47 @@ export default function AdsPage() {
         </Button>
       </div>
 
-      {/* Date Range Filter */}
-      <SingleDateRangePicker
-        presets={[
-          {
-            label: 'วันนี้',
-            getValue: () => {
-              const today = new Date();
-              return { startDate: today, endDate: today };
+      {/* Filters: Campaign Type Tabs + Date Range */}
+      <div className="space-y-4">
+        <Tabs value={campaignType} onValueChange={handleTabChange}>
+          <TabsList>
+            <TabsTrigger value="all">รวมทั้งหมด</TabsTrigger>
+            <TabsTrigger value="product">GMV Max (Product)</TabsTrigger>
+            <TabsTrigger value="live">LIVE</TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        <SingleDateRangePicker
+          presets={[
+            {
+              label: 'วันนี้',
+              getValue: () => {
+                const today = new Date();
+                return { startDate: today, endDate: today };
+              },
             },
-          },
-          {
-            label: '7 วันล่าสุด',
-            getValue: () => {
-              const now = new Date();
-              const start = new Date(now);
-              start.setDate(start.getDate() - 6);
-              return { startDate: start, endDate: now };
+            {
+              label: '7 วันล่าสุด',
+              getValue: () => {
+                const now = new Date();
+                const start = new Date(now);
+                start.setDate(start.getDate() - 6);
+                return { startDate: start, endDate: now };
+              },
             },
-          },
-          {
-            label: '30 วันล่าสุด',
-            getValue: () => {
-              const now = new Date();
-              const start = new Date(now);
-              start.setDate(start.getDate() - 29);
-              return { startDate: start, endDate: now };
+            {
+              label: '30 วันล่าสุด',
+              getValue: () => {
+                const now = new Date();
+                const start = new Date(now);
+                start.setDate(start.getDate() - 29);
+                return { startDate: start, endDate: now };
+              },
             },
-          },
-        ]}
-        onChange={setDateRange}
-      />
+          ]}
+          onChange={setDateRange}
+        />
+      </div>
 
       {/* Error State */}
       {error && (
