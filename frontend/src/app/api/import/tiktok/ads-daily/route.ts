@@ -4,6 +4,7 @@ import {
   parseAdsExcel,
   upsertAdRows,
   calculateFileHash,
+  AdsImportError,
   type AdImportResult,
 } from '@/lib/importers/tiktok-ads-daily';
 
@@ -93,6 +94,8 @@ export async function POST(request: NextRequest) {
       // Parse Excel file
       const { rows, warnings } = parseAdsExcel(buffer);
 
+      console.log(`[Ads Import] Parsed ${rows.length} rows with ${warnings.length} warnings`);
+
       if (rows.length === 0) {
         // Mark batch as failed
         await supabase
@@ -104,11 +107,15 @@ export async function POST(request: NextRequest) {
           })
           .eq('id', batch.id);
 
-        return NextResponse.json({
-          success: false,
-          error: 'No valid rows found in file',
-          warnings,
-        });
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'ไม่พบข้อมูลที่ valid ในไฟล์',
+            message: 'File contains no valid rows after parsing',
+            warnings,
+          },
+          { status: 400 }
+        );
       }
 
       // Upsert rows
@@ -158,11 +165,27 @@ export async function POST(request: NextRequest) {
         })
         .eq('id', batch.id);
 
-      console.error('Failed to parse/import file:', parseError);
+      console.error('[Ads Import] Parse error:', parseError);
+
+      // Handle structured errors
+      if (parseError instanceof AdsImportError) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: parseError.message,
+            code: parseError.code,
+            details: parseError.details,
+          },
+          { status: 400 }
+        );
+      }
+
+      // Handle generic errors
       return NextResponse.json(
         {
-          error: 'Failed to parse file',
-          details: parseError instanceof Error ? parseError.message : 'Unknown error',
+          success: false,
+          error: 'ไม่สามารถอ่านไฟล์ได้',
+          message: parseError instanceof Error ? parseError.message : 'Unknown error',
         },
         { status: 400 }
       );
