@@ -1,4 +1,5 @@
 'use client'
+import { DateRangeValue } from "@/components/shared/UnifiedDateRangePicker";
 
 import { useState, useEffect } from 'react'
 import { getBankTransactions } from '@/app/(dashboard)/bank/actions'
@@ -8,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Search, ChevronDown, ChevronUp } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 import { subDays } from 'date-fns'
-import { SingleDateRangePicker } from '@/components/shared/SingleDateRangePicker'
+import { UnifiedDateRangePicker } from '@/components/shared/UnifiedDateRangePicker'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 
 interface BankTransactionsTableProps {
@@ -20,9 +21,9 @@ export default function BankTransactionsTable({ bankAccountId }: BankTransaction
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
-  const [dateRange, setDateRange] = useState<{ startDate: Date; endDate: Date }>({
-    startDate: subDays(new Date(), 7),
-    endDate: new Date(),
+  const [dateRange, setDateRange] = useState<DateRangeValue>({
+    from: subDays(new Date(), 7),
+    to: new Date(),
   })
   const [page, setPage] = useState(1)
   const [isOpen, setIsOpen] = useState(false)
@@ -40,8 +41,8 @@ export default function BankTransactionsTable({ bankAccountId }: BankTransaction
 
     setLoading(true)
     const result = await getBankTransactions(bankAccountId, {
-      startDate: dateRange.startDate,
-      endDate: dateRange.endDate,
+      startDate: dateRange.from,
+      endDate: dateRange.to,
       search,
       page,
       perPage,
@@ -87,8 +88,8 @@ export default function BankTransactionsTable({ bankAccountId }: BankTransaction
               className="pl-9"
             />
           </div>
-          <SingleDateRangePicker
-            defaultRange={dateRange}
+          <UnifiedDateRangePicker
+            value={dateRange}
             onChange={(range) => {
               setDateRange(range)
               setPage(1)

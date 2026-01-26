@@ -1,4 +1,5 @@
 'use client'
+import { DateRangeValue } from "@/components/shared/UnifiedDateRangePicker";
 
 import { useState, useEffect } from 'react'
 import { subDays } from 'date-fns'
@@ -8,7 +9,7 @@ import {
 } from '@/app/(dashboard)/reconciliation/bank-reconciliation-actions'
 import { autoMatchBankTransactions } from '@/app/(dashboard)/reconciliation/auto-match-actions'
 import { ReconciliationSummary } from '@/types/bank'
-import { SingleDateRangePicker } from '@/components/shared/SingleDateRangePicker'
+import { UnifiedDateRangePicker } from '@/components/shared/UnifiedDateRangePicker'
 import ReconciliationSummaryCards from './ReconciliationSummaryCards'
 import UnmatchedBankTransactionsTable from './UnmatchedBankTransactionsTable'
 import UnmatchedInternalRecordsTabs from './UnmatchedInternalRecordsTabs'
@@ -20,9 +21,9 @@ export default function BankReconciliationClient() {
   const [summary, setSummary] = useState<ReconciliationSummary | null>(null)
   const [loading, setLoading] = useState(false)
   const [autoMatchLoading, setAutoMatchLoading] = useState(false)
-  const [dateRange, setDateRange] = useState<{ startDate: Date; endDate: Date }>({
-    startDate: subDays(new Date(), 7),
-    endDate: new Date(),
+  const [dateRange, setDateRange] = useState<DateRangeValue>({
+    from: subDays(new Date(), 7),
+    to: new Date(),
   })
   const { toast } = useToast()
 
@@ -32,7 +33,7 @@ export default function BankReconciliationClient() {
 
   async function loadSummary() {
     setLoading(true)
-    const result = await getReconciliationSummary(dateRange.startDate, dateRange.endDate)
+    const result = await getReconciliationSummary(dateRange.from, dateRange.to)
 
     if (result.success && result.data) {
       setSummary(result.data)
@@ -49,7 +50,7 @@ export default function BankReconciliationClient() {
   async function handleAutoMatch() {
     setAutoMatchLoading(true)
     try {
-      const result = await autoMatchBankTransactions(dateRange.startDate, dateRange.endDate)
+      const result = await autoMatchBankTransactions(dateRange.from, dateRange.to)
 
       if (result.success) {
         toast({
@@ -88,8 +89,8 @@ export default function BankReconciliationClient() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <SingleDateRangePicker
-            defaultRange={dateRange}
+          <UnifiedDateRangePicker
+            value={dateRange}
             onChange={setDateRange}
           />
 
@@ -122,14 +123,14 @@ export default function BankReconciliationClient() {
 
           {/* Unmatched Bank Transactions */}
           <UnmatchedBankTransactionsTable
-            startDate={dateRange.startDate}
-            endDate={dateRange.endDate}
+            startDate={dateRange.from}
+            endDate={dateRange.to}
           />
 
           {/* Unmatched Internal Records */}
           <UnmatchedInternalRecordsTabs
-            startDate={dateRange.startDate}
-            endDate={dateRange.endDate}
+            startDate={dateRange.from}
+            endDate={dateRange.to}
           />
         </>
       ) : (

@@ -20,7 +20,7 @@ import {
   AlertCircle,
   Info,
 } from 'lucide-react'
-import { SingleDateRangePicker, DateRangeResult } from '@/components/shared/SingleDateRangePicker'
+import { UnifiedDateRangePicker, DateRangeValue } from '@/components/shared/UnifiedDateRangePicker'
 import { getBangkokNow, formatBangkok, startOfDayBangkok } from '@/lib/bangkok-time'
 import { getCompanyCashflow, exportCompanyCashflow, CompanyCashflowSummary } from './actions'
 
@@ -42,17 +42,17 @@ function formatDate(dateStr: string): string {
 
 export default function CompanyCashflowPage() {
   // Default: Last 7 days
-  const getDefaultRange = (): DateRangeResult => {
+  const getDefaultRange = (): DateRangeValue => {
     const now = getBangkokNow()
     const start = new Date(now)
     start.setDate(start.getDate() - 6)
     return {
-      startDate: startOfDayBangkok(start),
-      endDate: getBangkokNow(),
+      from: startOfDayBangkok(start),
+      to: getBangkokNow(),
     }
   }
 
-  const [dateRange, setDateRange] = useState<DateRangeResult>(getDefaultRange())
+  const [dateRange, setDateRange] = useState<DateRangeValue>(getDefaultRange())
   const [source, setSource] = useState<'bank' | 'marketplace'>('marketplace')
   const [data, setData] = useState<CompanyCashflowSummary | null>(null)
   const [loading, setLoading] = useState(true)
@@ -68,7 +68,7 @@ export default function CompanyCashflowPage() {
       setLoading(true)
       setError(null)
 
-      const result = await getCompanyCashflow(dateRange.startDate, dateRange.endDate, source)
+      const result = await getCompanyCashflow(dateRange.from, dateRange.to, source)
 
       if (!result.success || !result.data) {
         setError(result.error || 'ไม่สามารถโหลดข้อมูลได้')
@@ -91,7 +91,7 @@ export default function CompanyCashflowPage() {
       setExportLoading(true)
       setError(null)
 
-      const result = await exportCompanyCashflow(dateRange.startDate, dateRange.endDate, source)
+      const result = await exportCompanyCashflow(dateRange.from, dateRange.to, source)
 
       if (!result.success || !result.csv || !result.filename) {
         setError(result.error || 'เกิดข้อผิดพลาดในการ export')
@@ -173,8 +173,8 @@ export default function CompanyCashflowPage() {
       {/* Date Range Filter */}
       <div className="flex items-center gap-4">
         <div className="flex-1">
-          <SingleDateRangePicker
-            defaultRange={dateRange}
+          <UnifiedDateRangePicker
+            value={dateRange}
             onChange={setDateRange}
           />
         </div>

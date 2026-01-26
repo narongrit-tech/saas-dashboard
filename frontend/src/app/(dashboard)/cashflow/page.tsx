@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { SingleDateRangePicker, type DateRangeResult } from '@/components/shared/SingleDateRangePicker';
+import { UnifiedDateRangePicker, type DateRangeValue } from '@/components/shared/UnifiedDateRangePicker';
 import { ImportOnholdDialog } from '@/components/cashflow/ImportOnholdDialog';
 import { ImportIncomeDialog } from '@/components/cashflow/ImportIncomeDialog';
 import {
@@ -75,7 +75,7 @@ function formatDateTime(dateStr: string | null): string {
 
 export default function CashflowPageV3() {
   // Date range
-  const [dateRange, setDateRange] = useState<DateRangeResult | null>(null);
+  const [dateRange, setDateRange] = useState<DateRangeValue | null>(null);
 
   // Summary cards (fast)
   const [summary, setSummary] = useState<CashflowSummary | null>(null);
@@ -112,7 +112,7 @@ export default function CashflowPageV3() {
       setSummaryLoading(true);
       setSummaryError(null);
 
-      const result = await getCashflowSummary(dateRange.startDate, dateRange.endDate);
+      const result = await getCashflowSummary(dateRange.from, dateRange.to);
       setSummary(result);
 
       if (result._timing) {
@@ -137,8 +137,8 @@ export default function CashflowPageV3() {
       setDailySummaryError(null);
 
       const result = await getDailyCashflowSummary(
-        dateRange.startDate,
-        dateRange.endDate,
+        dateRange.from,
+        dateRange.to,
         dailyPage,
         14 // 14 rows per page
       );
@@ -164,8 +164,8 @@ export default function CashflowPageV3() {
 
       const result = await getCashflowTransactions({
         type: activeTab,
-        startDate: dateRange.startDate.toISOString().split('T')[0],
-        endDate: dateRange.endDate.toISOString().split('T')[0],
+        startDate: dateRange.from.toISOString().split('T')[0],
+        endDate: dateRange.to.toISOString().split('T')[0],
         page: transactionsPage,
         pageSize: 50,
         sortBy: 'date',
@@ -223,8 +223,8 @@ export default function CashflowPageV3() {
     if (dateRange) {
       try {
         await rebuildCashflowSummary({
-          startDate: dateRange.startDate.toISOString().split('T')[0],
-          endDate: dateRange.endDate.toISOString().split('T')[0],
+          startDate: dateRange.from.toISOString().split('T')[0],
+          endDate: dateRange.to.toISOString().split('T')[0],
         });
         console.log('[Cashflow] Summary rebuilt');
       } catch (err) {
@@ -277,7 +277,7 @@ export default function CashflowPageV3() {
       </div>
 
       {/* Single Date Range Picker */}
-      <SingleDateRangePicker onChange={setDateRange} />
+      <UnifiedDateRangePicker onChange={setDateRange} />
 
       {/* Marketplace Filter (Placeholder for future multi-marketplace support) */}
       <div className="flex items-center gap-3">

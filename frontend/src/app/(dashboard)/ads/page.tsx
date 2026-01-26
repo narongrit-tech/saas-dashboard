@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { SingleDateRangePicker, type DateRangeResult } from '@/components/shared/SingleDateRangePicker';
+import { UnifiedDateRangePicker, type DateRangeValue } from '@/components/shared/UnifiedDateRangePicker';
 import { ImportAdsDialog } from '@/components/ads/ImportAdsDialog';
 import { TrendingUp, DollarSign, ShoppingCart, AlertCircle, Upload } from 'lucide-react';
 import { format } from 'date-fns';
@@ -48,7 +48,7 @@ interface AdsPerformance {
 export default function AdsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [dateRange, setDateRange] = useState<DateRangeResult | null>(null);
+  const [dateRange, setDateRange] = useState<DateRangeValue | null>(null);
   const [summary, setSummary] = useState<AdsSummary | null>(null);
   const [performance, setPerformance] = useState<AdsPerformance[]>([]);
   const [loading, setLoading] = useState(false);
@@ -69,8 +69,8 @@ export default function AdsPage() {
     if (!dateRange) return;
 
     console.log('[ADS_PAGE] Fetching data for date range:', {
-      startDate: format(dateRange.startDate, 'yyyy-MM-dd'),
-      endDate: format(dateRange.endDate, 'yyyy-MM-dd'),
+      startDate: format(dateRange.from, 'yyyy-MM-dd'),
+      endDate: format(dateRange.to, 'yyyy-MM-dd'),
       campaignType,
     });
 
@@ -79,8 +79,8 @@ export default function AdsPage() {
       setError(null);
 
       const [summaryResult, perfResult] = await Promise.all([
-        getAdsSummary(dateRange.startDate, dateRange.endDate, campaignType),
-        getAdsPerformance(dateRange.startDate, dateRange.endDate, campaignType),
+        getAdsSummary(dateRange.from, dateRange.to, campaignType),
+        getAdsPerformance(dateRange.from, dateRange.to, campaignType),
       ]);
 
       console.log('[ADS_PAGE] Summary result:', summaryResult);
@@ -169,35 +169,10 @@ export default function AdsPage() {
           </TabsList>
         </Tabs>
 
-        <SingleDateRangePicker
-          presets={[
-            {
-              label: 'วันนี้',
-              getValue: () => {
-                const today = new Date();
-                return { startDate: today, endDate: today };
-              },
-            },
-            {
-              label: '7 วันล่าสุด',
-              getValue: () => {
-                const now = new Date();
-                const start = new Date(now);
-                start.setDate(start.getDate() - 6);
-                return { startDate: start, endDate: now };
-              },
-            },
-            {
-              label: '30 วันล่าสุด',
-              getValue: () => {
-                const now = new Date();
-                const start = new Date(now);
-                start.setDate(start.getDate() - 29);
-                return { startDate: start, endDate: now };
-              },
-            },
-          ]}
+        <UnifiedDateRangePicker
+          value={dateRange || undefined}
           onChange={setDateRange}
+          defaultPreset="last7"
         />
       </div>
 

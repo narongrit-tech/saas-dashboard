@@ -6,7 +6,7 @@ import { Expense, ExpenseFilters, ExpenseCategory } from '@/types/expenses'
 import { endOfDayBangkok, formatBangkok } from '@/lib/bangkok-time'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { SingleDateRangePicker, DateRangeResult } from '@/components/shared/SingleDateRangePicker'
+import { UnifiedDateRangePicker, DateRangeValue } from '@/components/shared/UnifiedDateRangePicker'
 import {
   Select,
   SelectContent,
@@ -135,11 +135,11 @@ export default function ExpensesPage() {
     setFilters((prev) => ({ ...prev, [key]: value, page: 1 }))
   }
 
-  const handleDateRangeChange = (range: DateRangeResult) => {
+  const handleDateRangeChange = (range: DateRangeValue) => {
     setFilters((prev) => ({
       ...prev,
-      startDate: formatBangkok(range.startDate, 'yyyy-MM-dd'),
-      endDate: formatBangkok(range.endDate, 'yyyy-MM-dd'),
+      startDate: formatBangkok(range.from, 'yyyy-MM-dd'),
+      endDate: formatBangkok(range.to, 'yyyy-MM-dd'),
       page: 1
     }))
   }
@@ -354,16 +354,17 @@ export default function ExpensesPage() {
 
         <div className="flex-1 space-y-2">
           <label className="text-sm font-medium">ช่วงวันที่</label>
-          <SingleDateRangePicker
-            defaultRange={
+          <UnifiedDateRangePicker
+            value={
               filters.startDate && filters.endDate
                 ? {
-                    startDate: new Date(filters.startDate),
-                    endDate: new Date(filters.endDate)
+                    from: new Date(filters.startDate),
+                    to: new Date(filters.endDate)
                   }
                 : undefined
             }
             onChange={handleDateRangeChange}
+            defaultPreset="last7"
           />
         </div>
 
