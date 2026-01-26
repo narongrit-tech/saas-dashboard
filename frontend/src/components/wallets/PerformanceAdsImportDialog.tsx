@@ -41,6 +41,7 @@ interface PerformanceAdsImportDialogProps {
 interface PreviewData {
   fileName: string
   campaignType: 'product' | 'live'
+  reportType?: 'product' | 'live' | 'unknown'
   reportDateRange: string
   totalSpend: number
   totalGMV: number
@@ -49,6 +50,16 @@ interface PreviewData {
   currency: string
   rowCount: number
   daysCount: number
+  detectedColumns?: {
+    date: string | null
+    campaign: string | null
+    cost: string | null
+    gmv: string | null
+    orders: string | null
+    roas: string | null
+    currency: string | null
+  }
+  missingOptionalColumns?: string[]
 }
 
 export function PerformanceAdsImportDialog({
@@ -63,6 +74,7 @@ export function PerformanceAdsImportDialog({
   const [preview, setPreview] = useState<PreviewData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [warnings, setWarnings] = useState<string[]>([])
   const [success, setSuccess] = useState<string | null>(null)
 
   // Manual mapping wizard state
@@ -85,6 +97,7 @@ export function PerformanceAdsImportDialog({
     setSelectedFile(file)
     setPreview(null)
     setError(null)
+    setWarnings([])
     setSuccess(null)
     setExcelHeaders([])
     setLoading(true)
@@ -124,6 +137,7 @@ export function PerformanceAdsImportDialog({
 
       if (result.preview) {
         setPreview(result.preview)
+        setWarnings(result.warnings || [])
       }
     } catch (err) {
       console.error('Error reading file:', err)
@@ -143,6 +157,7 @@ export function PerformanceAdsImportDialog({
 
     setLoading(true)
     setError(null)
+    setWarnings([])
     setSuccess(null)
 
     try {
@@ -189,6 +204,7 @@ export function PerformanceAdsImportDialog({
     setFileBuffer(null)
     setPreview(null)
     setError(null)
+    setWarnings([])
     setSuccess(null)
     setCampaignType('product')
     onOpenChange(false)
@@ -297,6 +313,20 @@ export function PerformanceAdsImportDialog({
             </Alert>
           )}
 
+          {/* Warnings Alert */}
+          {warnings.length > 0 && !success && (
+            <Alert className="border-yellow-500 bg-yellow-50 text-yellow-900">
+              <AlertCircle className="h-4 w-4 text-yellow-600" />
+              <AlertDescription>
+                <div className="space-y-1">
+                  {warnings.map((warning, idx) => (
+                    <div key={idx}>{warning}</div>
+                  ))}
+                </div>
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* Preview */}
           {preview && !success && (
             <div className="rounded-lg border bg-slate-50 p-4 space-y-3">
@@ -365,6 +395,47 @@ export function PerformanceAdsImportDialog({
                   <br />- เข้า Accrual P&L (Advertising Cost)
                 </AlertDescription>
               </Alert>
+
+              {/* Detected Columns Info */}
+              {preview.detectedColumns && (
+                <div className="rounded-lg bg-slate-100 p-3 space-y-2">
+                  <h4 className="text-xs font-semibold text-slate-700">
+                    Columns ที่ตรวจพบ (Auto-detected):
+                  </h4>
+                  <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
+                    <div>
+                      <span className="font-medium">Date:</span>{' '}
+                      {preview.detectedColumns.date || '❌ Not found'}
+                    </div>
+                    <div>
+                      <span className="font-medium">Campaign:</span>{' '}
+                      {preview.detectedColumns.campaign || '❌ Not found'}
+                    </div>
+                    <div>
+                      <span className="font-medium">Cost/Spend:</span>{' '}
+                      {preview.detectedColumns.cost || '❌ Not found'}
+                    </div>
+                    <div>
+                      <span className="font-medium">GMV:</span>{' '}
+                      {preview.detectedColumns.gmv || '⚠️ Not found (using 0)'}
+                    </div>
+                    <div>
+                      <span className="font-medium">Orders:</span>{' '}
+                      {preview.detectedColumns.orders || '⚠️ Not found (using 0)'}
+                    </div>
+                    <div>
+                      <span className="font-medium">ROAS:</span>{' '}
+                      {preview.detectedColumns.roas || 'ℹ️ Calculated'}
+                    </div>
+                  </div>
+                  {preview.reportType && preview.reportType !== 'unknown' && (
+                    <div className="pt-2 border-t border-slate-300 text-xs">
+                      <span className="font-medium">Report Type (Auto-detected):</span>{' '}
+                      <span className="capitalize font-semibold">{preview.reportType}</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

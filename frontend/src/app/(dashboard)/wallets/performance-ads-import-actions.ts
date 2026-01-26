@@ -17,39 +17,20 @@
  */
 
 import { createClient } from '@/lib/supabase/server'
-import * as XLSX from 'xlsx'
 import crypto from 'crypto'
 import { formatBangkok } from '@/lib/bangkok-time'
-import { parse, isValid, format } from 'date-fns'
-import { toZonedTime } from 'date-fns-tz'
+import { parseTikTokAdsFile } from '@/lib/parsers/tiktok-ads-parser'
+import type { TikTokAdsPreview, DailyAdData } from '@/lib/parsers/tiktok-ads-parser'
 
 interface ActionResult {
   success: boolean
   error?: string
+  warnings?: string[]
   data?: unknown
 }
 
-interface PerformanceAdsPreview {
-  fileName: string
-  campaignType: 'product' | 'live'
-  reportDateRange: string
-  totalSpend: number
-  totalGMV: number
-  totalOrders: number
-  avgROAS: number
-  currency: string
-  rowCount: number
-  daysCount: number
-  dailyBreakdown: DailyAdData[]
-}
-
-interface DailyAdData {
-  date: string // YYYY-MM-DD
-  campaignName: string
-  spend: number
-  gmv: number
-  orders: number
-  roas: number
+interface PerformanceAdsPreview extends TikTokAdsPreview {
+  campaignType?: 'product' | 'live' // For backward compatibility
 }
 
 /**
@@ -62,189 +43,25 @@ export async function parsePerformanceAdsFile(
   campaignType: 'product' | 'live'
 ): Promise<ActionResult & { preview?: PerformanceAdsPreview }> {
   try {
-    // 1. Validate file extension
-    if (!fileName.toLowerCase().endsWith('.xlsx')) {
+    // Use new semantic parser
+    const result = await parseTikTokAdsFile(fileBuffer, fileName)
+
+    if (!result.success) {
       return {
         success: false,
-        error: 'ไฟล์ต้องเป็น .xlsx เท่านั้น (Excel format)',
+        error: result.error,
       }
     }
 
-    // 2. Parse Excel file
-    const workbook = XLSX.read(fileBuffer, { type: 'array' })
-    const sheetName = workbook.SheetNames[0]
-    if (!sheetName) {
-      return {
-        success: false,
-        error: 'ไม่พบ worksheet ในไฟล์',
-      }
-    }
-
-    const worksheet = workbook.Sheets[sheetName]
-    const rows = XLSX.utils.sheet_to_json(worksheet, { defval: null }) as Record<
-      string,
-      unknown
-    >[]
-
-    if (rows.length === 0) {
-      return {
-        success: false,
-        error: 'ไฟล์ว่างเปล่า ไม่มีข้อมูล',
-      }
-    }
-
-    // 3. Template detection - STRICT validation for performance ads
-    const firstRow = rows[0]
-    const headers = Object.keys(firstRow).map((h) => h.toLowerCase().trim())
-
-    // Must have these columns (performance report with sales metrics)
-    const requiredColumns = ['date', 'campaign', 'cost', 'gmv', 'order']
-    const hasRequiredColumns = requiredColumns.every((col) =>
-      headers.some((h) => h.includes(col))
-    )
-
-    if (!hasRequiredColumns) {
-      return {
-        success: false,
-        error:
-          'Template ไม่ถูกต้อง - Performance Ads ต้องมี: Date, Campaign, Cost, GMV, Orders',
-      }
-    }
-
-    // Must have at least one sales metric indicator
-    const salesMetrics = ['gmv', 'order', 'roas', 'conversion']
-    const hasSalesMetrics = headers.some((h) =>
-      salesMetrics.some((metric) => h.includes(metric))
-    )
-
-    if (!hasSalesMetrics) {
-      return {
-        success: false,
-        error:
-          '❌ ไฟล์นี้ไม่มี sales metrics (GMV/Orders/ROAS) - ถ้าเป็น Awareness Ads ให้ใช้ Tiger Import',
-      }
-    }
-
-    // 4. Extract column mappings
-    const dateKey = headers.find((h) => h.includes('date')) || 'date'
-    const campaignKey = headers.find((h) => h.includes('campaign')) || 'campaign'
-    const costKey = headers.find((h) => h.includes('cost') || h.includes('spend')) || 'cost'
-    const gmvKey =
-      headers.find((h) => h.includes('gmv') || h.includes('revenue')) || 'gmv'
-    const orderKey =
-      headers.find((h) => h.includes('order') || h.includes('conversion')) || 'orders'
-    const roasKey = headers.find((h) => h.includes('roas') || h.includes('roi')) || 'roas'
-    const currencyKey = headers.find((h) => h.includes('currency')) || 'currency'
-
-    // 5. Parse daily data
-    const dailyData: DailyAdData[] = []
-    let totalSpend = 0
-    let totalGMV = 0
-    let totalOrders = 0
-    let currency = 'THB' // Default
-
-    const seenDates = new Set<string>()
-
-    for (const row of rows) {
-      // Parse date
-      const dateValue = row[dateKey]
-      if (!dateValue) continue
-
-      let adDate: Date | null = null
-
-      // Try parsing as Excel serial date
-      if (typeof dateValue === 'number') {
-        const excelEpoch = new Date(Date.UTC(1899, 11, 30))
-        adDate = new Date(excelEpoch.getTime() + dateValue * 86400000)
-      } else {
-        // Try parsing as string
-        const dateStr = String(dateValue)
-        // Try common formats
-        const formats = ['yyyy-MM-dd', 'MM/dd/yyyy', 'dd/MM/yyyy', 'yyyy/MM/dd']
-        for (const fmt of formats) {
-          const parsed = parse(dateStr, fmt, new Date())
-          if (isValid(parsed)) {
-            adDate = parsed
-            break
-          }
-        }
-      }
-
-      if (!adDate || !isValid(adDate)) {
-        continue // Skip invalid dates
-      }
-
-      const dateFormatted = format(toZonedTime(adDate, 'Asia/Bangkok'), 'yyyy-MM-dd')
-      seenDates.add(dateFormatted)
-
-      // Parse campaign name
-      const campaignName = row[campaignKey]
-      if (!campaignName) continue
-
-      // Parse numbers
-      const spend = parseFloat(String(row[costKey] || 0).replace(/[^0-9.-]/g, ''))
-      const gmv = parseFloat(String(row[gmvKey] || 0).replace(/[^0-9.-]/g, ''))
-      const orders = parseFloat(String(row[orderKey] || 0).replace(/[^0-9.-]/g, ''))
-      let roas = parseFloat(String(row[roasKey] || 0).replace(/[^0-9.-]/g, ''))
-
-      if (isNaN(spend) || isNaN(gmv) || isNaN(orders)) {
-        continue // Skip invalid rows
-      }
-
-      // Calculate ROAS if not provided
-      if (isNaN(roas) || roas === 0) {
-        roas = spend > 0 ? gmv / spend : 0
-      }
-
-      dailyData.push({
-        date: dateFormatted,
-        campaignName: String(campaignName),
-        spend,
-        gmv,
-        orders: Math.round(orders), // Orders should be integer
-        roas: Math.round(roas * 100) / 100,
-      })
-
-      totalSpend += spend
-      totalGMV += gmv
-      totalOrders += orders
-
-      // Extract currency from first row
-      if (dailyData.length === 1 && row[currencyKey]) {
-        currency = String(row[currencyKey]).toUpperCase()
-      }
-    }
-
-    if (dailyData.length === 0) {
-      return {
-        success: false,
-        error: 'ไม่พบข้อมูลที่ valid ในไฟล์',
-      }
-    }
-
-    // 6. Calculate summary
-    const avgROAS = totalSpend > 0 ? totalGMV / totalSpend : 0
-    const dates = Array.from(seenDates).sort()
-    const reportDateRange =
-      dates.length > 0 ? `${dates[0]} to ${dates[dates.length - 1]}` : 'Unknown'
-
-    // 7. Build preview
+    // Enhance preview with user-selected campaignType (for backward compatibility)
     const preview: PerformanceAdsPreview = {
-      fileName,
-      campaignType,
-      reportDateRange,
-      totalSpend: Math.round(totalSpend * 100) / 100,
-      totalGMV: Math.round(totalGMV * 100) / 100,
-      totalOrders: Math.round(totalOrders),
-      avgROAS: Math.round(avgROAS * 100) / 100,
-      currency,
-      rowCount: rows.length,
-      daysCount: seenDates.size,
-      dailyBreakdown: dailyData,
+      ...result.preview!,
+      campaignType, // Override detected type with user selection
     }
 
     return {
       success: true,
+      warnings: result.warnings,
       preview,
     }
   } catch (error) {
