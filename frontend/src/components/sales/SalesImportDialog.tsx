@@ -5,7 +5,7 @@
  * Phase 6: CSV/Excel Import Infrastructure
  */
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -310,6 +310,7 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
   }
 
   const handleClose = () => {
+    // Reset to initial state on close
     setStep('upload')
     setFile(null)
     setFileBuffer(null)
@@ -322,6 +323,29 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
     setProcessingInfo(null)
     onOpenChange(false)
   }
+
+  // CRITICAL: Force reset to upload state when dialog opens
+  useEffect(() => {
+    console.log('[SalesImportDialog] open:', open)
+    if (open) {
+      console.log('[SalesImportDialog] Dialog opened, resetting to upload state')
+      setStep('upload')
+      setFile(null)
+      setFileBuffer(null)
+      setPreview(null)
+      setParsedData([])
+      setResult(null)
+      setIsProcessing(false)
+      setImportProgress(null)
+      setDuplicateInfo(null)
+      setProcessingInfo(null)
+    }
+  }, [open])
+
+  // Debug: Log step changes
+  useEffect(() => {
+    console.log('[SalesImportDialog] step:', step, { hasFile: !!file, hasPreview: !!preview, isProcessing })
+  }, [step, file, preview, isProcessing])
 
   const handleReimport = () => {
     // Proceed to import with allowReimport=true
@@ -349,34 +373,40 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
         </DialogHeader>
 
         {/* Step 1: Upload */}
-        {step === 'upload' && (
-          <div className="space-y-4">
-            <div className="border-2 border-dashed rounded-lg p-8 text-center">
-              <FileSpreadsheet className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
-              <div className="space-y-2">
-                <p className="text-sm text-muted-foreground">
-                  รองรับ: .xlsx (TikTok Shop OrderSKUList)
-                </p>
-                <Input
-                  type="file"
-                  accept=".xlsx"
-                  onChange={handleFileSelect}
-                  disabled={isProcessing}
-                  className="max-w-sm mx-auto"
-                />
+        {step === 'upload' && (() => {
+          console.log('[SalesImportDialog RENDER] Upload section rendered')
+          return (
+            <div className="space-y-4">
+              <div className="border-2 border-dashed rounded-lg p-8 text-center">
+                <FileSpreadsheet className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
+                <div className="space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    รองรับ: .xlsx (TikTok Shop OrderSKUList)
+                  </p>
+                  <Input
+                    type="file"
+                    accept=".xlsx"
+                    onChange={handleFileSelect}
+                    disabled={isProcessing}
+                    className="max-w-sm mx-auto"
+                  />
+                  <p className="text-xs text-muted-foreground mt-2">
+                    เลือกไฟล์ .xlsx เพื่อเริ่มต้น
+                  </p>
+                </div>
               </div>
-            </div>
 
-            <Alert>
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>
-                <strong>TikTok Shop:</strong> ไฟล์ต้องเป็น OrderSKUList format จาก TikTok Seller Center
-                <br />
-                <strong>Line-level import:</strong> แต่ละ SKU จะถูกเก็บแยก row (ไม่ double-count order totals)
-              </AlertDescription>
-            </Alert>
-          </div>
-        )}
+              <Alert>
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>
+                  <strong>TikTok Shop:</strong> ไฟล์ต้องเป็น OrderSKUList format จาก TikTok Seller Center
+                  <br />
+                  <strong>Line-level import:</strong> แต่ละ SKU จะถูกเก็บแยก row (ไม่ double-count order totals)
+                </AlertDescription>
+              </Alert>
+            </div>
+          )
+        })()}
 
         {/* Step 2: Preview */}
         {step === 'preview' && preview && (
