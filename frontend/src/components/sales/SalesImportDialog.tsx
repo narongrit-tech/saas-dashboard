@@ -172,9 +172,27 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
 
       // Handle duplicate file detection
       if (batchResult.status === 'duplicate_file' && !allowReimport) {
+        // Format timestamp from ISO to Thai format
+        let formattedDate = 'Unknown'
+        if (batchResult.importedAt) {
+          try {
+            const date = new Date(batchResult.importedAt)
+            formattedDate = new Intl.DateTimeFormat('th-TH', {
+              year: 'numeric',
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+              timeZone: 'Asia/Bangkok'
+            }).format(date)
+          } catch {
+            formattedDate = 'Unknown'
+          }
+        }
+
         setDuplicateInfo({
           fileName: batchResult.fileName || file.name,
-          importedAt: batchResult.importedAt || 'Unknown',
+          importedAt: formattedDate,
         })
         setIsProcessing(false)
         setStep('duplicate')
@@ -431,18 +449,21 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
         {/* Step 3: Duplicate File Prompt */}
         {step === 'duplicate' && duplicateInfo && (
           <div className="space-y-4">
-            <Alert className="border-amber-500 bg-amber-50 text-amber-900">
-              <AlertCircle className="h-4 w-4" />
+            <Alert className="border-amber-500 bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-100">
+              <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
               <AlertDescription>
                 <div className="space-y-2">
-                  <p className="font-semibold">ไฟล์นี้ถูก import ไปแล้ว</p>
-                  <p className="text-sm">
+                  <p className="font-semibold text-amber-900 dark:text-amber-100">
+                    ไฟล์นี้ถูก import ไปแล้ว
+                  </p>
+                  <p className="text-sm text-amber-800 dark:text-amber-200">
                     <strong>ไฟล์:</strong> {duplicateInfo.fileName}
-                    <br />
+                  </p>
+                  <p className="text-sm text-amber-800 dark:text-amber-200">
                     <strong>นำเข้าเมื่อ:</strong> {duplicateInfo.importedAt}
                   </p>
-                  <p className="text-sm">
-                    คุณต้องการนำเข้าซ้ำเพื่ออัปเดตข้อมูลหรือไม่? (ข้อมูลเดิมจะถูก update หากมีการเปลี่ยนแปลง)
+                  <p className="text-sm text-amber-700 dark:text-amber-300">
+                    คุณสามารถนำเข้าซ้ำเพื่ออัปเดตข้อมูล (สถานะ, วันที่จัดส่ง) หรือเพิ่มออเดอร์ใหม่ที่มีในไฟล์
                   </p>
                 </div>
               </AlertDescription>

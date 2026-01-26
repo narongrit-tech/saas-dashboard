@@ -487,6 +487,7 @@ export async function createImportBatch(
   status?: 'duplicate_file' | 'created';
   fileName?: string;
   importedAt?: string;
+  message?: string;
 }> {
   const supabase = createClient()
 
@@ -532,8 +533,8 @@ export async function createImportBatch(
           success: false,
           status: 'duplicate_file',
           fileName: existingBatch.file_name,
-          importedAt: formatBangkok(new Date(existingBatch.created_at), 'yyyy-MM-dd HH:mm'),
-          error: `ไฟล์นี้ถูก import สำเร็จไปแล้ว - "${existingBatch.file_name}" (${formatBangkok(new Date(existingBatch.created_at), 'yyyy-MM-dd HH:mm')})`,
+          importedAt: existingBatch.created_at, // Return ISO timestamp (backend format)
+          message: 'ไฟล์นี้ถูก import ไปแล้ว'
         }
       }
     } else {
