@@ -612,7 +612,6 @@ export async function importSalesChunk(
     // Parse JSON string to array
     const chunkData: ParsedSalesRow[] = JSON.parse(chunkDataJson)
 
-  try {
     // Get current user
     const { data: { user }, error: authError } = await supabase.auth.getUser()
     if (authError || !user) {
