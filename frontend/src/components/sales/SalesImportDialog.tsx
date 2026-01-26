@@ -32,7 +32,7 @@ interface SalesImportDialogProps {
   onSuccess: () => void
 }
 
-type Step = 'upload' | 'preview' | 'importing' | 'result'
+type Step = 'upload' | 'preview' | 'duplicate' | 'importing' | 'result'
 
 export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImportDialogProps) {
   const [step, setStep] = useState<Step>('upload')
@@ -43,6 +43,7 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null)
+  const [duplicateInfo, setDuplicateInfo] = useState<{ fileName: string; importedAt: string } | null>(null)
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
@@ -86,7 +87,7 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
     }
   }
 
-  const handleConfirmImport = async () => {
+  const handleConfirmImport = async (allowReimport = false) => {
     if (!file || !fileBuffer || !preview || !preview.success || parsedData.length === 0) {
       return
     }
@@ -107,13 +108,25 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
         ? `${plainData[0].order_date} to ${plainData[plainData.length - 1].order_date}`
         : 'N/A'
 
-      // Step 1: Create import batch
+      // Step 1: Create import batch (with allowReimport flag)
       const batchResult = await createImportBatch(
         fileHash,
         file.name,
         plainData.length,
-        dateRange
+        dateRange,
+        allowReimport
       )
+
+      // Handle duplicate file detection
+      if (batchResult.status === 'duplicate_file' && !allowReimport) {
+        setDuplicateInfo({
+          fileName: batchResult.fileName || file.name,
+          importedAt: batchResult.importedAt || 'Unknown',
+        })
+        setIsProcessing(false)
+        setStep('duplicate')
+        return
+      }
 
       if (!batchResult.success || !batchResult.batchId) {
         setResult({
@@ -197,7 +210,23 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
     setResult(null)
     setIsProcessing(false)
     setImportProgress(null)
+    setDuplicateInfo(null)
     onOpenChange(false)
+  }
+
+  const handleReimport = () => {
+    // Proceed to import with allowReimport=true
+    handleConfirmImport(true)
+  }
+
+  const handleCancelReimport = () => {
+    // Reset to upload state
+    setStep('upload')
+    setFile(null)
+    setFileBuffer(null)
+    setPreview(null)
+    setParsedData([])
+    setDuplicateInfo(null)
   }
 
   return (
@@ -340,7 +369,39 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
           </div>
         )}
 
-        {/* Step 3: Importing */}
+        {/* Step 3: Duplicate File Prompt */}
+        {step === 'duplicate' && duplicateInfo && (
+          <div className="space-y-4">
+            <Alert className="border-amber-500 bg-amber-50 text-amber-900">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                <div className="space-y-2">
+                  <p className="font-semibold">ไฟล์นี้ถูก import ไปแล้ว</p>
+                  <p className="text-sm">
+                    <strong>ไฟล์:</strong> {duplicateInfo.fileName}
+                    <br />
+                    <strong>นำเข้าเมื่อ:</strong> {duplicateInfo.importedAt}
+                  </p>
+                  <p className="text-sm">
+                    คุณต้องการนำเข้าซ้ำเพื่ออัปเดตข้อมูลหรือไม่? (ข้อมูลเดิมจะถูก update หากมีการเปลี่ยนแปลง)
+                  </p>
+                </div>
+              </AlertDescription>
+            </Alert>
+
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={handleCancelReimport}>
+                ยกเลิก
+              </Button>
+              <Button onClick={handleReimport} disabled={isProcessing}>
+                {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                นำเข้าซ้ำเพื่ออัปเดตข้อมูล
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 4: Importing */}
         {step === 'importing' && (
           <div className="text-center py-8">
             <Loader2 className="mx-auto h-12 w-12 animate-spin text-primary mb-4" />
@@ -355,7 +416,7 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
           </div>
         )}
 
-        {/* Step 4: Result */}
+        {/* Step 5: Result */}
         {step === 'result' && result && (
           <div className="space-y-4">
             <Alert variant={result.success ? 'default' : 'destructive'}>

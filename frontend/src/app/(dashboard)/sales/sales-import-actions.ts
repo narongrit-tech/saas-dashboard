@@ -481,8 +481,16 @@ export async function createImportBatch(
   fileHash: string,
   fileName: string,
   totalRows: number,
-  dateRange: string
-): Promise<{ success: boolean; batchId?: string; error?: string }> {
+  dateRange: string,
+  allowReimport?: boolean
+): Promise<{
+  success: boolean;
+  batchId?: string;
+  error?: string;
+  status?: 'duplicate_file' | 'created';
+  fileName?: string;
+  importedAt?: string;
+}> {
   const supabase = createClient()
 
   try {
@@ -495,21 +503,30 @@ export async function createImportBatch(
       }
     }
 
-    // Check for duplicate import
-    const { data: existingBatch } = await supabase
-      .from('import_batches')
-      .select('id, file_name, created_at, status, inserted_count')
-      .eq('file_hash', fileHash)
-      .eq('marketplace', 'tiktok_shop')
-      .eq('status', 'success')
-      .gt('inserted_count', 0)
-      .single()
+    // Check for duplicate import (skip if allowReimport=true)
+    if (!allowReimport) {
+      const { data: existingBatch } = await supabase
+        .from('import_batches')
+        .select('id, file_name, created_at, status, inserted_count')
+        .eq('file_hash', fileHash)
+        .eq('marketplace', 'tiktok_shop')
+        .eq('status', 'success')
+        .gt('inserted_count', 0)
+        .single()
 
-    if (existingBatch) {
-      return {
-        success: false,
-        error: `ไฟล์นี้ถูก import สำเร็จไปแล้ว - "${existingBatch.file_name}" (${formatBangkok(new Date(existingBatch.created_at), 'yyyy-MM-dd HH:mm')})`,
+      if (existingBatch) {
+        // Return structured response (not error) for duplicate detection
+        return {
+          success: false,
+          status: 'duplicate_file',
+          fileName: existingBatch.file_name,
+          importedAt: formatBangkok(new Date(existingBatch.created_at), 'yyyy-MM-dd HH:mm'),
+          error: `ไฟล์นี้ถูก import สำเร็จไปแล้ว - "${existingBatch.file_name}" (${formatBangkok(new Date(existingBatch.created_at), 'yyyy-MM-dd HH:mm')})`,
+        }
       }
+    } else {
+      // Re-import mode: log for audit
+      console.log(`[RE-IMPORT] User: ${user.id} | File: ${fileName} | FileHash: ${fileHash.substring(0, 8)}...`)
     }
 
     // Create import batch record
@@ -542,6 +559,7 @@ export async function createImportBatch(
 
     return {
       success: true,
+      status: 'created',
       batchId: batch.id,
     }
   } catch (error: unknown) {
