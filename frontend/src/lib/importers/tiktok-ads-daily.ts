@@ -16,12 +16,27 @@ export class AdsImportError extends Error {
     public details?: {
       sheetName?: string;
       sheetNames?: string[];
+      scannedSheets?: string[];
       selectedSheet?: string;
       headers?: string[];
       missingColumns?: string[];
       rowIndex?: number;
+      headerRow?: number;
       sampleValue?: unknown;
       suggestion?: string;
+      scores?: Record<string, number>;
+      headerRows?: Record<string, number>;
+      detectedColumns?: Record<string, string>;
+      candidateRows?: Array<{
+        rowIndex: number;
+        cellsPreview: string[];
+        matchedFields: string[];
+        score: number;
+      }>;
+      firstRowsPreview?: Array<{
+        rowIndex: number;
+        cells: string[];
+      }>;
     }
   ) {
     super(message);
@@ -40,30 +55,112 @@ function normalizeHeader(header: string): string {
     .toLowerCase();
 }
 
+/**
+ * Normalize cell text for robust header detection
+ * - Removes BOM, newlines, tabs, extra spaces
+ * - Trims and lowercases
+ */
+function normalizeText(text: any): string {
+  if (text === null || text === undefined) return '';
+  return String(text)
+    .replace(/^\uFEFF/, '') // Remove BOM
+    .replace(/[\n\r\t]+/g, ' ') // Remove newlines, tabs
+    .replace(/\s+/g, ' ') // Collapse multiple spaces
+    .trim()
+    .toLowerCase();
+}
+
 // Column mappings for product campaigns (creative data)
+// Supports English, Thai, and Chinese variants
 const PRODUCT_CAMPAIGN_COLUMNS: Record<string, string[]> = {
-  date: ['date', 'day', 'report date', 'stat date'],
-  campaign_name: ['campaign name', 'campaign', 'creative name', 'ad name', 'ad group name'],
-  spend: ['cost', 'spend', 'total cost', 'ad spend', 'amount spent'],
-  orders: ['conversions', 'orders', 'total orders', 'order count', 'complete payment'],
-  revenue: ['revenue', 'gmv', 'sales', 'total revenue', 'conversion value'],
-  roi: ['roi', 'roas', 'return on ad spend', 'return on investment'],
+  date: [
+    'date', 'day', 'report date', 'stat date',
+    'วันที่', 'วันเริ่มต้น', 'วันเริ่ม', 'เวลาเริ่มต้น', 'เวลาเริ่ม',
+    '日期', '日',
+  ],
+  campaign_name: [
+    'campaign name', 'campaign', 'creative name', 'ad name', 'ad group name',
+    'ชื่อแคมเปญ', 'ชื่อแคมเปญโฆษณา', 'ชื่อโฆษณา', 'แคมเปญ',
+    '广告系列名称', '活动名称',
+  ],
+  campaign_id: [
+    'campaign id', 'id แคมเปญ', 'แคมเปญ id', 'campaignid',
+    '广告系列id', '活动id',
+  ],
+  video_id: [
+    'video id', 'id วิดีโอ', 'วิดีโอ id', 'videoid',
+    '视频id',
+  ],
+  spend: [
+    'cost', 'spend', 'total cost', 'ad spend', 'amount spent',
+    'ต้นทุน', 'ค่าใช้จ่าย', 'ยอดใช้จ่าย', 'ค่าโฆษณา',
+    '费用', '花费', '成本',
+  ],
+  orders: [
+    'conversions', 'orders', 'total orders', 'order count', 'complete payment',
+    'ยอดการซื้อ', 'คำสั่งซื้อ', 'จำนวนคำสั่งซื้อ', 'ออเดอร์', 'การแปลง',
+    '订单', '转化', '购买',
+  ],
+  revenue: [
+    'revenue', 'gmv', 'sales', 'total revenue', 'conversion value',
+    'รายได้ขั้นต้น', 'รายได้', 'มูลค่ายอดขาย', 'ยอดขาย', 'รายได้รวม',
+    '收入', 'gmv', '销售额',
+  ],
+  roi: [
+    'roi', 'roas', 'return on ad spend', 'return on investment',
+    'ผลตอบแทน', 'อัตราผลตอบแทน',
+    '投资回报率',
+  ],
 };
 
 // Column mappings for live campaigns (livestream data)
 const LIVE_CAMPAIGN_COLUMNS: Record<string, string[]> = {
-  date: ['date', 'day', 'report date', 'live date', 'stat date'],
-  campaign_name: ['live room name', 'room name', 'live name', 'campaign name', 'livestream name'],
-  spend: ['cost', 'spend', 'total cost', 'ad spend', 'amount spent'],
-  orders: ['conversions', 'orders', 'total orders', 'product order', 'complete payment'],
-  revenue: ['revenue', 'gmv', 'sales', 'total gmv', 'conversion value'],
-  roi: ['roi', 'roas', 'return on investment'],
+  date: [
+    'date', 'day', 'report date', 'live date', 'stat date',
+    'วันที่', 'เวลาเริ่มต้น', 'เวลาเริ่ม', 'วันไลฟ์', 'วันเริ่มต้น',
+    '日期', '直播日期',
+  ],
+  campaign_name: [
+    'live room name', 'room name', 'live name', 'campaign name', 'livestream name',
+    'ชื่อ live', 'ชื่อไลฟ์', 'ชื่อห้องไลฟ์', 'ชื่อแคมเปญ',
+    '直播间名称', '直播名称',
+  ],
+  campaign_id: [
+    'campaign id', 'id แคมเปญ', 'แคมเปญ id', 'campaignid', 'live id',
+    '广告系列id', '活动id', '直播id',
+  ],
+  video_id: [
+    'video id', 'id วิดีโอ', 'วิดีโอ id', 'videoid', 'live video id',
+    '视频id', '直播视频id',
+  ],
+  spend: [
+    'cost', 'spend', 'total cost', 'ad spend', 'amount spent',
+    'ต้นทุน', 'ค่าใช้จ่าย', 'ยอดใช้จ่าย', 'ค่าโฆษณา',
+    '费用', '花费', '成本',
+  ],
+  orders: [
+    'conversions', 'orders', 'total orders', 'product order', 'complete payment',
+    'ยอดการซื้อ', 'คำสั่งซื้อ', 'จำนวนคำสั่งซื้อ', 'ออเดอร์', 'การแปลง',
+    '订单', '转化', '购买',
+  ],
+  revenue: [
+    'revenue', 'gmv', 'sales', 'total gmv', 'conversion value',
+    'รายได้ขั้นต้น', 'รายได้', 'มูลค่ายอดขาย', 'ยอดขาย', 'รายได้รวม',
+    '收入', 'gmv', '销售额',
+  ],
+  roi: [
+    'roi', 'roas', 'return on investment',
+    'ผลตอบแทน', 'อัตราผลตอบแทน',
+    '投资回报率',
+  ],
 };
 
 export interface NormalizedAdRow {
   ad_date: Date;
   campaign_type: 'product' | 'live' | null;
   campaign_name: string | null;
+  campaign_id: string | null;
+  video_id: string | null;
   spend: number;
   orders: number;
   revenue: number;
@@ -91,10 +188,13 @@ export interface AdPreviewResult {
     campaignTypeConfidence: number;
     dateRange: string;
     totalRows: number;
+    keptRows: number;
+    skippedAllZeroRows: number;
     totalSpend: number;
     totalOrders: number;
     totalRevenue: number;
     avgROI: number;
+    skipZeroRowsUsed: boolean;
   };
   sampleRows: Array<{
     date: string;
@@ -187,6 +287,213 @@ function parseDate(value: unknown): Date | null {
 }
 
 /**
+ * Filter rows to skip all-zero rows (optional optimization)
+ * Keeps rows where: spend > 0 OR orders > 0 OR revenue > 0
+ * Skips rows where: spend = 0 AND orders = 0 AND revenue = 0
+ *
+ * @param rows - Parsed ad rows
+ * @param skipZeroRows - If true, filter out all-zero rows (default: true)
+ * @returns Filtered data with counts and totals
+ */
+interface FilteredAdData {
+  totalRows: number;
+  keptRows: NormalizedAdRow[];
+  skippedAllZeroRows: number;
+  totals: {
+    spend: number;
+    revenue: number;
+    orders: number;
+  };
+}
+
+function filterRows(
+  rows: NormalizedAdRow[],
+  skipZeroRows: boolean = true
+): FilteredAdData {
+  const totalRows = rows.length;
+
+  // Apply filter if enabled
+  const keptRows = skipZeroRows
+    ? rows.filter((r) => {
+        // Treat null/undefined as 0
+        const spend = r.spend || 0;
+        const orders = r.orders || 0;
+        const revenue = r.revenue || 0;
+        // Keep if ANY value > 0
+        return spend > 0 || orders > 0 || revenue > 0;
+      })
+    : rows;
+
+  const skippedAllZeroRows = totalRows - keptRows.length;
+
+  // Compute totals from kept rows ONLY
+  const totals = keptRows.reduce(
+    (acc, r) => ({
+      spend: acc.spend + (r.spend || 0),
+      revenue: acc.revenue + (r.revenue || 0),
+      orders: acc.orders + (r.orders || 0),
+    }),
+    { spend: 0, revenue: 0, orders: 0 }
+  );
+
+  return {
+    totalRows,
+    keptRows,
+    skippedAllZeroRows,
+    totals,
+  };
+}
+
+/**
+ * Detect header row in a sheet by scanning and scoring candidate rows
+ * Returns detailed debug info including top candidates and first rows preview
+ */
+interface HeaderDetectionResult {
+  headerRowIndex: number | null;
+  score: number;
+  mapping: Record<string, number>;
+  headers: string[];
+  candidateRows: Array<{
+    rowIndex: number;
+    cellsPreview: string[];
+    matchedFields: string[];
+    score: number;
+  }>;
+  firstRowsPreview: Array<{
+    rowIndex: number;
+    cells: string[];
+  }>;
+}
+
+function detectHeaderRow(
+  sheet: XLSX.WorkSheet,
+  synonymDict: Record<string, string[]>,
+  maxScanRows: number = 50
+): HeaderDetectionResult {
+  // Get sheet range
+  const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1');
+  const maxRow = Math.min(range.e.r, maxScanRows - 1);
+
+  const candidateRows: Array<{
+    rowIndex: number;
+    cellsPreview: string[];
+    matchedFields: string[];
+    score: number;
+  }> = [];
+
+  const firstRowsPreview: Array<{
+    rowIndex: number;
+    cells: string[];
+  }> = [];
+
+  let bestRowIndex: number | null = null;
+  let bestScore = 0;
+  let bestMapping: Record<string, number> = {};
+  let bestHeaders: string[] = [];
+
+  // Scan rows
+  for (let r = 0; r <= maxRow; r++) {
+    const cells: string[] = [];
+
+    // Read all cells in row (across full range)
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cellAddress = XLSX.utils.encode_cell({ r, c });
+      const cell = sheet[cellAddress];
+      const value = cell ? (cell.v ?? '') : '';
+      cells.push(String(value));
+    }
+
+    // Store first 10 rows for debug preview
+    if (r < 10) {
+      firstRowsPreview.push({
+        rowIndex: r + 1, // 1-indexed for display
+        cells: cells.slice(0, 10), // First 10 columns only
+      });
+    }
+
+    // Skip empty rows (all cells empty or whitespace)
+    if (cells.every((c) => !c || normalizeText(c) === '')) {
+      continue;
+    }
+
+    // Normalize cells for matching
+    const normalizedCells = cells.map(normalizeText);
+
+    // Try to match columns with synonym dictionary
+    const mapping: Record<string, number> = {};
+    const matchedFields: string[] = [];
+    let score = 0;
+
+    for (const [field, synonyms] of Object.entries(synonymDict)) {
+      let bestColIdx = -1;
+      let bestMatchScore = 0;
+
+      for (let colIdx = 0; colIdx < normalizedCells.length; colIdx++) {
+        const cellText = normalizedCells[colIdx];
+
+        if (!cellText) continue;
+
+        for (const synonym of synonyms) {
+          const normalizedSynonym = normalizeText(synonym);
+
+          // Exact match (score 100)
+          if (cellText === normalizedSynonym) {
+            if (100 > bestMatchScore) {
+              bestMatchScore = 100;
+              bestColIdx = colIdx;
+            }
+          }
+          // Contains match (score 50)
+          else if (
+            cellText.includes(normalizedSynonym) ||
+            normalizedSynonym.includes(cellText)
+          ) {
+            if (50 > bestMatchScore) {
+              bestMatchScore = 50;
+              bestColIdx = colIdx;
+            }
+          }
+        }
+      }
+
+      if (bestColIdx >= 0) {
+        mapping[field] = bestColIdx;
+        matchedFields.push(field);
+        score += bestMatchScore;
+      }
+    }
+
+    // Store as candidate
+    candidateRows.push({
+      rowIndex: r + 1, // 1-indexed for display
+      cellsPreview: cells.slice(0, 10), // First 10 columns
+      matchedFields,
+      score,
+    });
+
+    // Update best if better score
+    if (score > bestScore) {
+      bestScore = score;
+      bestRowIndex = r;
+      bestMapping = mapping;
+      bestHeaders = cells;
+    }
+  }
+
+  // Sort candidates by score (desc)
+  candidateRows.sort((a, b) => b.score - a.score);
+
+  return {
+    headerRowIndex: bestRowIndex,
+    score: bestScore,
+    mapping: bestMapping,
+    headers: bestHeaders,
+    candidateRows: candidateRows.slice(0, 5), // Top 5
+    firstRowsPreview,
+  };
+}
+
+/**
  * Detect campaign type from sheet name and columns with confidence score
  * Returns: { type, confidence, reason }
  */
@@ -249,7 +556,7 @@ function detectCampaignType(
 
 /**
  * Scan all sheets and find the best match for ads data
- * Returns: { sheetName, score, headers, campaignType }
+ * Now uses detectHeaderRow for robust header detection
  */
 function findBestSheet(workbook: XLSX.WorkBook): {
   sheetName: string;
@@ -257,6 +564,14 @@ function findBestSheet(workbook: XLSX.WorkBook): {
   headers: string[];
   headerRowIndex: number;
   campaignType: { type: 'product' | 'live'; confidence: number; reason: string };
+  debug: {
+    scannedSheets: string[];
+    headerRows: Record<string, number>;
+    scores: Record<string, number>;
+    columnMatches: Record<string, any>;
+    candidateRows?: Array<any>;
+    firstRowsPreview?: Array<any>;
+  };
 } {
   const candidates: {
     sheetName: string;
@@ -264,62 +579,98 @@ function findBestSheet(workbook: XLSX.WorkBook): {
     headers: string[];
     headerRowIndex: number;
     campaignType: { type: 'product' | 'live'; confidence: number; reason: string };
+    mapping: Record<string, number>;
+    detectionResult: HeaderDetectionResult;
   }[] = [];
 
+  const debug = {
+    scannedSheets: [] as string[],
+    headerRows: {} as Record<string, number>,
+    scores: {} as Record<string, number>,
+    columnMatches: {} as Record<string, any>,
+    candidateRows: [] as any[],
+    firstRowsPreview: [] as any[],
+  };
+
   for (const sheetName of workbook.SheetNames) {
+    debug.scannedSheets.push(sheetName);
+
     const worksheet = workbook.Sheets[sheetName];
-    const data = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as unknown[][];
 
-    if (data.length < 2) continue; // Skip empty sheets
+    // Try product columns first
+    const synonymDict = {
+      date: PRODUCT_CAMPAIGN_COLUMNS.date,
+      campaign_name: PRODUCT_CAMPAIGN_COLUMNS.campaign_name,
+      campaign_id: PRODUCT_CAMPAIGN_COLUMNS.campaign_id,
+      video_id: PRODUCT_CAMPAIGN_COLUMNS.video_id,
+      spend: PRODUCT_CAMPAIGN_COLUMNS.spend,
+      orders: PRODUCT_CAMPAIGN_COLUMNS.orders,
+      revenue: PRODUCT_CAMPAIGN_COLUMNS.revenue,
+      roi: PRODUCT_CAMPAIGN_COLUMNS.roi,
+    };
 
-    // Find header row
-    let headerRowIndex = -1;
-    let headers: string[] = [];
-    for (let i = 0; i < Math.min(10, data.length); i++) {
-      const row = data[i];
-      if (Array.isArray(row) && row.length > 3) {
-        const candidateHeaders = row.map((v) => String(v || ''));
-        const dateMatch = findColumn(candidateHeaders, PRODUCT_CAMPAIGN_COLUMNS.date);
-        if (dateMatch.index !== -1) {
-          headerRowIndex = i;
-          headers = candidateHeaders;
-          break;
-        }
-      }
+    const result = detectHeaderRow(worksheet, synonymDict, 50);
+
+    if (result.headerRowIndex === null) {
+      // No valid header found in this sheet
+      continue;
     }
 
-    if (headerRowIndex === -1) continue; // No valid header row
+    debug.headerRows[sheetName] = result.headerRowIndex + 1; // 1-indexed for display
+    debug.scores[sheetName] = result.score;
 
-    // Calculate match score
-    let score = 0;
-    const campaignType = detectCampaignType(sheetName, headers);
-    const columnMappings =
-      campaignType.type === 'live' ? LIVE_CAMPAIGN_COLUMNS : PRODUCT_CAMPAIGN_COLUMNS;
+    // Detect campaign type based on sheet name and headers
+    const campaignType = detectCampaignType(sheetName, result.headers);
 
-    // Score based on required columns
-    const dateMatch = findColumn(headers, columnMappings.date);
-    const spendMatch = findColumn(headers, columnMappings.spend);
-    const ordersMatch = findColumn(headers, columnMappings.orders);
-    const revenueMatch = findColumn(headers, columnMappings.revenue);
+    // Final score: header detection score + campaign type confidence bonus
+    const finalScore = result.score + campaignType.confidence * 10;
 
-    if (dateMatch.index !== -1) score += dateMatch.matchType === 'exact' ? 10 : 5;
-    if (spendMatch.index !== -1) score += spendMatch.matchType === 'exact' ? 10 : 5;
-    if (ordersMatch.index !== -1) score += ordersMatch.matchType === 'exact' ? 10 : 5;
-    if (revenueMatch.index !== -1) score += revenueMatch.matchType === 'exact' ? 10 : 5;
-
-    // Bonus for campaign type confidence
-    score += campaignType.confidence * 10;
-
-    candidates.push({ sheetName, score, headers, headerRowIndex, campaignType });
+    candidates.push({
+      sheetName,
+      score: finalScore,
+      headers: result.headers,
+      headerRowIndex: result.headerRowIndex,
+      campaignType,
+      mapping: result.mapping,
+      detectionResult: result,
+    });
   }
 
   if (candidates.length === 0) {
+    // No sheets with valid headers found - provide detailed debug
+    // Use detection result from first sheet for debug info
+    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+    const firstResult = firstSheet
+      ? detectHeaderRow(
+          firstSheet,
+          {
+            date: PRODUCT_CAMPAIGN_COLUMNS.date,
+            campaign_name: PRODUCT_CAMPAIGN_COLUMNS.campaign_name,
+            spend: PRODUCT_CAMPAIGN_COLUMNS.spend,
+            orders: PRODUCT_CAMPAIGN_COLUMNS.orders,
+            revenue: PRODUCT_CAMPAIGN_COLUMNS.revenue,
+          },
+          50
+        )
+      : null;
+
     throw new AdsImportError(
-      'ไม่พบ sheet ที่มีข้อมูลโฆษณา',
+      'ไม่พบ sheet ที่มีข้อมูลโฆษณา - ไม่มี sheet ใดที่มี columns ที่จำเป็น',
       'NO_VALID_SHEET',
       {
         sheetNames: workbook.SheetNames,
-        suggestion: 'ตรวจสอบว่าไฟล์มี columns: Date, Campaign, Cost, GMV, Orders',
+        scannedSheets: debug.scannedSheets,
+        headerRows: debug.headerRows,
+        scores: debug.scores,
+        candidateRows: firstResult?.candidateRows,
+        firstRowsPreview: firstResult?.firstRowsPreview,
+        suggestion:
+          'ตรวจสอบว่าไฟล์มี columns ที่จำเป็น:\n' +
+          '- Date/วันที่/วันเริ่มต้น/เวลาเริ่มต้น\n' +
+          '- Campaign/แคมเปญ/ชื่อแคมเปญ/ชื่อ LIVE\n' +
+          '- Cost/ต้นทุน/ค่าใช้จ่าย\n' +
+          '- GMV/รายได้/รายได้ขั้นต้น\n' +
+          '- Orders/ยอดการซื้อ/คำสั่งซื้อ',
       }
     );
   }
@@ -327,22 +678,65 @@ function findBestSheet(workbook: XLSX.WorkBook): {
   // Sort by score descending
   candidates.sort((a, b) => b.score - a.score);
 
+  const best = candidates[0];
+
+  // Include debug details from best sheet
+  debug.candidateRows = best.detectionResult.candidateRows;
+  debug.firstRowsPreview = best.detectionResult.firstRowsPreview;
+  debug.columnMatches = {
+    selectedSheet: best.sheetName,
+    mapping: best.mapping,
+  };
+
   console.log('[Ads Import] Sheet candidates:', candidates.map(c => ({
     name: c.sheetName,
     score: c.score,
     type: c.campaignType.type,
-    confidence: c.campaignType.confidence.toFixed(2)
+    confidence: c.campaignType.confidence.toFixed(2),
+    headerRow: c.headerRowIndex + 1,
   })));
 
-  return candidates[0];
+  console.log('[Ads Import] Selected sheet debug:', {
+    sheet: best.sheetName,
+    headerRow: best.headerRowIndex + 1,
+    score: best.score,
+    detectedScore: best.detectionResult.score,
+    mapping: best.mapping,
+  });
+
+  return {
+    sheetName: best.sheetName,
+    score: best.score,
+    headers: best.headers,
+    headerRowIndex: best.headerRowIndex,
+    campaignType: best.campaignType,
+    debug,
+  };
 }
 
 /**
  * Parse Excel buffer and normalize ad rows
+ * @param buffer - Excel file buffer
+ * @param reportDate - Report date (required if file has no Date column)
+ * @param adsType - Ads type: 'product' or 'live' (required)
+ * @param skipZeroRows - If true, filter out all-zero rows (default: true)
  */
-export function parseAdsExcel(buffer: Buffer): {
-  rows: NormalizedAdRow[];
+export function parseAdsExcel(
+  buffer: Buffer,
+  reportDate?: Date,
+  adsType?: 'product' | 'live',
+  skipZeroRows: boolean = true
+): {
+  totalRows: number;
+  keptRows: NormalizedAdRow[];
+  skippedAllZeroRows: number;
+  totals: {
+    spend: number;
+    revenue: number;
+    orders: number;
+  };
   warnings: string[];
+  skipZeroRowsUsed: boolean;
 } {
   const warnings: string[] = [];
   const workbook = XLSX.read(buffer, { type: 'buffer' });
@@ -365,59 +759,91 @@ export function parseAdsExcel(buffer: Buffer): {
     name: sheetName,
     type: campaignType.type,
     confidence: campaignType.confidence.toFixed(2),
-    reason: campaignType.reason
+    reason: campaignType.reason,
+    headerRowIndex: headerRowIndex + 1,
   });
 
   const worksheet = workbook.Sheets[sheetName];
-  const data = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as unknown[][];
 
-  if (data.length < 2) {
+  // Re-detect header with correct campaign type columns
+  const columnMappings =
+    campaignType.type === 'live' ? LIVE_CAMPAIGN_COLUMNS : PRODUCT_CAMPAIGN_COLUMNS;
+
+  const synonymDict = {
+    date: columnMappings.date,
+    campaign_name: columnMappings.campaign_name,
+    campaign_id: columnMappings.campaign_id,
+    video_id: columnMappings.video_id,
+    spend: columnMappings.spend,
+    orders: columnMappings.orders,
+    revenue: columnMappings.revenue,
+    roi: columnMappings.roi,
+  };
+
+  const detectionResult = detectHeaderRow(worksheet, synonymDict, 50);
+
+  if (detectionResult.headerRowIndex === null) {
     throw new AdsImportError(
       'Sheet ไม่มีข้อมูล',
       'EMPTY_SHEET',
       {
         sheetName,
         suggestion: 'ตรวจสอบว่า sheet มีข้อมูลอย่างน้อย 2 แถว (header + data)',
+        candidateRows: detectionResult.candidateRows,
+        firstRowsPreview: detectionResult.firstRowsPreview,
       }
     );
   }
 
-  const columnMappings =
-    campaignType.type === 'live' ? LIVE_CAMPAIGN_COLUMNS : PRODUCT_CAMPAIGN_COLUMNS;
-
-  const columnMatches = {
-    date: findColumn(headers, columnMappings.date),
-    campaign_name: findColumn(headers, columnMappings.campaign_name),
-    spend: findColumn(headers, columnMappings.spend),
-    orders: findColumn(headers, columnMappings.orders),
-    revenue: findColumn(headers, columnMappings.revenue),
-    roi: findColumn(headers, columnMappings.roi),
-  };
-
   const columnIndexes = {
-    date: columnMatches.date.index,
-    campaign_name: columnMatches.campaign_name.index,
-    spend: columnMatches.spend.index,
-    orders: columnMatches.orders.index,
-    revenue: columnMatches.revenue.index,
-    roi: columnMatches.roi.index,
+    date: detectionResult.mapping.date ?? -1,
+    campaign_name: detectionResult.mapping.campaign_name ?? -1,
+    campaign_id: detectionResult.mapping.campaign_id ?? -1,
+    video_id: detectionResult.mapping.video_id ?? -1,
+    spend: detectionResult.mapping.spend ?? -1,
+    orders: detectionResult.mapping.orders ?? -1,
+    revenue: detectionResult.mapping.revenue ?? -1,
+    roi: detectionResult.mapping.roi ?? -1,
   };
 
   // Log detected columns
   console.log('[Ads Import] Detected columns:', {
-    date: columnMatches.date.matchedVariant || 'NOT FOUND',
-    spend: columnMatches.spend.matchedVariant || 'NOT FOUND',
-    orders: columnMatches.orders.matchedVariant || 'NOT FOUND',
-    revenue: columnMatches.revenue.matchedVariant || 'NOT FOUND',
-    roi: columnMatches.roi.matchedVariant || 'NOT FOUND',
+    date: columnIndexes.date >= 0 ? `Column ${columnIndexes.date + 1}` : 'NOT FOUND',
+    campaign_name: columnIndexes.campaign_name >= 0 ? `Column ${columnIndexes.campaign_name + 1}` : 'NOT FOUND',
+    campaign_id: columnIndexes.campaign_id >= 0 ? `Column ${columnIndexes.campaign_id + 1}` : 'NOT FOUND',
+    video_id: columnIndexes.video_id >= 0 ? `Column ${columnIndexes.video_id + 1}` : 'NOT FOUND',
+    spend: columnIndexes.spend >= 0 ? `Column ${columnIndexes.spend + 1}` : 'NOT FOUND',
+    orders: columnIndexes.orders >= 0 ? `Column ${columnIndexes.orders + 1}` : 'NOT FOUND',
+    revenue: columnIndexes.revenue >= 0 ? `Column ${columnIndexes.revenue + 1}` : 'NOT FOUND',
+    roi: columnIndexes.roi >= 0 ? `Column ${columnIndexes.roi + 1}` : 'NOT FOUND',
   });
 
   // Validate required columns
   const missingColumns: string[] = [];
-  if (columnIndexes.date === -1) missingColumns.push('Date');
-  if (columnIndexes.spend === -1) missingColumns.push('Cost/Spend');
-  if (columnIndexes.orders === -1) missingColumns.push('Orders/Conversions');
-  if (columnIndexes.revenue === -1) missingColumns.push('Revenue/GMV');
+  const missingDetails: string[] = [];
+
+  // Date column is optional if reportDate is provided
+  if (columnIndexes.date === -1 && !reportDate) {
+    missingColumns.push('Date');
+    missingDetails.push('Date/วันที่/วันเริ่มต้น/เวลาเริ่มต้น (or provide Report Date)');
+  }
+  if (columnIndexes.spend === -1) {
+    missingColumns.push('Cost/Spend');
+    missingDetails.push('Cost/ต้นทุน/ค่าใช้จ่าย');
+  }
+  if (columnIndexes.orders === -1) {
+    missingColumns.push('Orders');
+    missingDetails.push('Orders/ยอดการซื้อ/คำสั่งซื้อ');
+  }
+  if (columnIndexes.revenue === -1) {
+    missingColumns.push('Revenue');
+    missingDetails.push('Revenue/GMV/รายได้/รายได้ขั้นต้น');
+  }
+
+  // Add warning if date column is missing but reportDate is provided
+  if (columnIndexes.date === -1 && reportDate) {
+    warnings.push('⚠️ ไฟล์ไม่มี Date column - ใช้ Report Date สำหรับทุก row');
+  }
 
   if (missingColumns.length > 0) {
     throw new AdsImportError(
@@ -425,51 +851,105 @@ export function parseAdsExcel(buffer: Buffer): {
       'MISSING_REQUIRED_COLUMNS',
       {
         sheetName,
-        headers,
+        headers: detectionResult.headers,
         missingColumns,
-        suggestion: `ตรวจสอบว่าไฟล์มี columns: ${missingColumns.join(', ')}`,
+        selectedSheet: sheetName,
+        headerRow: detectionResult.headerRowIndex + 1,
+        detectedColumns: {
+          date: columnIndexes.date >= 0 ? `Column ${columnIndexes.date + 1}` : 'NOT FOUND',
+          campaign: columnIndexes.campaign_name >= 0 ? `Column ${columnIndexes.campaign_name + 1}` : 'NOT FOUND',
+          spend: columnIndexes.spend >= 0 ? `Column ${columnIndexes.spend + 1}` : 'NOT FOUND',
+          orders: columnIndexes.orders >= 0 ? `Column ${columnIndexes.orders + 1}` : 'NOT FOUND',
+          revenue: columnIndexes.revenue >= 0 ? `Column ${columnIndexes.revenue + 1}` : 'NOT FOUND',
+        },
+        candidateRows: detectionResult.candidateRows,
+        firstRowsPreview: detectionResult.firstRowsPreview,
+        suggestion:
+          `ตรวจสอบว่าไฟล์มี columns ที่จำเป็น:\n` +
+          missingDetails.map((detail) => `- ${detail}`).join('\n') +
+          `\n\nHeaders ที่เจอในไฟล์: ${detectionResult.headers.slice(0, 10).join(', ')}${detectionResult.headers.length > 10 ? '...' : ''}`,
       }
     );
   }
 
-  // Parse data rows
+  // Parse data rows manually (bypass sheet_to_json)
+  const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
   const rows: NormalizedAdRow[] = [];
   let skippedRows = 0;
   let invalidDates = 0;
 
-  for (let i = headerRowIndex + 1; i < data.length; i++) {
-    const row = data[i];
-    if (!row || row.length === 0) {
+  for (let r = detectionResult.headerRowIndex + 1; r <= range.e.r; r++) {
+    // Read row cells manually
+    const rowCells: any[] = [];
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cellAddress = XLSX.utils.encode_cell({ r, c });
+      const cell = worksheet[cellAddress];
+      rowCells.push(cell ? cell.v : null);
+    }
+
+    // Skip empty rows
+    if (rowCells.every((v) => v === null || v === undefined || v === '')) {
       skippedRows++;
       continue;
     }
 
-    const dateValue = row[columnIndexes.date];
-    const adDate = parseDate(dateValue);
+    // Get date: use file date if available, otherwise use reportDate
+    let adDate: Date | null = null;
+    if (columnIndexes.date !== -1) {
+      const dateValue = rowCells[columnIndexes.date];
+      adDate = parseDate(dateValue);
+
+      if (!adDate && !reportDate) {
+        invalidDates++;
+        warnings.push(`Row ${r + 1}: Invalid or missing date "${dateValue}", skipping`);
+        continue;
+      }
+    }
+
+    // Fallback to reportDate if file date is missing or invalid
+    if (!adDate && reportDate) {
+      adDate = reportDate;
+    }
 
     if (!adDate) {
       invalidDates++;
-      warnings.push(`Row ${i + 1}: Invalid or missing date "${dateValue}", skipping`);
+      warnings.push(`Row ${r + 1}: No valid date (file date and reportDate both missing), skipping`);
       continue;
     }
 
-    const spend = columnIndexes.spend !== -1 ? parseNumeric(row[columnIndexes.spend]) : 0;
-    const orders = columnIndexes.orders !== -1 ? parseNumeric(row[columnIndexes.orders]) : 0;
-    const revenue = columnIndexes.revenue !== -1 ? parseNumeric(row[columnIndexes.revenue]) : 0;
-    let roi = columnIndexes.roi !== -1 ? parseNumeric(row[columnIndexes.roi]) : null;
+    const spend = columnIndexes.spend !== -1 ? parseNumeric(rowCells[columnIndexes.spend]) : 0;
+    const orders = columnIndexes.orders !== -1 ? parseNumeric(rowCells[columnIndexes.orders]) : 0;
+    const revenue = columnIndexes.revenue !== -1 ? parseNumeric(rowCells[columnIndexes.revenue]) : 0;
+    let roi = columnIndexes.roi !== -1 ? parseNumeric(rowCells[columnIndexes.roi]) : null;
 
     // Calculate ROI if not provided and spend > 0
     if (roi === null && spend > 0) {
       roi = revenue / spend;
     }
 
+    // Parse campaign_id and video_id (fallback to null if not found)
+    const campaignId =
+      columnIndexes.campaign_id !== -1 && rowCells[columnIndexes.campaign_id]
+        ? String(rowCells[columnIndexes.campaign_id]).trim()
+        : null;
+
+    const videoId =
+      columnIndexes.video_id !== -1 && rowCells[columnIndexes.video_id]
+        ? String(rowCells[columnIndexes.video_id]).trim()
+        : null;
+
+    // Use adsType if provided, otherwise use auto-detected campaignType
+    const finalCampaignType = adsType || campaignType.type;
+
     const normalizedRow: NormalizedAdRow = {
       ad_date: adDate,
-      campaign_type: campaignType.type,
+      campaign_type: finalCampaignType,
       campaign_name:
-        columnIndexes.campaign_name !== -1 && row[columnIndexes.campaign_name]
-          ? String(row[columnIndexes.campaign_name]).trim()
+        columnIndexes.campaign_name !== -1 && rowCells[columnIndexes.campaign_name]
+          ? String(rowCells[columnIndexes.campaign_name]).trim()
           : null,
+      campaign_id: campaignId,
+      video_id: videoId,
       spend,
       orders: Math.floor(orders), // Ensure integer
       revenue,
@@ -480,7 +960,7 @@ export function parseAdsExcel(buffer: Buffer): {
   }
 
   console.log('[Ads Import] Parse summary:', {
-    totalRows: data.length - headerRowIndex - 1,
+    totalDataRows: range.e.r - detectionResult.headerRowIndex,
     validRows: rows.length,
     skippedRows,
     invalidDates,
@@ -500,18 +980,47 @@ export function parseAdsExcel(buffer: Buffer): {
     );
   }
 
-  return { rows, warnings };
+  // Apply filter (skip all-zero rows if enabled)
+  const filtered = filterRows(rows, skipZeroRows);
+
+  console.log('[Ads Import] Filter summary:', {
+    skipZeroRows,
+    totalRows: filtered.totalRows,
+    keptRows: filtered.keptRows.length,
+    skippedAllZeroRows: filtered.skippedAllZeroRows,
+    totals: filtered.totals,
+  });
+
+  return {
+    totalRows: filtered.totalRows,
+    keptRows: filtered.keptRows,
+    skippedAllZeroRows: filtered.skippedAllZeroRows,
+    totals: filtered.totals,
+    warnings,
+    skipZeroRowsUsed: skipZeroRows,
+  };
 }
 
 /**
  * Preview ads file without inserting to database
  * Returns summary and sample rows for user confirmation
+ * @param buffer - Excel file buffer
+ * @param fileName - File name
+ * @param reportDate - Report date (required if file has no Date column)
+ * @param adsType - Ads type: 'product' or 'live' (required)
+ * @param skipZeroRows - If true, filter out all-zero rows (default: true)
  */
-export function previewAdsExcel(buffer: Buffer, fileName: string): AdPreviewResult {
+export function previewAdsExcel(
+  buffer: Buffer,
+  fileName: string,
+  reportDate?: Date,
+  adsType?: 'product' | 'live',
+  skipZeroRows: boolean = true
+): AdPreviewResult {
   try {
-    const { rows, warnings } = parseAdsExcel(buffer);
+    const parseResult = parseAdsExcel(buffer, reportDate, adsType, skipZeroRows);
 
-    if (rows.length === 0) {
+    if (parseResult.keptRows.length === 0) {
       throw new AdsImportError(
         'ไม่พบข้อมูลที่ valid ในไฟล์',
         'NO_VALID_DATA',
@@ -525,20 +1034,20 @@ export function previewAdsExcel(buffer: Buffer, fileName: string): AdPreviewResu
     const workbook = XLSX.read(buffer, { type: 'buffer' });
     const bestSheet = findBestSheet(workbook);
 
-    // Calculate summary
-    const totalSpend = rows.reduce((sum, row) => sum + row.spend, 0);
-    const totalOrders = rows.reduce((sum, row) => sum + row.orders, 0);
-    const totalRevenue = rows.reduce((sum, row) => sum + row.revenue, 0);
+    // Calculate summary from kept rows (already computed in parseResult.totals)
+    const totalSpend = parseResult.totals.spend;
+    const totalOrders = parseResult.totals.orders;
+    const totalRevenue = parseResult.totals.revenue;
     const avgROI = totalSpend > 0 ? totalRevenue / totalSpend : 0;
 
-    // Get date range
-    const dates = rows
+    // Get date range from kept rows
+    const dates = parseResult.keptRows
       .map((r) => r.ad_date.toISOString().split('T')[0])
       .sort();
     const dateRange = dates.length > 0 ? `${dates[0]} to ${dates[dates.length - 1]}` : 'Unknown';
 
-    // Get sample rows (first 5)
-    const sampleRows = rows.slice(0, 5).map((row) => ({
+    // Get sample rows (first 5 from kept rows)
+    const sampleRows = parseResult.keptRows.slice(0, 5).map((row) => ({
       date: row.ad_date.toISOString().split('T')[0],
       campaignName: row.campaign_name,
       spend: row.spend,
@@ -547,25 +1056,43 @@ export function previewAdsExcel(buffer: Buffer, fileName: string): AdPreviewResu
       roi: row.roi,
     }));
 
-    // Get detected column names
+    // Get detected column names from first parsed row's mapping
+    const worksheet = workbook.Sheets[bestSheet.sheetName];
     const columnMappings =
       bestSheet.campaignType.type === 'live' ? LIVE_CAMPAIGN_COLUMNS : PRODUCT_CAMPAIGN_COLUMNS;
-    const columnMatches = {
-      date: findColumn(bestSheet.headers, columnMappings.date),
-      campaign_name: findColumn(bestSheet.headers, columnMappings.campaign_name),
-      spend: findColumn(bestSheet.headers, columnMappings.spend),
-      orders: findColumn(bestSheet.headers, columnMappings.orders),
-      revenue: findColumn(bestSheet.headers, columnMappings.revenue),
-      roi: findColumn(bestSheet.headers, columnMappings.roi),
+
+    const synonymDict = {
+      date: columnMappings.date,
+      campaign_name: columnMappings.campaign_name,
+      campaign_id: columnMappings.campaign_id,
+      video_id: columnMappings.video_id,
+      spend: columnMappings.spend,
+      orders: columnMappings.orders,
+      revenue: columnMappings.revenue,
+      roi: columnMappings.roi,
     };
 
+    const detectionResult = detectHeaderRow(worksheet, synonymDict, 50);
+
     const detectedColumns = {
-      date: columnMatches.date.matchedVariant || 'NOT FOUND',
-      campaign: columnMatches.campaign_name.matchedVariant || 'NOT FOUND',
-      spend: columnMatches.spend.matchedVariant || 'NOT FOUND',
-      orders: columnMatches.orders.matchedVariant || 'NOT FOUND',
-      revenue: columnMatches.revenue.matchedVariant || 'NOT FOUND',
-      roi: columnMatches.roi.matchedVariant || 'NOT FOUND',
+      date: detectionResult.mapping.date !== undefined
+        ? `Column ${detectionResult.mapping.date + 1} (${detectionResult.headers[detectionResult.mapping.date] || ''})`
+        : 'NOT FOUND',
+      campaign: detectionResult.mapping.campaign_name !== undefined
+        ? `Column ${detectionResult.mapping.campaign_name + 1} (${detectionResult.headers[detectionResult.mapping.campaign_name] || ''})`
+        : 'NOT FOUND',
+      spend: detectionResult.mapping.spend !== undefined
+        ? `Column ${detectionResult.mapping.spend + 1} (${detectionResult.headers[detectionResult.mapping.spend] || ''})`
+        : 'NOT FOUND',
+      orders: detectionResult.mapping.orders !== undefined
+        ? `Column ${detectionResult.mapping.orders + 1} (${detectionResult.headers[detectionResult.mapping.orders] || ''})`
+        : 'NOT FOUND',
+      revenue: detectionResult.mapping.revenue !== undefined
+        ? `Column ${detectionResult.mapping.revenue + 1} (${detectionResult.headers[detectionResult.mapping.revenue] || ''})`
+        : 'NOT FOUND',
+      roi: detectionResult.mapping.roi !== undefined
+        ? `Column ${detectionResult.mapping.roi + 1} (${detectionResult.headers[detectionResult.mapping.roi] || ''})`
+        : 'NOT FOUND',
     };
 
     return {
@@ -576,14 +1103,17 @@ export function previewAdsExcel(buffer: Buffer, fileName: string): AdPreviewResu
         campaignType: bestSheet.campaignType.type,
         campaignTypeConfidence: bestSheet.campaignType.confidence,
         dateRange,
-        totalRows: rows.length,
+        totalRows: parseResult.totalRows,
+        keptRows: parseResult.keptRows.length,
+        skippedAllZeroRows: parseResult.skippedAllZeroRows,
         totalSpend: Math.round(totalSpend * 100) / 100,
         totalOrders: Math.round(totalOrders),
         totalRevenue: Math.round(totalRevenue * 100) / 100,
         avgROI: Math.round(avgROI * 100) / 100,
+        skipZeroRowsUsed: parseResult.skipZeroRowsUsed,
       },
       sampleRows,
-      warnings,
+      warnings: parseResult.warnings,
       detectedColumns,
     };
   } catch (error) {
@@ -621,45 +1151,109 @@ export async function upsertAdRows(
 
   for (const row of rows) {
     try {
-      // Check if exists
-      const { data: existing } = await supabase
+      const adDate = row.ad_date.toISOString().split('T')[0];
+      const campaignType = row.campaign_type || 'product';
+      const campaignName = row.campaign_name || '';
+      const campaignId = row.campaign_id || '';
+      const videoId = row.video_id || '';
+
+      // Check if exists using unique key: marketplace + ad_date + campaign_type + campaign_name (full, no truncation) + campaign_id + video_id + created_by
+      // NOTE: Use COALESCE pattern to handle NULL values (NULL != empty string in unique constraint)
+      const { data: existing, error: selectError } = await supabase
         .from('ad_daily_performance')
         .select('id')
         .eq('marketplace', 'tiktok')
-        .eq('ad_date', row.ad_date.toISOString().split('T')[0])
-        .eq('campaign_type', row.campaign_type || 'product')
-        .eq('campaign_name', row.campaign_name || '')
+        .eq('ad_date', adDate)
+        .eq('campaign_type', campaignType)
+        .eq('campaign_name', campaignName)
+        .is('campaign_id', campaignId === '' ? null : campaignId)
+        .is('video_id', videoId === '' ? null : videoId)
         .eq('created_by', userId)
-        .single();
+        .maybeSingle();
 
-      const dataToUpsert = {
-        marketplace: 'tiktok',
-        ad_date: row.ad_date.toISOString().split('T')[0],
-        campaign_type: row.campaign_type,
-        campaign_name: row.campaign_name,
-        spend: row.spend,
-        orders: row.orders,
-        revenue: row.revenue,
-        roi: row.roi,
-        source: 'imported',
-        import_batch_id: batchId,
-        created_by: userId,
-      };
+      if (selectError) {
+        throw selectError;
+      }
 
-      const { error } = await supabase
-        .from('ad_daily_performance')
-        .upsert(dataToUpsert, {
-          onConflict: 'marketplace,ad_date,campaign_type,campaign_name,created_by',
+      // DEBUG: Log first 3 rows
+      if (rows.indexOf(row) < 3) {
+        console.log(`[UPSERT_DEBUG] Row ${rows.indexOf(row) + 1}:`, {
+          adDate,
+          campaign: campaignName,
+          campaignId: campaignId || '(empty)',
+          videoId: videoId || '(empty)',
+          spend: row.spend,
+          orders: row.orders,
+          revenue: row.revenue,
+          roi: row.roi,
+          uniqueKey: {
+            marketplace: 'tiktok',
+            adDate,
+            campaignType,
+            campaignName,
+            campaignId: campaignId || 'NULL',
+            videoId: videoId || 'NULL',
+          },
+          existing: existing ? `Found (id=${existing.id})` : 'Not found (will INSERT)',
         });
+      }
 
-      if (error) {
-        errorCount++;
-        errors.push(`Ad record ${row.ad_date.toISOString().split('T')[0]}: ${error.message}`);
-      } else {
-        if (existing) {
+      if (existing) {
+        // UPDATE existing row
+        const { error: updateError } = await supabase
+          .from('ad_daily_performance')
+          .update({
+            campaign_name: campaignName, // Keep campaign_name full (no truncation)
+            campaign_id: campaignId === '' ? null : campaignId,
+            video_id: videoId === '' ? null : videoId,
+            spend: row.spend,
+            orders: row.orders,
+            revenue: row.revenue,
+            roi: row.roi,
+            import_batch_id: batchId,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existing.id);
+
+        if (updateError) {
+          errorCount++;
+          errors.push(`UPDATE failed for ${adDate} ${campaignName.substring(0, 30)}: ${updateError.message}`);
+          console.error('[UPSERT_ERROR] UPDATE failed:', updateError);
+        } else {
           updatedCount++;
+          if (rows.indexOf(row) < 3) {
+            console.log(`[UPSERT_SUCCESS] Updated row ${rows.indexOf(row) + 1}`);
+          }
+        }
+      } else {
+        // INSERT new row
+        const { error: insertError } = await supabase
+          .from('ad_daily_performance')
+          .insert({
+            marketplace: 'tiktok',
+            ad_date: adDate,
+            campaign_type: campaignType,
+            campaign_name: campaignName, // Keep campaign_name full (no truncation)
+            campaign_id: campaignId === '' ? null : campaignId,
+            video_id: videoId === '' ? null : videoId,
+            spend: row.spend,
+            orders: row.orders,
+            revenue: row.revenue,
+            roi: row.roi,
+            source: 'imported',
+            import_batch_id: batchId,
+            created_by: userId,
+          });
+
+        if (insertError) {
+          errorCount++;
+          errors.push(`INSERT failed for ${adDate} ${campaignName.substring(0, 30)}: ${insertError.message}`);
+          console.error('[UPSERT_ERROR] INSERT failed:', insertError);
         } else {
           insertedCount++;
+          if (rows.indexOf(row) < 3) {
+            console.log(`[UPSERT_SUCCESS] Inserted row ${rows.indexOf(row) + 1}`);
+          }
         }
       }
     } catch (err) {
@@ -667,6 +1261,7 @@ export async function upsertAdRows(
       errors.push(
         `Ad record ${row.ad_date.toISOString().split('T')[0]}: ${err instanceof Error ? err.message : 'Unknown error'}`
       );
+      console.error('[UPSERT_ERROR] Exception:', err);
     }
   }
 
