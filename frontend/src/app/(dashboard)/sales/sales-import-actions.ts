@@ -622,49 +622,31 @@ export async function importSalesChunk(
       }
     })
 
-    // Insert with duplicate detection
+    // Upsert with idempotency (safe field updates on conflict)
     let insertedCount = 0
-    let skippedCount = 0
+    let updatedCount = 0
 
-    const { data: insertedRows, error: insertError } = await supabase
+    const { data: upsertedRows, error: upsertError } = await supabase
       .from('sales_orders')
-      .insert(salesRows)
+      .upsert(salesRows, {
+        onConflict: 'created_by,order_line_hash',
+        ignoreDuplicates: false, // Update existing rows
+      })
       .select()
 
-    if (insertError) {
-      // Check if it's a duplicate key error
-      if (insertError.code === '23505' || insertError.message.includes('duplicate')) {
-        console.log(
-          `Duplicate orders detected in chunk ${chunkIndex + 1}/${totalChunks}, inserting individually...`
-        )
-
-        // Insert one by one to identify duplicates
-        for (const row of salesRows) {
-          const { data, error } = await supabase.from('sales_orders').insert(row).select()
-
-          if (error) {
-            if (error.code === '23505' || error.message.includes('duplicate')) {
-              skippedCount++
-            } else {
-              console.error('Insert order error:', error)
-            }
-          } else if (data && data.length > 0) {
-            insertedCount++
-          }
-        }
-      } else {
-        // Other error - fail the chunk
-        console.error(`Insert error (chunk ${chunkIndex + 1}/${totalChunks}):`, insertError)
-        return {
-          success: false,
-          inserted: 0,
-          error: `Insert failed: ${insertError.message}`,
-        }
+    if (upsertError) {
+      console.error(`Upsert error (chunk ${chunkIndex + 1}/${totalChunks}):`, upsertError)
+      return {
+        success: false,
+        inserted: 0,
+        error: `Upsert failed: ${upsertError.message}`,
       }
-    } else {
-      // Bulk insert succeeded - no duplicates
-      insertedCount = insertedRows?.length || 0
     }
+
+    // Count inserted rows (new rows have been created)
+    // Note: Supabase upsert doesn't distinguish between insert and update
+    // We'll assume success and count all returned rows as processed
+    insertedCount = upsertedRows?.length || 0
 
     return {
       success: true,
@@ -895,62 +877,45 @@ export async function importSalesToSystem(
       }
     })
 
-    // Insert with duplicate detection
+    // Upsert with idempotency (safe field updates on conflict)
     let insertedCount = 0
-    let skippedCount = 0
 
-    const { data: insertedRows, error: insertError } = await supabase
+    const { data: upsertedRows, error: upsertError } = await supabase
       .from('sales_orders')
-      .insert(salesRows)
+      .upsert(salesRows, {
+        onConflict: 'created_by,order_line_hash',
+        ignoreDuplicates: false, // Update existing rows
+      })
       .select()
 
-    if (insertError) {
-      // Check if it's a duplicate key error
-      if (insertError.code === '23505' || insertError.message.includes('duplicate')) {
-        console.log('Duplicate orders detected, inserting individually...')
+    if (upsertError) {
+      console.error('Upsert error:', upsertError)
 
-        // Insert one by one to identify duplicates
-        for (const row of salesRows) {
-          const { data, error } = await supabase.from('sales_orders').insert(row).select()
+      await supabase
+        .from('import_batches')
+        .update({
+          status: 'failed',
+          error_count: parsedData.length,
+          notes: `Upsert failed: ${upsertError.message}`,
+        })
+        .eq('id', batch.id)
 
-          if (error) {
-            if (error.code === '23505' || error.message.includes('duplicate')) {
-              skippedCount++
-            } else {
-              console.error('Insert order error:', error)
-            }
-          } else if (data && data.length > 0) {
-            insertedCount++
-          }
-        }
-      } else {
-        // Other error - fail the import
-        console.error('Insert error:', insertError)
-
-        await supabase
-          .from('import_batches')
-          .update({
-            status: 'failed',
-            error_count: parsedData.length,
-            notes: `Insert failed: ${insertError.message}`,
-          })
-          .eq('id', batch.id)
-
-        return {
-          success: false,
-          error: `Insert failed: ${insertError.message}`,
-          inserted: 0,
-          skipped: 0,
-          errors: parsedData.length,
-        }
+      return {
+        success: false,
+        error: `Upsert failed: ${upsertError.message}`,
+        inserted: 0,
+        skipped: 0,
+        errors: parsedData.length,
       }
-    } else {
-      // Bulk insert succeeded - no duplicates
-      insertedCount = insertedRows?.length || 0
     }
 
+    // Count inserted rows (new rows have been created)
+    // Note: Supabase upsert doesn't distinguish between insert and update
+    // We'll assume success and count all returned rows as processed
+    insertedCount = upsertedRows?.length || 0
+
     // Check if any rows were inserted
-    if (insertedCount === 0 && skippedCount === 0) {
+    if (insertedCount === 0) {
       // No rows inserted (possible RLS block or silent failure)
       await supabase
         .from('import_batches')
@@ -972,18 +937,12 @@ export async function importSalesToSystem(
     }
 
     // Update batch status to success
-    const statusMessage =
-      skippedCount > 0
-        ? `Imported ${insertedCount} rows (${skippedCount} duplicates skipped)`
-        : `Successfully imported ${insertedCount} rows`
-
     await supabase
       .from('import_batches')
       .update({
         status: 'success',
         inserted_count: insertedCount,
-        skipped_count: skippedCount,
-        notes: statusMessage,
+        notes: `Successfully imported/updated ${insertedCount} rows (idempotent)`,
       })
       .eq('id', batch.id)
 
@@ -998,7 +957,7 @@ export async function importSalesToSystem(
       success: true,
       batchId: batch.id,
       inserted: insertedCount,
-      skipped: skippedCount,
+      skipped: 0, // Upsert doesn't track skipped (updates in place)
       errors: 0,
       summary: {
         dateRange,
