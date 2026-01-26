@@ -34,6 +34,58 @@ interface SalesImportDialogProps {
 
 type Step = 'upload' | 'preview' | 'duplicate' | 'importing' | 'result'
 
+/**
+ * Helper: Build FormData for createImportBatch Server Action
+ * Prevents payload errors by ensuring proper serialization
+ */
+function buildBatchFormData(
+  fileHash: string,
+  fileName: string,
+  totalRows: number,
+  dateRange: string,
+  allowReimport: boolean
+): FormData {
+  const formData = new FormData()
+  formData.append('fileHash', fileHash)
+  formData.append('fileName', fileName)
+  formData.append('totalRows', String(totalRows))
+  formData.append('dateRange', dateRange)
+  formData.append('allowReimport', String(allowReimport))
+  return formData
+}
+
+/**
+ * Helper: Build FormData for importSalesChunk Server Action
+ */
+function buildChunkFormData(
+  batchId: string,
+  chunkDataJson: string,
+  chunkIndex: number,
+  totalChunks: number
+): FormData {
+  const formData = new FormData()
+  formData.append('batchId', batchId)
+  formData.append('chunkDataJson', chunkDataJson)
+  formData.append('chunkIndex', String(chunkIndex))
+  formData.append('totalChunks', String(totalChunks))
+  return formData
+}
+
+/**
+ * Helper: Build FormData for finalizeImportBatch Server Action
+ */
+function buildFinalizeFormData(
+  batchId: string,
+  totalInserted: number,
+  parsedDataJson: string
+): FormData {
+  const formData = new FormData()
+  formData.append('batchId', batchId)
+  formData.append('totalInserted', String(totalInserted))
+  formData.append('parsedDataJson', parsedDataJson)
+  return formData
+}
+
 export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImportDialogProps) {
   const [step, setStep] = useState<Step>('upload')
   const [file, setFile] = useState<File | null>(null)
@@ -109,13 +161,14 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
         : 'N/A'
 
       // Step 1: Create import batch (with allowReimport flag)
-      const batchResult = await createImportBatch(
+      const batchFormData = buildBatchFormData(
         fileHash,
         file.name,
         plainData.length,
         dateRange,
         allowReimport
       )
+      const batchResult = await createImportBatch(batchFormData)
 
       // Handle duplicate file detection
       if (batchResult.status === 'duplicate_file' && !allowReimport) {
@@ -152,12 +205,13 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
       for (let i = 0; i < chunks.length; i++) {
         setImportProgress({ current: i + 1, total: chunks.length })
 
-        const chunkResult = await importSalesChunk(
+        const chunkFormData = buildChunkFormData(
           batchId,
-          chunks[i],
+          JSON.stringify(chunks[i]),
           i,
           chunks.length
         )
+        const chunkResult = await importSalesChunk(chunkFormData)
 
         if (!chunkResult.success) {
           // Chunk failed - finalize with error
@@ -174,7 +228,12 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
       }
 
       // Step 4: Finalize import batch
-      const finalResult = await finalizeImportBatch(batchId, totalInserted, plainData)
+      const finalizeFormData = buildFinalizeFormData(
+        batchId,
+        totalInserted,
+        JSON.stringify(plainData)
+      )
+      const finalResult = await finalizeImportBatch(finalizeFormData)
 
       if (finalResult.success) {
         setResult({

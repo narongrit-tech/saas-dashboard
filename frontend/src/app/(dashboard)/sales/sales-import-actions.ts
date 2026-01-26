@@ -476,13 +476,10 @@ async function parseTikTokFormat(
 
 /**
  * Create import batch and prepare for chunked import
+ * @param formData - FormData containing: fileHash, fileName, totalRows, dateRange, allowReimport
  */
 export async function createImportBatch(
-  fileHash: string,
-  fileName: string,
-  totalRows: number,
-  dateRange: string,
-  allowReimport?: boolean
+  formData: FormData
 ): Promise<{
   success: boolean;
   batchId?: string;
@@ -494,6 +491,21 @@ export async function createImportBatch(
   const supabase = createClient()
 
   try {
+    // Extract values from FormData
+    const fileHash = formData.get('fileHash') as string
+    const fileName = formData.get('fileName') as string
+    const totalRows = parseInt(formData.get('totalRows') as string, 10)
+    const dateRange = formData.get('dateRange') as string
+    const allowReimport = formData.get('allowReimport') === 'true'
+
+    // Validate required fields
+    if (!fileHash || !fileName || isNaN(totalRows)) {
+      return {
+        success: false,
+        error: 'Missing required fields: fileHash, fileName, or totalRows',
+      }
+    }
+
     // Get current user
     const { data: { user }, error: authError } = await supabase.auth.getUser()
     if (authError || !user) {
@@ -574,14 +586,31 @@ export async function createImportBatch(
 
 /**
  * Import a chunk of sales data
+ * @param formData - FormData containing: batchId, chunkDataJson, chunkIndex, totalChunks
  */
 export async function importSalesChunk(
-  batchId: string,
-  chunkData: ParsedSalesRow[],
-  chunkIndex: number,
-  totalChunks: number
+  formData: FormData
 ): Promise<{ success: boolean; inserted: number; error?: string }> {
   const supabase = createClient()
+
+  try {
+    // Extract values from FormData
+    const batchId = formData.get('batchId') as string
+    const chunkDataJson = formData.get('chunkDataJson') as string
+    const chunkIndex = parseInt(formData.get('chunkIndex') as string, 10)
+    const totalChunks = parseInt(formData.get('totalChunks') as string, 10)
+
+    // Validate required fields
+    if (!batchId || !chunkDataJson || isNaN(chunkIndex) || isNaN(totalChunks)) {
+      return {
+        success: false,
+        inserted: 0,
+        error: 'Missing required fields: batchId, chunkDataJson, chunkIndex, or totalChunks',
+      }
+    }
+
+    // Parse JSON string to array
+    const chunkData: ParsedSalesRow[] = JSON.parse(chunkDataJson)
 
   try {
     // Get current user
@@ -683,15 +712,33 @@ export async function importSalesChunk(
 
 /**
  * Finalize import batch after all chunks are imported
+ * @param formData - FormData containing: batchId, totalInserted, parsedDataJson
  */
 export async function finalizeImportBatch(
-  batchId: string,
-  totalInserted: number,
-  parsedData: ParsedSalesRow[]
+  formData: FormData
 ): Promise<SalesImportResult> {
   const supabase = createClient()
 
   try {
+    // Extract values from FormData
+    const batchId = formData.get('batchId') as string
+    const totalInserted = parseInt(formData.get('totalInserted') as string, 10)
+    const parsedDataJson = formData.get('parsedDataJson') as string
+
+    // Validate required fields
+    if (!batchId || isNaN(totalInserted) || !parsedDataJson) {
+      return {
+        success: false,
+        error: 'Missing required fields: batchId, totalInserted, or parsedDataJson',
+        inserted: 0,
+        skipped: 0,
+        errors: 0,
+      }
+    }
+
+    // Parse JSON string to array
+    const parsedData: ParsedSalesRow[] = JSON.parse(parsedDataJson)
+
     // Post-insert verification: Count actual rows in database
     const { count: actualCount } = await supabase
       .from('sales_orders')
