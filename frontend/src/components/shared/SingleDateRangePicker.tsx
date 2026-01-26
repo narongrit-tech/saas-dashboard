@@ -67,7 +67,9 @@ export function SingleDateRangePicker({
   ],
 }: SingleDateRangePickerProps) {
   const [open, setOpen] = useState(false);
-  const [dateRange, setDateRange] = useState<DateRange | undefined>(() => {
+
+  // Applied range (shown in button, sent to parent)
+  const [appliedRange, setAppliedRange] = useState<DateRange | undefined>(() => {
     if (defaultRange) {
       return {
         from: defaultRange.startDate,
@@ -83,29 +85,81 @@ export function SingleDateRangePicker({
     return undefined;
   });
 
-  // Auto-apply when both dates selected
-  // Note: onChange intentionally omitted from deps to avoid infinite loop
-  // (parent may recreate onChange on every render, but we only want to trigger on dateRange change)
+  // Draft range (internal calendar selection state)
+  const [draftRange, setDraftRange] = useState<DateRange | undefined>(appliedRange);
+
+  // Sync draftRange with appliedRange when popover opens
   useEffect(() => {
-    if (dateRange?.from && dateRange?.to) {
-      onChange({
-        startDate: dateRange.from,
-        endDate: dateRange.to,
-      });
+    if (open) {
+      setDraftRange(appliedRange);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateRange]);
+  }, [open, appliedRange]);
+
+  // Commit range: apply draft and notify parent
+  const commitRange = (range: DateRange) => {
+    if (range.from && range.to) {
+      setAppliedRange(range);
+      onChange({
+        startDate: range.from,
+        endDate: range.to,
+      });
+      setOpen(false); // Auto-close popover
+    }
+  };
+
+  // Handle calendar selection
+  const handleSelect = (range: DateRange | undefined) => {
+    if (!range) {
+      setDraftRange(undefined);
+      return;
+    }
+
+    // Case 1: First click (from only)
+    if (range.from && !range.to) {
+      setDraftRange(range);
+      return;
+    }
+
+    // Case 2: Second click with range complete (from + to)
+    if (range.from && range.to) {
+      // Check if single-day selection (same date clicked twice)
+      if (range.from.getTime() === range.to.getTime()) {
+        // Single day: commit immediately
+        commitRange(range);
+      } else {
+        // Range: commit immediately
+        commitRange(range);
+      }
+      return;
+    }
+
+    // Fallback: update draft
+    setDraftRange(range);
+  };
 
   const handlePresetClick = (preset: { getValue: () => DateRangeResult }) => {
     const range = preset.getValue();
-    setDateRange({ from: range.startDate, to: range.endDate });
+    const dateRange = { from: range.startDate, to: range.endDate };
+    setAppliedRange(dateRange);
+    setDraftRange(dateRange);
+    onChange(range);
     setOpen(false);
   };
 
-  const formatDateRange = () => {
-    if (!dateRange?.from) return 'Select date range';
-    if (!dateRange.to) return format(dateRange.from, 'dd MMM yyyy');
-    return `${format(dateRange.from, 'dd MMM yyyy')} – ${format(dateRange.to, 'dd MMM yyyy')}`;
+  const formatDateRangeDisplay = () => {
+    if (!appliedRange?.from) return 'Select date range';
+    if (!appliedRange.to) return format(appliedRange.from, 'dd MMM yyyy');
+    return `${format(appliedRange.from, 'dd MMM yyyy')} – ${format(appliedRange.to, 'dd MMM yyyy')}`;
+  };
+
+  const getHintText = () => {
+    if (!draftRange?.from) {
+      return 'เลือกวันเริ่มต้นและวันสิ้นสุด';
+    }
+    if (draftRange.from && !draftRange.to) {
+      return 'เลือกวันสิ้นสุด';
+    }
+    return null;
   };
 
   return (
@@ -129,17 +183,25 @@ export function SingleDateRangePicker({
         <PopoverTrigger asChild>
           <Button variant="outline" className="min-w-[280px] justify-start text-left font-normal">
             <CalendarIcon className="mr-2 h-4 w-4" />
-            {formatDateRange()}
+            {formatDateRangeDisplay()}
           </Button>
         </PopoverTrigger>
         <PopoverContent className="w-auto p-0" align="start">
-          <Calendar
-            mode="range"
-            selected={dateRange}
-            onSelect={setDateRange}
-            numberOfMonths={2}
-            defaultMonth={dateRange?.from}
-          />
+          <div>
+            <Calendar
+              mode="range"
+              selected={draftRange}
+              onSelect={handleSelect}
+              numberOfMonths={2}
+              defaultMonth={draftRange?.from || appliedRange?.from}
+            />
+            {/* Hint text */}
+            {getHintText() && (
+              <div className="px-3 py-2 text-xs text-muted-foreground border-t bg-muted/30">
+                {getHintText()}
+              </div>
+            )}
+          </div>
         </PopoverContent>
       </Popover>
     </div>
