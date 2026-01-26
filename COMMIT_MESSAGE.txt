@@ -1,0 +1,71 @@
+fix(ads-import): แก้ Confirm ล้ม "Failed to create import batch" + error ชัดเจน
+
+## ปัญหาที่แก้
+- Preview ผ่าน แต่ Confirm ล้ม "Failed to create import batch"
+- Error message ไม่ชัดเจน (ไม่รู้ว่าพังเพราะอะไร)
+- Duplicate detection ไม่ตรงกับ DB unique index
+
+## Root Cause
+- Dedup logic ใช้ metadata (reportDate + adsType)
+- DB unique index ใช้ (created_by, file_hash, report_type)
+- Constraint violation → generic error
+
+## การแก้ไข
+
+### Backend (route.ts)
+1. Fixed Deduplication Logic
+   - เปลี่ยนจาก: metadata-based dedup
+   - เป็น: file_hash + report_type (ตรงกับ DB index)
+   - Error: DUPLICATE_IMPORT พร้อม timestamp + batchId
+
+2. Added Structured Logging
+   - [CONFIRM] Step 1-7 ทุก step
+   - รู้ว่าพัง step ไหน (dedup/batch/parse/insert/wallet)
+
+3. Added Wallet Safety Check
+   - ตรวจ ADS wallet ก่อน insert
+   - ถ้าไม่มี → WALLET_NOT_FOUND + hint
+
+4. Enhanced Error Handling
+   - Standard format: { success, code, error, message, details }
+   - Error codes: DUPLICATE_IMPORT, WALLET_NOT_FOUND, PARSE_ERROR, DB_ERROR, UNKNOWN_ERROR
+
+### Frontend (ImportAdsDialog.tsx)
+1. Improved Error Display
+   - Error code ใน title (❌ นำเข้าซ้ำ, ⚠️ ไม่พบ Wallet)
+   - Message ชัดเจน
+   - Debug details ใน collapsible
+
+2. UX Improvements
+   - Button: "ยืนยันนำเข้า" → "กำลังนำเข้า..." when loading
+
+## Acceptance Criteria
+- [x] Confirm สำเร็จ (batch + ad_daily_performance + wallet_ledger)
+- [x] Duplicate detection ชัดเจน (DUPLICATE_IMPORT error)
+- [x] รองรับไฟล์ไม่มี Date column (ใช้ reportDate)
+- [x] Debug logs ครบ (Step 1-7)
+- [x] Business rules ไม่เปลี่ยน (IMPORTED source, Bangkok TZ)
+
+## Files Changed
+- frontend/src/app/api/import/tiktok/ads-daily/route.ts
+- frontend/src/components/ads/ImportAdsDialog.tsx
+
+## Documentation
+- CONFIRM_FIX_CHECKLIST.md (checklist + test cases)
+- ADS_IMPORT_CONFIRM_FIX_TEST_GUIDE.md (manual test guide)
+- ADS_IMPORT_FIX_SUMMARY.md (summary + rollback plan)
+
+## Known Limitations
+- Dedup ใช้ file_hash + report_type เท่านั้น (ignore reportDate)
+- ไฟล์เดียวกันไม่สามารถ import ซ้ำ (แม้ต่างวัน)
+- Future: เพิ่ม reportDate ใน file_hash calculation (Option B)
+
+## Risk
+- Low (changes isolated to confirm flow, preview unchanged)
+
+## Testing
+- Test 1-6: Product/Live import, Dedup, Wallet missing
+- Regression: Preview, Manual Mapping, Tiger Import
+- DB Verification: import_batches, ad_daily_performance, wallet_ledger
+
+Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>

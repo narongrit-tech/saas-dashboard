@@ -25,6 +25,14 @@
 - ✅ Template download (ArrayBuffer → base64) - Fixed
 - ✅ Sidebar links for Company Cashflow & Reconciliation - Added
 - ✅ wallet_ledger column name (transaction_date → date) - Fixed
+- ✅ **Ads Import Upsert Collision (2026-01-26)** - Fixed unique key to use campaign_id + video_id
+
+### New Features (2026-01-26)
+- ✅ **Import Batch Rollback System** - RPC functions, API routes, UI components
+  - RPC: rollback_import_batch(batch_id), cleanup_stuck_batches()
+  - API: POST /api/import/rollback, POST /api/import/cleanup-stuck
+  - UI: Rollback button in ImportAdsDialog (success screen + duplicate error screen)
+  - Security: RLS-compliant, user isolation, atomic transactions
 
 ---
 

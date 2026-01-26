@@ -27,6 +27,20 @@ interface ActionResult {
   error?: string
   warnings?: string[]
   data?: unknown
+  debug?: {
+    selectedSheet: string | null
+    headers: string[]
+    mapping: {
+      date: string | null
+      campaign: string | null
+      cost: string | null
+      gmv: string | null
+      orders: string | null
+      roas: string | null
+      currency: string | null
+    }
+    missingFields: string[]
+  }
 }
 
 interface PerformanceAdsPreview extends TikTokAdsPreview {
@@ -36,20 +50,43 @@ interface PerformanceAdsPreview extends TikTokAdsPreview {
 /**
  * Step 1: Parse and validate Performance Ads file
  * Returns preview data for user confirmation
+ * @param reportDate - User-selected report date (YYYY-MM-DD) in Bangkok timezone
  */
 export async function parsePerformanceAdsFile(
   fileBuffer: ArrayBuffer,
   fileName: string,
-  campaignType: 'product' | 'live'
+  campaignType: 'product' | 'live',
+  reportDate: string
 ): Promise<ActionResult & { preview?: PerformanceAdsPreview }> {
   try {
+    // Validate reportDate format
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/
+    if (!dateRegex.test(reportDate)) {
+      return {
+        success: false,
+        error: 'Report Date format ต้องเป็น YYYY-MM-DD',
+      }
+    }
+
+    // Validate reportDate not future
+    const selectedDate = new Date(reportDate)
+    const today = new Date()
+    today.setHours(23, 59, 59, 999) // End of today
+    if (selectedDate > today) {
+      return {
+        success: false,
+        error: 'Report Date ต้องไม่อนาคต',
+      }
+    }
+
     // Use new semantic parser
-    const result = await parseTikTokAdsFile(fileBuffer, fileName)
+    const result = await parseTikTokAdsFile(fileBuffer, fileName, reportDate)
 
     if (!result.success) {
       return {
         success: false,
         error: result.error,
+        debug: result.debug,
       }
     }
 
@@ -76,12 +113,14 @@ export async function parsePerformanceAdsFile(
 /**
  * Step 2: Import Performance Ads into system
  * Creates ad_daily_performance records + wallet_ledger SPEND entries
+ * @param reportDate - User-selected report date (YYYY-MM-DD) in Bangkok timezone
  */
 export async function importPerformanceAdsToSystem(
   fileBuffer: ArrayBuffer,
   fileName: string,
   campaignType: 'product' | 'live',
-  adsWalletId: string
+  adsWalletId: string,
+  reportDate: string
 ): Promise<ActionResult> {
   try {
     // 1. Authenticate user
@@ -114,7 +153,7 @@ export async function importPerformanceAdsToSystem(
     }
 
     // 3. Parse file again (with validation)
-    const parseResult = await parsePerformanceAdsFile(fileBuffer, fileName, campaignType)
+    const parseResult = await parsePerformanceAdsFile(fileBuffer, fileName, campaignType, reportDate)
     if (!parseResult.success || !parseResult.preview) {
       return {
         success: false,
@@ -124,27 +163,32 @@ export async function importPerformanceAdsToSystem(
 
     const { preview } = parseResult
 
-    // 4. Check for duplicate file (using file hash)
+    // 4. Check for duplicate file (using file hash + reportDate + adsType)
     const fileHash = crypto.createHash('sha256').update(Buffer.from(fileBuffer)).digest('hex')
 
+    // Check if same file + reportDate + campaignType already imported
     const { data: existingBatch } = await supabase
       .from('import_batches')
-      .select('id, file_name, created_at')
+      .select('id, file_name, created_at, metadata')
       .eq('file_hash', fileHash)
       .eq('report_type', `tiktok_ads_${campaignType}`)
       .single()
 
     if (existingBatch) {
-      return {
-        success: false,
-        error: `ไฟล์นี้ถูก import ไปแล้ว - "${existingBatch.file_name}" เมื่อ ${formatBangkok(
-          new Date(existingBatch.created_at),
-          'yyyy-MM-dd HH:mm'
-        )}`,
+      // Check if metadata contains same reportDate
+      const existingReportDate = existingBatch.metadata?.reportDate
+      if (existingReportDate === reportDate) {
+        return {
+          success: false,
+          error: `ไฟล์นี้ถูก import แล้วสำหรับวันที่ ${reportDate} (${campaignType}) - "${existingBatch.file_name}" เมื่อ ${formatBangkok(
+            new Date(existingBatch.created_at),
+            'yyyy-MM-dd HH:mm'
+          )}`,
+        }
       }
     }
 
-    // 5. Create import_batch record
+    // 5. Create import_batch record with metadata
     const { data: batch, error: batchError } = await supabase
       .from('import_batches')
       .insert({
@@ -156,6 +200,10 @@ export async function importPerformanceAdsToSystem(
         row_count: preview.rowCount,
         inserted_count: 0, // Will update later
         status: 'processing',
+        metadata: {
+          reportDate,
+          adsType: campaignType,
+        },
         created_by: user.id,
       })
       .select()

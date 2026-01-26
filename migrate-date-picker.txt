@@ -1,0 +1,16 @@
+# Migration Guide สำหรับแต่ละหน้า
+
+## หน้าที่ต้อง migrate (เหลือ 7 หน้า):
+1. /expenses
+2. /cashflow
+3. /company-cashflow
+4. /reconciliation
+5. BankDailySummaryTable
+6. BankTransactionsTable
+7. BankReconciliationClient
+
+## Changes ที่ต้องทำ:
+1. Import: SingleDateRangePicker → UnifiedDateRangePicker
+2. Type: DateRangeResult → DateRangeValue
+3. Props: startDate/endDate → from/to
+4. Component: ลบ presets prop, เพิ่ม value + defaultPreset

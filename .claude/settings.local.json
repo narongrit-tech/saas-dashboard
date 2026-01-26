@@ -31,7 +31,15 @@
       "Bash(git push:*)",
       "Bash(cd:*)",
       "Bash(grep:*)",
-      "Bash(New-Item -Path \"D:\\\\Projects\\\\saas-dashboard\\\\frontend\\\\src\\\\app\\\\\\(dashboard\\)\\\\reconciliation\\\\actions.ts\" -ItemType File -Force)"
+      "Bash(New-Item -Path \"D:\\\\Projects\\\\saas-dashboard\\\\frontend\\\\src\\\\app\\\\\\(dashboard\\)\\\\reconciliation\\\\actions.ts\" -ItemType File -Force)",
+      "Bash(ping:*)",
+      "Bash(node test-parser-synonyms.js:*)",
+      "Bash(node create-test-ads-file.js:*)",
+      "Bash(node create-invalid-test-file.js:*)",
+      "Bash(curl:*)",
+      "Bash(node:*)",
+      "Bash(npx supabase:*)",
+      "Bash(git revert:*)"
     ]
   },
   "approvalMode": "auto",

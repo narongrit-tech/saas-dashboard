@@ -165,6 +165,7 @@ export interface NormalizedAdRow {
   orders: number;
   revenue: number;
   roi: number | null;
+  source_row_hash: string; // MD5 hash of normalized key + value fields
 }
 
 export interface AdImportResult {
@@ -177,6 +178,39 @@ export interface AdImportResult {
   errorCount: number;
   errors: string[];
   warnings: string[];
+}
+
+/**
+ * Create deterministic MD5 hash of row content
+ * Used for deduplication and detecting data changes
+ * @param row - Normalized ad row data
+ * @returns MD5 hash string
+ */
+function makeSourceRowHash(row: Omit<NormalizedAdRow, 'source_row_hash'>): string {
+  // Normalize numeric values to 2 decimal places (matches SQL TO_CHAR format)
+  const normalizedSpend = row.spend.toFixed(2);
+  const normalizedRevenue = row.revenue.toFixed(2);
+  const normalizedOrders = String(row.orders);
+
+  // Normalize strings: trim, lowercase, use empty string for null
+  // This matches SQL: LOWER(TRIM(COALESCE(column, '')))
+  const normalizedCampaignName = (row.campaign_name || '').trim().toLowerCase();
+  const normalizedCampaignId = (row.campaign_id || '').trim().toLowerCase();
+  const normalizedVideoId = (row.video_id || '').trim().toLowerCase();
+
+  // Concatenate fields with pipe separator (exclude marketplace/date/type for deterministic hash)
+  // Hash format: campaign_name|campaign_id|video_id|spend|orders|revenue
+  const content = [
+    normalizedCampaignName,
+    normalizedCampaignId,
+    normalizedVideoId,
+    normalizedSpend,
+    normalizedOrders,
+    normalizedRevenue,
+  ].join('|');
+
+  // Return MD5 hash
+  return crypto.createHash('md5').update(content, 'utf8').digest('hex');
 }
 
 export interface AdPreviewResult {
@@ -941,7 +975,8 @@ export function parseAdsExcel(
     // Use adsType if provided, otherwise use auto-detected campaignType
     const finalCampaignType = adsType || campaignType.type;
 
-    const normalizedRow: NormalizedAdRow = {
+    // Build row without hash first
+    const rowWithoutHash = {
       ad_date: adDate,
       campaign_type: finalCampaignType,
       campaign_name:
@@ -954,6 +989,15 @@ export function parseAdsExcel(
       orders: Math.floor(orders), // Ensure integer
       revenue,
       roi,
+    };
+
+    // Calculate source_row_hash from normalized fields
+    const sourceRowHash = makeSourceRowHash(rowWithoutHash);
+
+    // Add hash to final row
+    const normalizedRow: NormalizedAdRow = {
+      ...rowWithoutHash,
+      source_row_hash: sourceRowHash,
     };
 
     rows.push(normalizedRow);
@@ -1156,18 +1200,14 @@ export async function upsertAdRows(
       const campaignName = row.campaign_name || '';
       const campaignId = row.campaign_id || '';
       const videoId = row.video_id || '';
+      const sourceRowHash = row.source_row_hash;
 
-      // Check if exists using unique key: marketplace + ad_date + campaign_type + campaign_name (full, no truncation) + campaign_id + video_id + created_by
-      // NOTE: Use COALESCE pattern to handle NULL values (NULL != empty string in unique constraint)
+      // Check if exists using source_row_hash (deterministic and robust)
+      // This prevents duplicate rows with same campaign_id/video_id but different spend/orders/revenue
       const { data: existing, error: selectError } = await supabase
         .from('ad_daily_performance')
         .select('id')
-        .eq('marketplace', 'tiktok')
-        .eq('ad_date', adDate)
-        .eq('campaign_type', campaignType)
-        .eq('campaign_name', campaignName)
-        .is('campaign_id', campaignId === '' ? null : campaignId)
-        .is('video_id', videoId === '' ? null : videoId)
+        .eq('source_row_hash', sourceRowHash)
         .eq('created_by', userId)
         .maybeSingle();
 
@@ -1179,21 +1219,14 @@ export async function upsertAdRows(
       if (rows.indexOf(row) < 3) {
         console.log(`[UPSERT_DEBUG] Row ${rows.indexOf(row) + 1}:`, {
           adDate,
-          campaign: campaignName,
+          campaign: campaignName.substring(0, 30),
           campaignId: campaignId || '(empty)',
           videoId: videoId || '(empty)',
           spend: row.spend,
           orders: row.orders,
           revenue: row.revenue,
           roi: row.roi,
-          uniqueKey: {
-            marketplace: 'tiktok',
-            adDate,
-            campaignType,
-            campaignName,
-            campaignId: campaignId || 'NULL',
-            videoId: videoId || 'NULL',
-          },
+          hash: sourceRowHash.substring(0, 8),
           existing: existing ? `Found (id=${existing.id})` : 'Not found (will INSERT)',
         });
       }
@@ -1210,6 +1243,7 @@ export async function upsertAdRows(
             orders: row.orders,
             revenue: row.revenue,
             roi: row.roi,
+            source_row_hash: sourceRowHash,
             import_batch_id: batchId,
             updated_at: new Date().toISOString(),
           })
@@ -1240,6 +1274,7 @@ export async function upsertAdRows(
             orders: row.orders,
             revenue: row.revenue,
             roi: row.roi,
+            source_row_hash: sourceRowHash,
             source: 'imported',
             import_batch_id: batchId,
             created_by: userId,

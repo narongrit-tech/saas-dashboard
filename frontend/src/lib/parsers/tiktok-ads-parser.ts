@@ -26,6 +26,12 @@ export interface TikTokAdsParseResult {
   error?: string
   warnings?: string[]
   preview?: TikTokAdsPreview
+  debug?: {
+    selectedSheet: string | null
+    headers: string[]
+    mapping: ColumnMapping
+    missingFields: string[]
+  }
 }
 
 export interface TikTokAdsPreview {
@@ -72,9 +78,15 @@ const COLUMN_TOKENS = {
     tokens: [
       'date',
       'วันที่',
+      'วันเริ่มต้น',
+      'วันเริ่ม',
+      'เวลาเริ่มต้น',
+      'เวลาเริ่ม',
       '日期',
       'tarih', // Turkish
       'fecha', // Spanish
+      'start date',
+      'start time',
     ],
     priority: 10,
   },
@@ -82,11 +94,16 @@ const COLUMN_TOKENS = {
     tokens: [
       'campaign',
       'แคมเปญ',
+      'ชื่อแคมเปญ',
+      'ชื่อแคมเปญโฆษณา',
+      'ชื่อ live',
+      'ชื่อไลฟ์',
       'kampanya',
       'campaña',
       '活动',
       'ad name',
       'creative',
+      'campaign name',
     ],
     priority: 10,
   },
@@ -100,6 +117,7 @@ const COLUMN_TOKENS = {
       '费用',
       'expense',
       'ad spend',
+      'total cost',
     ],
     priority: 10,
   },
@@ -108,22 +126,36 @@ const COLUMN_TOKENS = {
       'gmv',
       'revenue',
       'รายได้',
+      'รายได้ขั้นต้น',
+      'มูลค่ายอดขาย',
+      'ยอดขาย',
+      'รายได้รวม',
       'doanh thu',
       '收入',
       'conversion value',
       'total value',
+      'total revenue',
+      'gross revenue',
     ],
     priority: 5,
   },
   orders: {
     tokens: [
       'order',
+      'orders',
       'คำสั่งซื้อ',
+      'ยอดการซื้อ',
+      'จำนวนคำสั่งซื้อ',
+      'ออเดอร์',
+      'ยอดออเดอร์',
       'đơn hàng',
       '订单',
       'conversion',
+      'conversions',
       'purchase',
+      'purchases',
       'sale',
+      'sales',
     ],
     priority: 5,
   },
@@ -331,7 +363,8 @@ function parseNumeric(value: unknown): number {
 
 export async function parseTikTokAdsFile(
   fileBuffer: ArrayBuffer,
-  fileName: string
+  fileName: string,
+  reportDate?: string // Optional report date (YYYY-MM-DD) - used if file has no date column
 ): Promise<TikTokAdsParseResult> {
   const warnings: string[] = []
 
@@ -372,7 +405,12 @@ export async function parseTikTokAdsFile(
 
     // 5. Validate required columns
     const missingRequired: string[] = []
-    if (!mapping.date) missingRequired.push('Date (วันที่)')
+    const hasDateColumn = !!mapping.date
+
+    // Date is optional if reportDate is provided
+    if (!hasDateColumn && !reportDate) {
+      missingRequired.push('Date (วันที่) - หรือระบุ Report Date')
+    }
     if (!mapping.campaign) missingRequired.push('Campaign (แคมเปญ)')
     if (!mapping.cost) missingRequired.push('Cost/Spend (ค่าใช้จ่าย)')
 
@@ -380,7 +418,18 @@ export async function parseTikTokAdsFile(
       return {
         success: false,
         error: `ไม่พบ columns ที่จำเป็น: ${missingRequired.join(', ')}\n\nColumns ที่มีในไฟล์: ${headers.join(', ')}`,
+        debug: {
+          selectedSheet: sheetName,
+          headers,
+          mapping,
+          missingFields: missingRequired,
+        },
       }
+    }
+
+    // Warn if no date column but reportDate provided
+    if (!hasDateColumn && reportDate) {
+      warnings.push(`⚠️ ไฟล์ไม่มี Date column - จะใช้ Report Date (${reportDate}) สำหรับทุก row`)
     }
 
     // 6. Check optional columns and warn
@@ -427,15 +476,24 @@ export async function parseTikTokAdsFile(
     const seenDates = new Set<string>()
 
     for (const row of rows) {
-      // Parse date
-      const dateValue = row[mapping.date!]
-      const adDate = parseDate(dateValue)
+      // Parse date - use reportDate if no date column in file
+      let dateFormatted: string
+      if (hasDateColumn && mapping.date) {
+        const dateValue = row[mapping.date]
+        const adDate = parseDate(dateValue)
 
-      if (!adDate || !isValid(adDate)) {
-        continue // Skip invalid dates
+        if (!adDate || !isValid(adDate)) {
+          continue // Skip invalid dates
+        }
+
+        dateFormatted = format(toZonedTime(adDate, 'Asia/Bangkok'), 'yyyy-MM-dd')
+      } else if (reportDate) {
+        // Use provided reportDate for all rows
+        dateFormatted = reportDate
+      } else {
+        continue // No date available, skip
       }
 
-      const dateFormatted = format(toZonedTime(adDate, 'Asia/Bangkok'), 'yyyy-MM-dd')
       seenDates.add(dateFormatted)
 
       // Parse campaign name

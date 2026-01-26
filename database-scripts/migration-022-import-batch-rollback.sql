@@ -49,18 +49,22 @@ BEGIN
   END IF;
 
   -- Step 2: Delete wallet ledger entries
-  DELETE FROM wallet_ledger
-  WHERE import_batch_id = p_batch_id
-  AND created_by = auth.uid();
-
-  GET DIAGNOSTICS v_wallet_deleted = ROW_COUNT;
+  WITH deleted_wallet AS (
+    DELETE FROM wallet_ledger
+    WHERE import_batch_id = p_batch_id
+    AND created_by = auth.uid()
+    RETURNING 1
+  )
+  SELECT COUNT(*) INTO v_wallet_deleted FROM deleted_wallet;
 
   -- Step 3: Delete ad performance entries
-  DELETE FROM ad_daily_performance
-  WHERE import_batch_id = p_batch_id
-  AND created_by = auth.uid();
-
-  GET DIAGNOSTICS v_ads_deleted = ROW_COUNT;
+  WITH deleted_ads AS (
+    DELETE FROM ad_daily_performance
+    WHERE import_batch_id = p_batch_id
+    AND created_by = auth.uid()
+    RETURNING 1
+  )
+  SELECT COUNT(*) INTO v_ads_deleted FROM deleted_ads;
 
   -- Step 4: Update batch status
   UPDATE import_batches
@@ -120,18 +124,22 @@ BEGIN
   END IF;
 
   -- Step 2: Delete wallet ledger entries
-  DELETE FROM wallet_ledger
-  WHERE import_batch_id = p_batch_id
-  AND created_by = p_user_id;
-
-  GET DIAGNOSTICS v_wallet_deleted = ROW_COUNT;
+  WITH deleted_wallet AS (
+    DELETE FROM wallet_ledger
+    WHERE import_batch_id = p_batch_id
+    AND created_by = p_user_id
+    RETURNING 1
+  )
+  SELECT COUNT(*) INTO v_wallet_deleted FROM deleted_wallet;
 
   -- Step 3: Delete ad performance entries
-  DELETE FROM ad_daily_performance
-  WHERE import_batch_id = p_batch_id
-  AND created_by = p_user_id;
-
-  GET DIAGNOSTICS v_ads_deleted = ROW_COUNT;
+  WITH deleted_ads AS (
+    DELETE FROM ad_daily_performance
+    WHERE import_batch_id = p_batch_id
+    AND created_by = p_user_id
+    RETURNING 1
+  )
+  SELECT COUNT(*) INTO v_ads_deleted FROM deleted_ads;
 
   -- Step 4: Update batch status
   UPDATE import_batches
@@ -191,18 +199,22 @@ BEGIN
   END IF;
 
   -- Step 2: Delete wallet ledger entries (cascading)
-  DELETE FROM wallet_ledger
-  WHERE import_batch_id = p_batch_id
-  AND created_by = p_user_id;
-
-  GET DIAGNOSTICS v_wallet_deleted = ROW_COUNT;
+  WITH deleted_wallet AS (
+    DELETE FROM wallet_ledger
+    WHERE import_batch_id = p_batch_id
+    AND created_by = p_user_id
+    RETURNING 1
+  )
+  SELECT COUNT(*) INTO v_wallet_deleted FROM deleted_wallet;
 
   -- Step 3: Delete ad performance entries (cascading)
-  DELETE FROM ad_daily_performance
-  WHERE import_batch_id = p_batch_id
-  AND created_by = p_user_id;
-
-  GET DIAGNOSTICS v_ads_deleted = ROW_COUNT;
+  WITH deleted_ads AS (
+    DELETE FROM ad_daily_performance
+    WHERE import_batch_id = p_batch_id
+    AND created_by = p_user_id
+    RETURNING 1
+  )
+  SELECT COUNT(*) INTO v_ads_deleted FROM deleted_ads;
 
   -- Step 4: Hard delete batch record
   DELETE FROM import_batches

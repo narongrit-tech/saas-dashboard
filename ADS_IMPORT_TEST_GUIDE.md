@@ -329,3 +329,606 @@ Sheet3: Settings (meta)
 - Create GitHub Issue
 - Tag: `bug`, `ads-import`, `parser`
 - แนบ: ไฟล์ทดสอบ (ลบข้อมูลส่วนตัวก่อน), screenshot error
+
+---
+---
+
+# PERFORMANCE FIX: Skip All-Zero Rows (2026-01-26)
+
+## เป้าหมายของ Fix นี้
+
+แก้ปัญหา Confirm ช้า (freeze UI) เมื่อ import ไฟล์ขนาดใหญ่ (100k+ rows) ที่มีแถว all-zero เยอะ
+
+**Changes:**
+1. Filter all-zero rows ก่อน insert (spend=0 AND orders=0 AND revenue=0)
+2. Batch insert (<=1000 rows/batch) to avoid timeout
+3. Preview แสดง counts ที่แม่นยำ (Total/Kept/Skipped)
+4. UI Toggle สำหรับ skip all-zero (default: ON)
+5. Business rules ไม่เปลี่ยน (ads spend, dedup, date logic ยังเหมือนเดิม)
+
+---
+
+## Test Scenarios - Performance Fix
+
+### Test 1: Basic Filter (skipZeroRows=ON)
+
+**Objective:** Verify all-zero rows are filtered correctly
+
+**Steps:**
+1. Upload file with mixed data (some zero rows, some non-zero)
+2. Verify checkbox "ข้ามแถวที่เป็น 0 ทั้งหมด" is **checked** (default)
+3. Click "ดู Preview"
+4. **Expected Preview:**
+   - แถวทั้งหมดในไฟล์ = 100 (example)
+   - แถวที่จะนำเข้า = 60 (example, non-zero rows)
+   - แถวที่ข้าม (all-zero) = 40
+   - Totals (Spend/Orders/Revenue) calculated from 60 rows ONLY
+   - Blue info box: "✓ กรองแถว all-zero แล้ว..."
+5. Click "ยืนยันนำเข้า"
+6. **Expected Result:**
+   - Import completes successfully
+   - Success message: "นำเข้าสำเร็จ 60 แถว"
+7. Verify DB:
+   ```sql
+   SELECT COUNT(*) FROM ad_daily_performance WHERE import_batch_id = $batchId;
+   -- Expected: 60 (not 100)
+   ```
+
+**Pass Criteria:**
+- ✅ Preview counts correct (Total/Kept/Skipped)
+- ✅ DB row count = Kept rows (not Total rows)
+- ✅ All-zero rows NOT in DB
+
+---
+
+### Test 2: Toggle OFF (skipZeroRows=OFF)
+
+**Objective:** Verify filter can be disabled
+
+**Steps:**
+1. Upload same file from Test 1
+2. **Uncheck** checkbox "ข้ามแถวที่เป็น 0 ทั้งหมด"
+3. Click "ดู Preview"
+4. **Expected Preview:**
+   - แถวทั้งหมดในไฟล์ = 100
+   - แถวที่จะนำเข้า = 100
+   - แถวที่ข้าม (all-zero) = 0
+   - Totals include ALL rows (even zeros)
+   - No blue info box (filter not applied)
+5. Click "ยืนยันนำเข้า"
+6. **Expected Result:**
+   - Import completes successfully
+   - Success message: "นำเข้าสำเร็จ 100 แถว"
+7. Verify DB:
+   ```sql
+   SELECT COUNT(*) FROM ad_daily_performance WHERE import_batch_id = $batchId;
+   -- Expected: 100 (all rows imported)
+   ```
+
+**Pass Criteria:**
+- ✅ Toggle works (filter disabled)
+- ✅ All rows imported (including all-zero)
+- ✅ DB row count = Total rows
+
+---
+
+### Test 3: Large File Performance
+
+**Objective:** Verify batch insert works (no timeout/freeze)
+
+**Steps:**
+1. Upload large file (100k+ rows, majority all-zero)
+2. skipZeroRows = ON (default)
+3. Click "ดู Preview"
+4. **Expected Preview:**
+   - แถวทั้งหมดในไฟล์ = 100000
+   - แถวที่จะนำเข้า = ~5000 (example, depends on data)
+   - แถวที่ข้าม (all-zero) = ~95000
+   - Preview loads fast (< 5s)
+5. Click "ยืนยันนำเข้า"
+6. **Expected Result:**
+   - Import completes in < 30s (was several minutes before)
+   - No UI freeze/hang
+   - Success message: "นำเข้าสำเร็จ 5000 แถว"
+7. Check server logs:
+   ```
+   [CONFIRM] Parsed 100000 rows (kept: 5000, skipped: 95000)
+   [CONFIRM] Step 5: Inserting ad performance rows... { rowCount: 5000 }
+   [CONFIRM] Step 7: Import completed successfully
+   ```
+
+**Pass Criteria:**
+- ✅ Import time < 30s (significant improvement)
+- ✅ No UI freeze
+- ✅ Logs show correct counts
+
+---
+
+### Test 4: Preview Totals = DB Totals
+
+**Objective:** Verify accuracy (preview matches DB)
+
+**Steps:**
+1. Upload file, skipZeroRows = ON
+2. Preview shows:
+   - Total Spend = 50000.00
+   - Total Revenue = 150000.00
+   - Total Orders = 1000
+3. Click "ยืนยันนำเข้า"
+4. After import, query DB:
+   ```sql
+   SELECT
+     SUM(spend) as total_spend,
+     SUM(revenue) as total_revenue,
+     SUM(orders) as total_orders
+   FROM ad_daily_performance
+   WHERE import_batch_id = $batchId;
+   ```
+5. **Expected:**
+   - total_spend = 50000.00
+   - total_revenue = 150000.00
+   - total_orders = 1000
+
+**Pass Criteria:**
+- ✅ All 3 totals match exactly (< 0.01 difference)
+- ✅ No rounding errors
+
+---
+
+### Test 5: Wallet Spend = Preview Spend
+
+**Objective:** Verify wallet entries match preview
+
+**Steps:**
+1. Upload file, skipZeroRows = ON
+2. Preview shows: Total Spend = 50000.00
+3. Click "ยืนยันนำเข้า"
+4. After import, query wallet:
+   ```sql
+   SELECT SUM(amount)
+   FROM wallet_ledger
+   WHERE import_batch_id = $batchId
+   AND entry_type = 'SPEND';
+   ```
+5. **Expected:** Result = 50000.00
+
+**Pass Criteria:**
+- ✅ Wallet spend matches preview exactly
+- ✅ Daily aggregation correct (one entry per day)
+
+---
+
+### Test 6: Deduplication Still Works
+
+**Objective:** Verify file hash check still blocks duplicates
+
+**Steps:**
+1. Import file A, skipZeroRows = ON → **Success**
+2. Import file A again, skipZeroRows = ON → **DUPLICATE_IMPORT error**
+3. Import file A again, skipZeroRows = OFF → **DUPLICATE_IMPORT error**
+
+**Expected:**
+- 2nd import: Error "นำเข้าซ้ำ" with original timestamp
+- 3rd import: Same error (skipZeroRows state doesn't affect dedup)
+
+**Pass Criteria:**
+- ✅ 2nd import blocked
+- ✅ 3rd import blocked (toggle state irrelevant for dedup)
+- ✅ Error message clear
+
+---
+
+### Test 7: Mixed Data Edge Cases
+
+**Objective:** Verify filter logic edge cases
+
+**Test Data:**
+| Row | Spend | Orders | Revenue | Expected |
+|-----|-------|--------|---------|----------|
+| A   | 0     | 10     | 500     | **KEEP** (has conversion) |
+| B   | 100   | 0      | 0       | **KEEP** (has spend) |
+| C   | 0     | 0      | 0       | **SKIP** (all-zero) |
+| D   | null  | null   | null    | **SKIP** (treat null as 0) |
+
+**Steps:**
+1. Create file with these 4 rows
+2. Upload, skipZeroRows = ON
+3. Click "ดู Preview"
+4. **Expected:**
+   - แถวทั้งหมดในไฟล์ = 4
+   - แถวที่จะนำเข้า = 2 (A + B)
+   - แถวที่ข้าม (all-zero) = 2 (C + D)
+
+**Pass Criteria:**
+- ✅ Only rows A and B imported
+- ✅ Rows C and D skipped
+
+---
+
+## Success Criteria Summary - Performance Fix
+
+### Performance
+- ✅ Import time < 30s for realistic file (5k kept rows)
+- ✅ No UI freeze/hang during import
+- ✅ Preview loads fast (< 5s)
+
+### Accuracy
+- ✅ Preview totals = DB totals (100% match)
+- ✅ Wallet spend = Preview totalSpend (100% match)
+- ✅ Filter logic correct (all edge cases pass)
+
+### UX
+- ✅ Toggle visible and functional
+- ✅ Counts displayed clearly (Total/Kept/Skipped)
+- ✅ Blue info box when filter applied
+- ✅ Error messages clear and actionable
+
+### Business Rules
+- ✅ Ads spend = sum of kept rows
+- ✅ Dedup still works (file_hash check)
+- ✅ Wallet entries correct (daily aggregated)
+- ✅ Date logic unchanged (reportDate fallback)
+
+---
+
+## Known Issues - Performance Fix
+
+1. **Batch Size:** Fixed at 1000 rows/batch (not configurable via UI)
+2. **Rollback:** Partial data kept on failure (manual cleanup required)
+3. **Progress Bar:** No chunk-by-chunk progress indicator (shows "กำลังนำเข้า..." only)
+4. **Memory:** Very large files (1M+ rows) may still cause memory issues (even after filtering)
+
+---
+---
+
+# Cleanup & Rollback
+
+## เป้าหมาย
+
+ระบบ DELETE RLS policies มีอยู่แล้วใน database สำหรับ 3 ตาราง:
+- `ad_daily_performance` (ads data)
+- `wallet_ledger` (wallet entries)
+- `import_batches` (import tracking)
+
+คู่มือนี้แนะนำวิธีการ **cleanup ข้อมูลที่ import ผิดพลาดหรือต้องการทดสอบใหม่**
+
+---
+
+## ⚠️ สำคัญ: RLS Policies มีอยู่แล้ว
+
+**DELETE policies ถูกสร้างตั้งแต่:**
+- `migration-003-ad-daily-performance.sql` → line 111-115
+- `migration-005-wallets.sql` → line 174-178
+- `migration-001-import-batches.sql` → line 98-103
+
+**ดังนั้น:**
+- ✅ ไม่ต้องรัน migration ใหม่
+- ✅ DELETE operations ใช้งานได้ทันที (สำหรับ authenticated users)
+- ✅ RLS enforcement: ลบได้เฉพาะ rows ของตัวเอง (`created_by = auth.uid()`)
+
+---
+
+## วิธีที่ 1: Safe Rollback by import_batch_id (แนะนำ)
+
+ใช้ `import_batch_id` เพื่อลบข้อมูลจาก import ครั้งใดครั้งหนึ่งอย่างปลอดภัย
+
+### ขั้นตอน:
+
+**1. หา batch_id จาก import ล่าสุด**
+
+```sql
+-- In Supabase SQL Editor (authenticated as user)
+SELECT
+  id as batch_id,
+  report_type,
+  row_count,
+  file_name,
+  metadata->>'reportDate' as report_date,
+  created_at
+FROM import_batches
+WHERE created_by = auth.uid()
+  AND report_type LIKE 'tiktok_ads%'
+ORDER BY created_at DESC
+LIMIT 5;
+```
+
+**Expected:**
+- เห็น list import ล่าสุด 5 ครั้ง
+- Copy `batch_id` (UUID) ของ import ที่ต้องการลบ
+
+**2. ตรวจสอบว่ามีข้อมูลอะไรบ้างก่อนลบ (DRY RUN)**
+
+```sql
+-- Replace <batch_id> with actual UUID
+SELECT 'ad_daily_performance' as table_name, COUNT(*) as row_count
+FROM ad_daily_performance
+WHERE import_batch_id = '<batch_id>' AND created_by = auth.uid()
+UNION ALL
+SELECT 'wallet_ledger', COUNT(*)
+FROM wallet_ledger
+WHERE import_batch_id = '<batch_id>' AND created_by = auth.uid()
+UNION ALL
+SELECT 'import_batches', COUNT(*)
+FROM import_batches
+WHERE id = '<batch_id>' AND created_by = auth.uid();
+```
+
+**Expected:**
+- แสดงจำนวน rows ที่จะถูกลบในแต่ละตาราง
+- ตัวอย่าง:
+  ```
+  ad_daily_performance | 150
+  wallet_ledger        | 10
+  import_batches       | 1
+  ```
+
+**3. Execute Rollback (ลบข้อมูล - 3 คำสั่ง)**
+
+```sql
+-- ⚠️ CAUTION: This will permanently delete data!
+-- Replace <batch_id> with actual UUID
+
+-- Step 1: Delete wallet_ledger entries
+DELETE FROM wallet_ledger
+WHERE import_batch_id = '<batch_id>'
+  AND created_by = auth.uid();
+
+-- Step 2: Delete ad_daily_performance rows
+DELETE FROM ad_daily_performance
+WHERE import_batch_id = '<batch_id>'
+  AND created_by = auth.uid();
+
+-- Step 3: Delete import_batch
+DELETE FROM import_batches
+WHERE id = '<batch_id>'
+  AND created_by = auth.uid();
+```
+
+**Expected:**
+- แต่ละคำสั่ง return row count > 0
+- ไม่มี silent failures (ถ้า return 0 → มี RLS issue)
+
+**4. Verify Cleanup (ตรวจสอบว่าลบหมดแล้ว)**
+
+```sql
+-- Replace <batch_id> with actual UUID
+SELECT 'ad_daily_performance' as table_name, COUNT(*) as remaining_rows
+FROM ad_daily_performance
+WHERE import_batch_id = '<batch_id>'
+UNION ALL
+SELECT 'wallet_ledger', COUNT(*)
+FROM wallet_ledger
+WHERE import_batch_id = '<batch_id>'
+UNION ALL
+SELECT 'import_batches', COUNT(*)
+FROM import_batches
+WHERE id = '<batch_id>';
+```
+
+**Expected:**
+- ทั้ง 3 ตารางต้อง return `0` rows
+- ถ้าไม่เป็น 0 → มี RLS enforcement issues หรือ constraint issues
+
+**5. Re-import (ถ้าต้องการ)**
+
+หลังจาก cleanup เรียบร้อย:
+1. กลับไปหน้า `/wallets` → ADS Wallet → Import
+2. Upload ไฟล์เดิมอีกครั้ง
+3. Verify totals ใน preview ตรงกับที่คาดหวัง
+4. Confirm import
+5. ตรวจสอบที่หน้า `/ads` ว่าข้อมูลถูกต้อง
+
+---
+
+## วิธีที่ 2: Cleanup by ad_date (ความเสี่ยงสูงกว่า)
+
+⚠️ **WARNING:** วิธีนี้จะลบ ALL imports สำหรับวันที่นั้น (ไม่ใช่แค่ 1 batch)
+
+ใช้เมื่อ:
+- ต้องการลบข้อมูลทั้งหมดสำหรับวันที่นั้น
+- Import ผิดพลาดหลายครั้งในวันเดียวกัน
+
+### ขั้นตอน:
+
+**1. ตรวจสอบข้อมูลก่อนลบ**
+
+```sql
+-- Replace '2026-01-16' with actual date
+SELECT COUNT(*) as ads_count
+FROM ad_daily_performance
+WHERE ad_date = '2026-01-16'
+  AND created_by = auth.uid();
+
+SELECT COUNT(*) as wallet_count
+FROM wallet_ledger
+WHERE date = '2026-01-16'
+  AND source = 'IMPORTED'
+  AND created_by = auth.uid();
+```
+
+**Expected:**
+- แสดงจำนวน rows ที่จะถูกลบ
+- **คำเตือน:** อาจมีข้อมูลจาก multiple imports ในวันเดียวกัน
+
+**2. Execute Cleanup (ถ้ายืนยัน)**
+
+```sql
+-- ⚠️ CAUTION: Deletes ALL imports for this date!
+-- Replace '2026-01-16' with actual date
+
+-- Delete ad_daily_performance
+DELETE FROM ad_daily_performance
+WHERE ad_date = '2026-01-16'
+  AND created_by = auth.uid();
+
+-- Delete wallet_ledger
+DELETE FROM wallet_ledger
+WHERE date = '2026-01-16'
+  AND source = 'IMPORTED'
+  AND created_by = auth.uid();
+
+-- Note: import_batches remain (they may reference multiple dates)
+```
+
+**3. Verify Cleanup**
+
+```sql
+-- Replace '2026-01-16' with actual date
+SELECT COUNT(*) as remaining_rows
+FROM ad_daily_performance
+WHERE ad_date = '2026-01-16';
+```
+
+**Expected:** 0 rows
+
+---
+
+## วิธีที่ 3: Delete Specific Rows (Manual)
+
+ใช้เมื่อต้องการลบเฉพาะ rows บางอัน (edge cases)
+
+### ตัวอย่าง: ลบ campaign เฉพาะ
+
+```sql
+-- Delete specific campaign
+DELETE FROM ad_daily_performance
+WHERE campaign_name = 'Test Campaign'
+  AND created_by = auth.uid();
+```
+
+### ตัวอย่าง: ลบ date range
+
+```sql
+-- Delete date range (e.g., Jan 16-20)
+DELETE FROM ad_daily_performance
+WHERE ad_date BETWEEN '2026-01-16' AND '2026-01-20'
+  AND created_by = auth.uid();
+```
+
+---
+
+## Troubleshooting
+
+### ปัญหา: DELETE returns 0 rows (silent failure)
+
+**Causes:**
+1. **RLS blocking delete** (most common):
+   - Verify policies exist: `SELECT * FROM pg_policies WHERE tablename = 'ad_daily_performance' AND cmd = 'DELETE';`
+   - Check user authenticated: `SELECT auth.uid();` (should return UUID, not null)
+
+2. **No rows match WHERE clause**:
+   - Verify rows exist: `SELECT COUNT(*) FROM ad_daily_performance WHERE import_batch_id = '<batch_id>';`
+   - Check `created_by`: `SELECT created_by FROM ad_daily_performance WHERE import_batch_id = '<batch_id>' LIMIT 1;`
+
+3. **Foreign key constraints blocking delete**:
+   - Check constraints: `\d+ ad_daily_performance` (in psql)
+   - Note: `wallet_ledger` references `import_batches` → must delete `wallet_ledger` first
+
+**Fix:**
+- Run verification script: `database-scripts/verify-ads-delete-policy.sql`
+- Check section 5 (RLS enforcement test)
+
+### ปัญหา: "update or delete on table violates foreign key constraint"
+
+**Cause:**
+- Trying to delete `import_batches` before deleting `ad_daily_performance` and `wallet_ledger`
+
+**Fix:**
+- DELETE in correct order (see "Safe Rollback" above):
+  1. `wallet_ledger` (child)
+  2. `ad_daily_performance` (child)
+  3. `import_batches` (parent)
+
+### ปัญหา: ลบข้อมูลผิด batch
+
+**Prevention:**
+- Always verify `batch_id` ก่อนลบ:
+  ```sql
+  SELECT file_name, report_type, created_at
+  FROM import_batches
+  WHERE id = '<batch_id>';
+  ```
+- Use DRY RUN (SELECT COUNT) ก่อน DELETE เสมอ
+
+**Recovery:**
+- ถ้าลบผิด → ต้อง re-import ไฟล์เดิม (ไม่มี undo)
+
+---
+
+## Testing DELETE Policies
+
+ใช้ verification script เพื่อทดสอบว่า DELETE policies ทำงานถูกต้อง:
+
+**File:** `database-scripts/verify-ads-delete-policy.sql`
+
+**Run in Supabase SQL Editor:**
+1. Section 1: Check policies exist (expect 3 rows)
+2. Section 2a: Find test batch_id (copy UUID)
+3. Section 2b-2d: Test visibility (SELECT should see rows)
+4. Section 3: Safe rollback template (uncomment and run)
+5. Section 4: Verify cleanup (expect 0 rows)
+6. Section 5: Security test (cross-user deletes blocked)
+
+**Expected Results:**
+- ✅ All policies exist
+- ✅ SELECT returns rows (no RLS block for SELECT)
+- ✅ DELETE returns row count > 0 (not silent failure)
+- ✅ Cross-user DELETE blocked (RLS enforcement)
+
+---
+
+## Best Practices
+
+1. **Always use import_batch_id** (safest, most precise)
+2. **DRY RUN first** (SELECT COUNT before DELETE)
+3. **Verify cleanup** (SELECT COUNT after DELETE → expect 0)
+4. **Test with small batch** (1-2 rows) before large cleanup
+5. **Document cleanup** (note which batch_id and why)
+6. **Backup before bulk delete** (if production data)
+
+---
+
+## Scripts Reference
+
+### Quick Cleanup Script Template
+
+```sql
+-- ============================================
+-- Quick Rollback Template
+-- Replace <batch_id> with actual UUID
+-- ============================================
+
+-- Step 1: Verify (DRY RUN)
+SELECT 'ad_daily_performance' as table_name, COUNT(*) as row_count
+FROM ad_daily_performance WHERE import_batch_id = '<batch_id>' AND created_by = auth.uid()
+UNION ALL
+SELECT 'wallet_ledger', COUNT(*) FROM wallet_ledger WHERE import_batch_id = '<batch_id>' AND created_by = auth.uid()
+UNION ALL
+SELECT 'import_batches', COUNT(*) FROM import_batches WHERE id = '<batch_id>' AND created_by = auth.uid();
+
+-- Step 2: Execute (uncomment after verification)
+/*
+DELETE FROM wallet_ledger WHERE import_batch_id = '<batch_id>' AND created_by = auth.uid();
+DELETE FROM ad_daily_performance WHERE import_batch_id = '<batch_id>' AND created_by = auth.uid();
+DELETE FROM import_batches WHERE id = '<batch_id>' AND created_by = auth.uid();
+*/
+
+-- Step 3: Verify Cleanup
+SELECT 'ad_daily_performance' as table_name, COUNT(*) as remaining_rows
+FROM ad_daily_performance WHERE import_batch_id = '<batch_id>'
+UNION ALL
+SELECT 'wallet_ledger', COUNT(*) FROM wallet_ledger WHERE import_batch_id = '<batch_id>'
+UNION ALL
+SELECT 'import_batches', COUNT(*) FROM import_batches WHERE id = '<batch_id>';
+```
+
+---
+
+## Success Criteria
+
+- ✅ DELETE policies exist for 3 tables
+- ✅ DELETE operations return row count (not 0)
+- ✅ Rollback by import_batch_id works
+- ✅ Cleanup verification passes (0 rows remaining)
+- ✅ RLS enforcement tested (cross-user deletes blocked)
+- ✅ Re-import after cleanup works

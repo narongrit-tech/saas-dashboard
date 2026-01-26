@@ -6,11 +6,12 @@
  * Purpose: Import performance ads (Product/Live) with sales metrics
  * - File upload with preview
  * - Campaign type selector (Product/Live)
+ * - Report date picker (required)
  * - Daily breakdown display
  * - Creates ad_daily_performance + wallet_ledger entries
  */
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -23,7 +24,14 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Upload, FileSpreadsheet, AlertCircle, CheckCircle, TrendingUp, Wand2 } from 'lucide-react'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Upload, FileSpreadsheet, AlertCircle, CheckCircle, TrendingUp, Wand2, ChevronDown, Calendar as CalendarIcon } from 'lucide-react'
+import { Calendar } from '@/components/ui/calendar'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Badge } from '@/components/ui/badge'
+import { format } from 'date-fns'
+import { getBangkokNow } from '@/lib/bangkok-time'
 import {
   parsePerformanceAdsFile,
   importPerformanceAdsToSystem,
@@ -40,7 +48,7 @@ interface PerformanceAdsImportDialogProps {
 
 interface PreviewData {
   fileName: string
-  campaignType: 'product' | 'live'
+  campaignType?: 'product' | 'live' // Optional to match PerformanceAdsPreview (will be set by user selection)
   reportType?: 'product' | 'live' | 'unknown'
   reportDateRange: string
   totalSpend: number
@@ -69,6 +77,7 @@ export function PerformanceAdsImportDialog({
   onImportSuccess,
 }: PerformanceAdsImportDialogProps) {
   const [campaignType, setCampaignType] = useState<'product' | 'live'>('product')
+  const [reportDate, setReportDate] = useState<Date | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [fileBuffer, setFileBuffer] = useState<ArrayBuffer | null>(null)
   const [preview, setPreview] = useState<PreviewData | null>(null)
@@ -76,10 +85,77 @@ export function PerformanceAdsImportDialog({
   const [error, setError] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
   const [success, setSuccess] = useState<string | null>(null)
+  const [autoDetected, setAutoDetected] = useState({ date: false, type: false })
+
+  // Debug info state
+  const [debugInfo, setDebugInfo] = useState<{
+    selectedSheet: string | null
+    headers: string[]
+    mapping: {
+      date: string | null
+      campaign: string | null
+      cost: string | null
+      gmv: string | null
+      orders: string | null
+      roas: string | null
+      currency: string | null
+    }
+    missingFields: string[]
+  } | null>(null)
 
   // Manual mapping wizard state
   const [wizardOpen, setWizardOpen] = useState(false)
   const [excelHeaders, setExcelHeaders] = useState<string[]>([])
+
+  // Auto-detect report date and ads type from filename
+  useEffect(() => {
+    if (!selectedFile) return
+
+    const filename = selectedFile.name.toLowerCase()
+
+    // Reset auto-detection state
+    setAutoDetected({ date: false, type: false })
+
+    // Try to extract date (e.g., "ads-2026-01-20.xlsx" or "20260120-ads.xlsx")
+    const datePatterns = [
+      /(\d{4})-(\d{2})-(\d{2})/, // YYYY-MM-DD
+      /(\d{4})(\d{2})(\d{2})/, // YYYYMMDD
+      /(\d{2})-(\d{2})-(\d{4})/, // DD-MM-YYYY
+    ]
+
+    for (const pattern of datePatterns) {
+      const match = filename.match(pattern)
+      if (match) {
+        let year, month, day
+        if (pattern.toString().includes('(\\d{4})-(\\d{2})-(\\d{2})')) {
+          // YYYY-MM-DD
+          ;[, year, month, day] = match
+        } else if (pattern.toString().includes('(\\d{4})(\\d{2})(\\d{2})')) {
+          // YYYYMMDD
+          ;[, year, month, day] = match
+        } else {
+          // DD-MM-YYYY
+          ;[, day, month, year] = match
+        }
+
+        const detectedDate = new Date(`${year}-${month}-${day}`)
+        if (!isNaN(detectedDate.getTime())) {
+          setReportDate(detectedDate)
+          setAutoDetected(prev => ({ ...prev, date: true }))
+          break
+        }
+      }
+    }
+
+    // Try to detect type
+    if (filename.includes('live') || filename.includes('livestream')) {
+      setCampaignType('live')
+      setAutoDetected(prev => ({ ...prev, type: true }))
+    } else if (filename.includes('product') || filename.includes('creative')) {
+      setCampaignType('product')
+      setAutoDetected(prev => ({ ...prev, type: true }))
+    }
+  }, [selectedFile])
 
   const handleCampaignTypeChange = (type: string) => {
     setCampaignType(type as 'product' | 'live')
@@ -88,6 +164,8 @@ export function PerformanceAdsImportDialog({
     setFileBuffer(null)
     setPreview(null)
     setError(null)
+    setReportDate(null)
+    setAutoDetected({ date: false, type: false })
   }
 
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -100,20 +178,54 @@ export function PerformanceAdsImportDialog({
     setWarnings([])
     setSuccess(null)
     setExcelHeaders([])
-    setLoading(true)
 
+    // Don't auto-preview yet - wait for user to fill reportDate and click Preview
+    // Just read the file buffer and let auto-detection work
     try {
-      // Read file as ArrayBuffer
       const buffer = await file.arrayBuffer()
       setFileBuffer(buffer)
+    } catch (err) {
+      console.error('Error reading file:', err)
+      setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการอ่านไฟล์')
+      setSelectedFile(null)
+      setFileBuffer(null)
+    }
+  }
 
-      // Try to parse and validate
-      const result = await parsePerformanceAdsFile(buffer, file.name, campaignType)
+  const handlePreview = async () => {
+    if (!fileBuffer || !selectedFile) {
+      setError('กรุณาเลือกไฟล์')
+      return
+    }
+
+    if (!reportDate) {
+      setError('กรุณาเลือก Report Date')
+      return
+    }
+
+    if (!campaignType) {
+      setError('กรุณาเลือก Ads Type')
+      return
+    }
+
+    setLoading(true)
+    setError(null)
+    setWarnings([])
+    setSuccess(null)
+
+    try {
+      // Call parsePerformanceAdsFile with reportDate
+      const result = await parsePerformanceAdsFile(
+        fileBuffer,
+        selectedFile.name,
+        campaignType,
+        format(reportDate, 'yyyy-MM-dd')
+      )
 
       if (!result.success) {
         // Extract Excel headers for manual mapping fallback
         try {
-          const workbook = XLSX.read(buffer, { type: 'array' })
+          const workbook = XLSX.read(fileBuffer, { type: 'array' })
           const sheetName = workbook.SheetNames[0]
           if (sheetName) {
             const worksheet = workbook.Sheets[sheetName]
@@ -130,8 +242,12 @@ export function PerformanceAdsImportDialog({
           console.error('Error extracting headers:', parseErr)
         }
 
+        // Store debug info if available
+        if (result.debug) {
+          setDebugInfo(result.debug)
+        }
+
         setError(result.error || 'ไม่สามารถอ่านไฟล์ได้')
-        // Keep file and buffer for manual mapping
         return
       }
 
@@ -140,18 +256,16 @@ export function PerformanceAdsImportDialog({
         setWarnings(result.warnings || [])
       }
     } catch (err) {
-      console.error('Error reading file:', err)
+      console.error('Error parsing file:', err)
       setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการอ่านไฟล์')
-      setSelectedFile(null)
-      setFileBuffer(null)
     } finally {
       setLoading(false)
     }
   }
 
   const handleImport = async () => {
-    if (!fileBuffer || !selectedFile || !preview) {
-      setError('กรุณาเลือกไฟล์ก่อน')
+    if (!fileBuffer || !selectedFile || !preview || !reportDate) {
+      setError('กรุณาเลือกไฟล์และ Report Date')
       return
     }
 
@@ -165,7 +279,8 @@ export function PerformanceAdsImportDialog({
         fileBuffer,
         selectedFile.name,
         campaignType,
-        adsWalletId
+        adsWalletId,
+        format(reportDate, 'yyyy-MM-dd')
       )
 
       if (!result.success) {
@@ -206,7 +321,10 @@ export function PerformanceAdsImportDialog({
     setError(null)
     setWarnings([])
     setSuccess(null)
+    setDebugInfo(null)
     setCampaignType('product')
+    setReportDate(null)
+    setAutoDetected({ date: false, type: false })
     onOpenChange(false)
   }
 
@@ -246,6 +364,76 @@ export function PerformanceAdsImportDialog({
         </Tabs>
 
         <div className="space-y-4">
+          {/* Report Date */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium flex items-center gap-2">
+              Report Date *
+              {autoDetected.date && (
+                <Badge variant="secondary" className="text-xs">
+                  Auto-detected 🎯
+                </Badge>
+              )}
+            </label>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="w-full justify-start text-left font-normal"
+                  disabled={loading}
+                >
+                  <CalendarIcon className="mr-2 h-4 w-4" />
+                  {reportDate ? format(reportDate, 'dd MMM yyyy') : 'เลือกวันที่...'}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0" align="start">
+                <Calendar
+                  mode="single"
+                  selected={reportDate || undefined}
+                  onSelect={(date) => {
+                    setReportDate(date || null)
+                    setAutoDetected(prev => ({ ...prev, date: false }))
+                  }}
+                  disabled={(date) => date > getBangkokNow()}
+                  initialFocus
+                />
+              </PopoverContent>
+            </Popover>
+            <p className="text-xs text-muted-foreground">
+              วันที่ของ report (ต้องไม่อนาคต)
+            </p>
+          </div>
+
+          {/* Ads Type */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium flex items-center gap-2">
+              Ads Type *
+              {autoDetected.type && (
+                <Badge variant="secondary" className="text-xs">
+                  Auto-detected 🎯
+                </Badge>
+              )}
+            </label>
+            <Select
+              value={campaignType}
+              onValueChange={(value) => {
+                setCampaignType(value as 'product' | 'live')
+                setAutoDetected(prev => ({ ...prev, type: false }))
+              }}
+              disabled={loading}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="เลือกประเภทโฆษณา..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="product">Product (Creative)</SelectItem>
+                <SelectItem value="live">Live</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              ประเภทของโฆษณา (Product/Live)
+            </p>
+          </div>
+
           {/* File Upload */}
           <div className="space-y-2">
             <label htmlFor="perf-ads-file" className="text-sm font-medium">
@@ -274,6 +462,18 @@ export function PerformanceAdsImportDialog({
             </p>
           </div>
 
+          {/* Preview Button */}
+          {selectedFile && !preview && !loading && (
+            <Button
+              onClick={handlePreview}
+              disabled={!reportDate || !campaignType || loading}
+              className="w-full"
+            >
+              <FileSpreadsheet className="mr-2 h-4 w-4" />
+              Preview
+            </Button>
+          )}
+
           {/* Loading State */}
           {loading && !preview && (
             <Alert>
@@ -287,18 +487,84 @@ export function PerformanceAdsImportDialog({
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1">{error}</div>
-                  {excelHeaders.length > 0 && fileBuffer && selectedFile && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setWizardOpen(true)}
-                      className="shrink-0"
-                    >
-                      <Wand2 className="mr-2 h-4 w-4" />
-                      Try Manual Mapping
-                    </Button>
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1">{error}</div>
+                    {excelHeaders.length > 0 && fileBuffer && selectedFile && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setWizardOpen(true)}
+                        className="shrink-0"
+                      >
+                        <Wand2 className="mr-2 h-4 w-4" />
+                        Try Manual Mapping
+                      </Button>
+                    )}
+                  </div>
+
+                  {/* Debug Details Collapsible */}
+                  {debugInfo && (
+                    <Collapsible>
+                      <CollapsibleTrigger asChild>
+                        <Button variant="ghost" size="sm" className="w-full justify-start gap-2">
+                          <ChevronDown className="h-4 w-4" />
+                          🔍 Debug Details (คลิกเพื่อดูรายละเอียด)
+                        </Button>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="pt-2">
+                        <div className="rounded-md bg-slate-100 p-3 space-y-2 text-xs">
+                          {/* Selected Sheet */}
+                          <div>
+                            <span className="font-semibold">Sheet ที่เลือก:</span>{' '}
+                            {debugInfo.selectedSheet || 'N/A'}
+                          </div>
+
+                          {/* Headers Found */}
+                          <div>
+                            <span className="font-semibold">Headers ที่พบในไฟล์:</span>
+                            <div className="mt-1 p-2 bg-white rounded border text-[10px] max-h-24 overflow-y-auto">
+                              {debugInfo.headers.join(', ')}
+                            </div>
+                          </div>
+
+                          {/* Column Mapping Result */}
+                          <div>
+                            <span className="font-semibold">Mapping Result:</span>
+                            <div className="mt-1 space-y-1">
+                              <div className={debugInfo.mapping.date ? 'text-green-600' : 'text-red-600'}>
+                                • Date: {debugInfo.mapping.date || '❌ Not found'}
+                              </div>
+                              <div className={debugInfo.mapping.campaign ? 'text-green-600' : 'text-red-600'}>
+                                • Campaign: {debugInfo.mapping.campaign || '❌ Not found'}
+                              </div>
+                              <div className={debugInfo.mapping.cost ? 'text-green-600' : 'text-red-600'}>
+                                • Cost/Spend: {debugInfo.mapping.cost || '❌ Not found'}
+                              </div>
+                              <div className={debugInfo.mapping.gmv ? 'text-green-600' : 'text-yellow-600'}>
+                                • GMV: {debugInfo.mapping.gmv || '⚠️ Not found'}
+                              </div>
+                              <div className={debugInfo.mapping.orders ? 'text-green-600' : 'text-yellow-600'}>
+                                • Orders: {debugInfo.mapping.orders || '⚠️ Not found'}
+                              </div>
+                              <div className={debugInfo.mapping.roas ? 'text-green-600' : 'text-slate-500'}>
+                                • ROAS: {debugInfo.mapping.roas || 'ℹ️ Will calculate'}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Missing Required Fields */}
+                          {debugInfo.missingFields.length > 0 && (
+                            <div>
+                              <span className="font-semibold text-red-600">Missing Required:</span>
+                              <div className="mt-1 text-red-600">
+                                {debugInfo.missingFields.join(', ')}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </CollapsibleContent>
+                    </Collapsible>
                   )}
                 </div>
               </AlertDescription>
@@ -334,6 +600,23 @@ export function PerformanceAdsImportDialog({
                 <FileSpreadsheet className="h-4 w-4" />
                 Preview - กรุณาตรวจสอบข้อมูลก่อน Confirm
               </h3>
+
+              {/* Import Info Cards */}
+              <div className="grid grid-cols-2 gap-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                <div>
+                  <p className="text-xs text-blue-700 font-medium">Import Date</p>
+                  <p className="font-bold text-blue-900">
+                    {reportDate ? format(reportDate, 'dd MMM yyyy') : 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-blue-700 font-medium">Ads Type</p>
+                  <p className="font-bold text-blue-900">
+                    {campaignType === 'product' ? 'Product (Creative)' : 'Live'}
+                  </p>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div>
                   <p className="text-muted-foreground">ชื่อไฟล์:</p>
