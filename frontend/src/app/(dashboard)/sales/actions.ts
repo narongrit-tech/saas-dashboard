@@ -421,20 +421,18 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
     }
 
     // Apply date filters based on date basis (TikTok timestamps)
-    // FALLBACK: After migration-029, created_time should not be NULL for imported data
-    // But we handle edge cases client-side (see below)
+    // CRITICAL FIX (migration-030): Use COALESCE(created_time, order_date) logic
     if (dateBasis === 'order') {
-      // Filter by created_time at DB level (covers most data)
-      // Rows with NULL created_time will be handled client-side
+      // Fetch by order_date (broader) to include created_time=NULL rows
       if (filters.startDate) {
-        query = query.gte('created_time', filters.startDate)
+        query = query.gte('order_date', filters.startDate)
       }
       if (filters.endDate) {
         const { toZonedTime } = await import('date-fns-tz')
         const { endOfDay } = await import('date-fns')
         const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
         const endOfDayBangkok = endOfDay(bangkokDate)
-        query = query.lte('created_time', endOfDayBangkok.toISOString())
+        query = query.lte('order_date', endOfDayBangkok.toISOString())
       }
     } else {
       // For paid basis, filter out null paid_time
@@ -473,15 +471,15 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
       return { success: false, error: 'ไม่พบข้อมูลที่จะ export' }
     }
 
-    // CLIENT-SIDE FALLBACK FILTERING (for created_time=NULL cases)
-    // After migration-029, this should rarely happen
+    // CLIENT-SIDE FILTERING WITH COALESCE(created_time, order_date)
+    // CRITICAL FIX: Fetch by order_date (broader), filter by effective_date
     const orders = rawOrders.filter(order => {
       if (dateBasis === 'paid') {
         // Paid basis already filtered at DB level
         return true
       }
 
-      // Order basis: Use created_time if available, fallback to order_date
+      // Order basis: Use COALESCE(created_time, order_date)
       const effectiveDate = order.created_time || order.order_date
 
       if (!effectiveDate) {
@@ -489,21 +487,17 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
         return false
       }
 
-      // Apply date filters using effective date
-      const effectiveTimestamp = new Date(effectiveDate).getTime()
+      // Convert to Bangkok date for date-only comparison
+      const { toZonedTime } = require('date-fns-tz')
+      const bangkokDate = toZonedTime(new Date(effectiveDate), 'Asia/Bangkok')
+      const bangkokDateStr = bangkokDate.toISOString().split('T')[0] // YYYY-MM-DD
 
       if (filters.startDate) {
-        const startTimestamp = new Date(filters.startDate).getTime()
-        if (effectiveTimestamp < startTimestamp) return false
+        if (bangkokDateStr < filters.startDate) return false
       }
 
       if (filters.endDate) {
-        const { toZonedTime } = require('date-fns-tz')
-        const { endOfDay } = require('date-fns')
-        const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
-        const endOfDayBangkok = endOfDay(bangkokDate)
-        const endTimestamp = endOfDayBangkok.getTime()
-        if (effectiveTimestamp > endTimestamp) return false
+        if (bangkokDateStr > filters.endDate) return false
       }
 
       return true
@@ -651,8 +645,9 @@ export async function getSalesAggregates(filters: ExportFilters & { dateBasis?: 
     }
 
     // Date filtering based on dateBasis (TikTok timestamps)
-    // NOTE: After migration-029 backfill, created_time should not be NULL for imported data
-    // But we still handle fallback for edge cases (manual entries without created_time)
+    // CRITICAL FIX (migration-030): Use COALESCE(created_time, order_date) logic
+    // Problem: DB filter "created_time >= startDate" excludes rows with created_time=NULL
+    // Solution: Fetch broader dataset and filter client-side with fallback
     if (dateBasis === 'paid') {
       // Filter by paid_time (only include paid orders)
       baseQuery = baseQuery.not('paid_time', 'is', null)
@@ -668,26 +663,26 @@ export async function getSalesAggregates(filters: ExportFilters & { dateBasis?: 
         baseQuery = baseQuery.lte('paid_time', endOfDayBangkok.toISOString())
       }
     } else {
-      // Filter by created_time (order creation date)
-      // FALLBACK STRATEGY: Don't filter by date at DB level if need to support created_time=NULL
-      // Instead, fetch broader set and filter client-side with fallback to order_date
+      // Filter by COALESCE(created_time, order_date) - fetch both and filter client-side
+      // IMPORTANT: Don't filter by created_time at DB level → excludes NULL rows
+      // Instead: Fetch by order_date (broader) and filter client-side with COALESCE logic
 
-      // For performance: Still filter by created_time at DB level (covers 99% of data)
-      // Then handle created_time=NULL cases client-side (should be rare after migration)
       if (filters.startDate) {
-        baseQuery = baseQuery.gte('created_time', filters.startDate)
+        // Fetch rows where:
+        // 1. created_time >= startDate (rows with created_time)
+        // 2. OR created_time IS NULL AND order_date >= startDate (fallback rows)
+        // Since Supabase doesn't support COALESCE in filter, fetch broader set:
+        baseQuery = baseQuery.gte('order_date', filters.startDate)
       }
       if (filters.endDate) {
         const { toZonedTime } = await import('date-fns-tz')
         const { endOfDay } = await import('date-fns')
         const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
         const endOfDayBangkok = endOfDay(bangkokDate)
-        baseQuery = baseQuery.lte('created_time', endOfDayBangkok.toISOString())
+        baseQuery = baseQuery.lte('order_date', endOfDayBangkok.toISOString())
       }
 
-      // CRITICAL: Also fetch rows where created_time IS NULL (legacy data)
-      // We'll filter these by order_date client-side
-      // Note: Supabase .or() is complex for this case, so we handle it post-fetch
+      // Client-side filter will apply COALESCE(created_time, order_date) logic below
     }
 
     // Apply search filter (UX v2 includes external_order_id)
@@ -729,39 +724,35 @@ export async function getSalesAggregates(filters: ExportFilters & { dateBasis?: 
       }
     }
 
-    // 3.5. CLIENT-SIDE DATE FILTERING WITH FALLBACK
-    // Filter rows where created_time is NULL (should be rare after migration-029)
-    // For these rows, use order_date as fallback for date filtering
+    // 3.5. CLIENT-SIDE DATE FILTERING WITH COALESCE(created_time, order_date)
+    // CRITICAL FIX: Now we fetch by order_date (broader), must filter by effective_date
     const lines = rawLines.filter(line => {
       if (dateBasis === 'paid') {
         // Paid basis already filtered at DB level (paid_time NOT NULL)
         return true
       }
 
-      // Order basis: Use created_time if available, fallback to order_date
+      // Order basis: Use COALESCE(created_time, order_date) = effective_date
       const effectiveDate = line.created_time || line.order_date
 
       if (!effectiveDate) {
-        // No date at all (should never happen) - exclude from results
-        console.warn('Sales order with no created_time or order_date:', line.order_id)
+        // No date at all (should never happen for valid data) - exclude
+        console.warn('getSalesAggregates: Order with no created_time or order_date:', line.order_id)
         return false
       }
 
-      // Apply start/end date filters using effective date
-      const effectiveTimestamp = new Date(effectiveDate).getTime()
+      // Convert to Bangkok date for date-only comparison (YYYY-MM-DD)
+      const { toZonedTime } = require('date-fns-tz')
+      const bangkokDate = toZonedTime(new Date(effectiveDate), 'Asia/Bangkok')
+      const bangkokDateStr = bangkokDate.toISOString().split('T')[0] // YYYY-MM-DD
 
+      // Apply date filters (startDate and endDate are YYYY-MM-DD strings)
       if (filters.startDate) {
-        const startTimestamp = new Date(filters.startDate).getTime()
-        if (effectiveTimestamp < startTimestamp) return false
+        if (bangkokDateStr < filters.startDate) return false
       }
 
       if (filters.endDate) {
-        const { toZonedTime } = require('date-fns-tz')
-        const { endOfDay } = require('date-fns')
-        const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
-        const endOfDayBangkok = endOfDay(bangkokDate)
-        const endTimestamp = endOfDayBangkok.getTime()
-        if (effectiveTimestamp > endTimestamp) return false
+        if (bangkokDateStr > filters.endDate) return false
       }
 
       return true
@@ -1303,8 +1294,7 @@ export async function getSalesOrdersGrouped(
     }
 
     // Date filtering based on date basis (TikTok timestamps)
-    // FALLBACK: After migration-029, created_time should not be NULL for imported data
-    // But we handle edge cases client-side (see below)
+    // CRITICAL FIX (migration-030): Use COALESCE(created_time, order_date) logic
     if (dateBasis === 'paid') {
       // For paid basis, filter out null paid_time
       baseQuery = baseQuery.not('paid_time', 'is', null)
@@ -1319,17 +1309,17 @@ export async function getSalesOrdersGrouped(
         baseQuery = baseQuery.lte('paid_time', endOfDayBangkok.toISOString())
       }
     } else {
-      // Filter by created_time at DB level (covers most data)
-      // Rows with NULL created_time will be handled client-side
+      // IMPORTANT: Fetch by order_date (broader) to include created_time=NULL rows
+      // Client-side filter will apply COALESCE(created_time, order_date) logic
       if (filters.startDate) {
-        baseQuery = baseQuery.gte('created_time', filters.startDate)
+        baseQuery = baseQuery.gte('order_date', filters.startDate)
       }
       if (filters.endDate) {
         const { toZonedTime } = await import('date-fns-tz')
         const { endOfDay } = await import('date-fns')
         const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
         const endOfDayBangkok = endOfDay(bangkokDate)
-        baseQuery = baseQuery.lte('created_time', endOfDayBangkok.toISOString())
+        baseQuery = baseQuery.lte('order_date', endOfDayBangkok.toISOString())
       }
     }
 
@@ -1352,15 +1342,15 @@ export async function getSalesOrdersGrouped(
       return { success: true, data: [], count: 0 }
     }
 
-    // CLIENT-SIDE DATE FILTERING WITH FALLBACK
-    // Filter rows where created_time is NULL (should be rare after migration-029)
+    // CLIENT-SIDE DATE FILTERING WITH COALESCE(created_time, order_date)
+    // CRITICAL FIX: Fetch by order_date (broader), filter by effective_date
     const lines = rawLines.filter(line => {
       if (dateBasis === 'paid') {
         // Paid basis already filtered at DB level
         return true
       }
 
-      // Order basis: Use created_time if available, fallback to order_date
+      // Order basis: Use COALESCE(created_time, order_date)
       const effectiveDate = line.created_time || line.order_date
 
       if (!effectiveDate) {
@@ -1368,21 +1358,18 @@ export async function getSalesOrdersGrouped(
         return false
       }
 
-      // Apply date filters using effective date
-      const effectiveTimestamp = new Date(effectiveDate).getTime()
+      // Convert to Bangkok date for date-only comparison
+      const { toZonedTime } = require('date-fns-tz')
+      const bangkokDate = toZonedTime(new Date(effectiveDate), 'Asia/Bangkok')
+      const bangkokDateStr = bangkokDate.toISOString().split('T')[0] // YYYY-MM-DD
 
+      // Apply date filters (startDate/endDate are YYYY-MM-DD)
       if (filters.startDate) {
-        const startTimestamp = new Date(filters.startDate).getTime()
-        if (effectiveTimestamp < startTimestamp) return false
+        if (bangkokDateStr < filters.startDate) return false
       }
 
       if (filters.endDate) {
-        const { toZonedTime } = require('date-fns-tz')
-        const { endOfDay } = require('date-fns')
-        const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
-        const endOfDayBangkok = endOfDay(bangkokDate)
-        const endTimestamp = endOfDayBangkok.getTime()
-        if (effectiveTimestamp > endTimestamp) return false
+        if (bangkokDateStr > filters.endDate) return false
       }
 
       return true
@@ -1798,6 +1785,141 @@ export async function getDuplicateLines(filters: ExportFilters & { dateBasis?: '
     return { success: true, data: duplicates }
   } catch (error) {
     console.error('Unexpected error in getDuplicateLines:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
+
+/**
+ * =====================================================
+ * RECONCILIATION FUNCTION - Debug TikTok Export Mismatch
+ * =====================================================
+ */
+
+export interface SalesReconciliation {
+  sqlDerived: {
+    total_lines: number
+    distinct_orders: number
+    orders_with_null_created_time: number
+    orders_with_created_time: number
+  }
+  missingOrders: Array<{
+    external_order_id: string
+    order_date: string | null
+    created_time: string | null
+    reason: string
+  }>
+}
+
+/**
+ * Get Sales Reconciliation Data (TikTok Export vs UI Mismatch Debug)
+ * Direct SQL-based query to find root cause of order count difference
+ */
+export async function getSalesReconciliation(filters: {
+  startDate: string
+  endDate: string
+}): Promise<{
+  success: boolean
+  sqlDerived?: SalesReconciliation['sqlDerived']
+  missingOrders?: SalesReconciliation['missingOrders']
+  error?: string
+}> {
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+    }
+
+    // Query 1: Get total counts with NULL check
+    const { data: rawLines, error: fetchError } = await supabase
+      .from('sales_orders')
+      .select('external_order_id, order_id, created_time, order_date')
+      .eq('source_platform', 'tiktok_shop')
+      .gte('order_date', filters.startDate)
+      .lte('order_date', filters.endDate + 'T23:59:59')
+
+    if (fetchError) {
+      console.error('Error fetching reconciliation data:', fetchError)
+      return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+    }
+
+    if (!rawLines || rawLines.length === 0) {
+      return {
+        success: true,
+        sqlDerived: {
+          total_lines: 0,
+          distinct_orders: 0,
+          orders_with_null_created_time: 0,
+          orders_with_created_time: 0,
+        },
+        missingOrders: [],
+      }
+    }
+
+    // Client-side aggregation (for simplicity)
+    const { toZonedTime } = await import('date-fns-tz')
+
+    // Filter by Bangkok date
+    const filteredLines = rawLines.filter(line => {
+      const effectiveDate = line.created_time || line.order_date
+      if (!effectiveDate) return false
+
+      const bangkokDate = toZonedTime(new Date(effectiveDate), 'Asia/Bangkok')
+      const bangkokDateStr = bangkokDate.toISOString().split('T')[0]
+
+      return bangkokDateStr >= filters.startDate && bangkokDateStr <= filters.endDate
+    })
+
+    const totalLines = filteredLines.length
+    const distinctOrders = new Set(filteredLines.map(l => l.external_order_id || l.order_id)).size
+
+    // Count orders with NULL created_time
+    const ordersWithNullCreatedTime = new Set(
+      filteredLines
+        .filter(l => !l.created_time)
+        .map(l => l.external_order_id || l.order_id)
+    ).size
+
+    const ordersWithCreatedTime = distinctOrders - ordersWithNullCreatedTime
+
+    // Get sample missing orders (first 50)
+    const missingOrdersMap = new Map<string, {
+      external_order_id: string
+      order_date: string | null
+      created_time: string | null
+      reason: string
+    }>()
+
+    for (const line of filteredLines) {
+      if (!line.created_time) {
+        const orderId = line.external_order_id || line.order_id
+        if (!missingOrdersMap.has(orderId) && missingOrdersMap.size < 50) {
+          missingOrdersMap.set(orderId, {
+            external_order_id: orderId,
+            order_date: line.order_date,
+            created_time: line.created_time,
+            reason: 'NULL_CREATED_TIME',
+          })
+        }
+      }
+    }
+
+    return {
+      success: true,
+      sqlDerived: {
+        total_lines: totalLines,
+        distinct_orders: distinctOrders,
+        orders_with_null_created_time: ordersWithNullCreatedTime,
+        orders_with_created_time: ordersWithCreatedTime,
+      },
+      missingOrders: Array.from(missingOrdersMap.values()),
+    }
+  } catch (error) {
+    console.error('Unexpected error in getSalesReconciliation:', error)
     return {
       success: false,
       error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
