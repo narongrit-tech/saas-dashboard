@@ -489,8 +489,15 @@ export async function createImportBatch(
   importedAt?: string;
   createdAt?: string;
   message?: string;
+  // For duplicate_file: existing batch info for replace operation
+  existingBatchId?: string;
+  existingRowCount?: number;
 }> {
   const supabase = createClient()
+
+  // GUARD: Log Supabase URL for debugging
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'NOT_SET'
+  console.log(`[createImportBatch] Starting import, Project: ${supabaseUrl.replace(/https?:\/\//, '').split('.')[0]}`)
 
   try {
     // Extract values from FormData
@@ -499,6 +506,8 @@ export async function createImportBatch(
     const totalRows = parseInt(formData.get('totalRows') as string, 10)
     const dateRange = formData.get('dateRange') as string
     const allowReimport = formData.get('allowReimport') === 'true'
+
+    console.log(`[createImportBatch] File: ${fileName}, Rows: ${totalRows}, AllowReimport: ${allowReimport}`)
 
     // Validate required fields
     if (!fileHash || !fileName || isNaN(totalRows)) {
@@ -517,31 +526,71 @@ export async function createImportBatch(
       }
     }
 
-    // STEP 2: Check for existing SUCCESSFUL batch (skip if allowReimport=true)
+    // STEP 2: Smart Deduplication - Check file_hash with actual DB verification
     if (!allowReimport) {
-      const { data: existingSuccess, error: checkError } = await supabase
+      console.log(`[createImportBatch][DEDUP] Checking for existing imports with file_hash: ${fileHash.substring(0, 16)}...`)
+
+      // Find latest batch with this file_hash (any status)
+      const { data: existingBatch, error: checkError } = await supabase
         .from('import_batches')
         .select('id, file_name, created_at, status, inserted_count')
         .eq('file_hash', fileHash)
         .eq('marketplace', 'tiktok_shop')
         .eq('report_type', 'sales_order_sku_list')
         .eq('created_by', user.id)
-        .eq('status', 'success')
-        .gt('inserted_count', 0)
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle()
 
-      if (existingSuccess) {
-        // Duplicate file detected, user hasn't confirmed re-import yet
-        return {
-          success: false,
-          status: 'duplicate_file',
-          fileName: existingSuccess.file_name || fileName,
-          importedAt: existingSuccess.created_at,
-          message: 'ไฟล์นี้ถูก import ไปแล้ว'
+      if (existingBatch) {
+        console.log(`[createImportBatch][DEDUP] Found existing batch: ${existingBatch.id}`)
+        console.log(`[createImportBatch][DEDUP] Status: ${existingBatch.status}, Claimed inserted_count: ${existingBatch.inserted_count}`)
+
+        // CRITICAL: Verify actual rows in sales_orders (source of truth)
+        const { count: actualRowCount, error: countError } = await supabase
+          .from('sales_orders')
+          .select('*', { count: 'exact', head: true })
+          .eq('import_batch_id', existingBatch.id)
+
+        const verifiedCount = actualRowCount || 0
+        console.log(`[createImportBatch][DEDUP] Verified rows in sales_orders: ${verifiedCount}`)
+
+        if (countError) {
+          console.error(`[createImportBatch][DEDUP] Count verification failed:`, countError)
+          // Fail safe: block if we can't verify
+          return {
+            success: false,
+            status: 'duplicate_file',
+            fileName: existingBatch.file_name || fileName,
+            importedAt: existingBatch.created_at,
+            message: 'ไฟล์นี้ถูก import ไปแล้ว (ไม่สามารถตรวจสอบข้อมูลได้)'
+          }
         }
+
+        // CASE 1: Has actual data in DB → BLOCK (with replace option)
+        if (verifiedCount > 0) {
+          console.log(`[createImportBatch][DECISION] ❌ BLOCK - File has ${verifiedCount} rows in DB`)
+          return {
+            success: false,
+            status: 'duplicate_file',
+            fileName: existingBatch.file_name || fileName,
+            importedAt: existingBatch.created_at,
+            message: `ไฟล์นี้ถูก import ไปแล้ว (${verifiedCount} รายการในระบบ)`,
+            // For replace operation
+            existingBatchId: existingBatch.id,
+            existingRowCount: verifiedCount,
+          }
+        }
+
+        // CASE 2: No actual data in DB (orphaned batch) → ALLOW AUTO RE-IMPORT
+        console.log(`[createImportBatch][DECISION] ⚠️ ALLOW AUTO REIMPORT - Previous batch ${existingBatch.id} has 0 rows in DB (orphaned)`)
+        console.log(`[createImportBatch][DECISION] Reason: Batch status=${existingBatch.status}, claimed=${existingBatch.inserted_count} but actual=0`)
+        // Fall through to create new batch
+      } else {
+        console.log(`[createImportBatch][DEDUP] No existing batch found for this file_hash`)
       }
+    } else {
+      console.log(`[createImportBatch][DECISION] ✅ ALLOW REIMPORT - User confirmed (allowReimport=true)`)
     }
 
     // STEP 3: Check for existing PROCESSING batch (within last 30 min)
@@ -597,12 +646,14 @@ export async function createImportBatch(
       .single()
 
     if (batchError || !batch) {
-      console.error('Batch creation error:', batchError)
+      console.error('[createImportBatch] Batch creation error:', batchError)
       return {
         success: false,
         error: 'Failed to create import batch',
       }
     }
+
+    console.log(`[createImportBatch] ✓ Batch created: ${batch.id} (${batch.id.substring(0, 8)}...)`)
 
     return {
       success: true,
@@ -620,6 +671,134 @@ export async function createImportBatch(
 }
 
 /**
+ * Replace existing import batch with new import
+ * Deletes all sales_orders for the existing batch and marks it as replaced
+ * @param formData - FormData containing: existingBatchId, marketplace, reportType, fileHash
+ */
+export async function replaceSalesImportBatch(
+  formData: FormData
+): Promise<{
+  success: boolean;
+  error?: string;
+  deletedCount?: number;
+}> {
+  const supabase = createClient()
+
+  try {
+    // Extract values from FormData
+    const existingBatchId = formData.get('existingBatchId') as string
+    const marketplace = formData.get('marketplace') as string
+    const reportType = formData.get('reportType') as string
+    const fileHash = formData.get('fileHash') as string
+
+    console.log(`[replaceSalesImportBatch] ━━━━━━━━━━━━━━━━━━━━━━━━`)
+    console.log(`[replaceSalesImportBatch] START - Replace existing batch`)
+    console.log(`[replaceSalesImportBatch] Batch ID: ${existingBatchId}`)
+    console.log(`[replaceSalesImportBatch] Marketplace: ${marketplace}`)
+    console.log(`[replaceSalesImportBatch] Report Type: ${reportType}`)
+    console.log(`[replaceSalesImportBatch] File Hash: ${fileHash.substring(0, 16)}...`)
+
+    // Validate required fields
+    if (!existingBatchId || !marketplace || !reportType || !fileHash) {
+      return {
+        success: false,
+        error: 'Missing required fields: existingBatchId, marketplace, reportType, or fileHash',
+      }
+    }
+
+    // Get current user
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return {
+        success: false,
+        error: 'Authentication required',
+      }
+    }
+
+    // SAFETY: Verify this batch belongs to the user and matches file_hash
+    const { data: existingBatch, error: verifyError } = await supabase
+      .from('import_batches')
+      .select('id, file_hash, created_by, file_name, inserted_count')
+      .eq('id', existingBatchId)
+      .eq('marketplace', marketplace)
+      .eq('report_type', reportType)
+      .eq('created_by', user.id)
+      .single()
+
+    if (verifyError || !existingBatch) {
+      console.error('[replaceSalesImportBatch] Batch verification failed:', verifyError)
+      return {
+        success: false,
+        error: 'Existing batch not found or unauthorized',
+      }
+    }
+
+    if (existingBatch.file_hash !== fileHash) {
+      console.error('[replaceSalesImportBatch] File hash mismatch!')
+      return {
+        success: false,
+        error: 'File hash mismatch - cannot replace different file',
+      }
+    }
+
+    console.log(`[replaceSalesImportBatch] ✓ Batch verified: ${existingBatch.file_name}`)
+
+    // STEP 1: Delete all sales_orders for this batch
+    console.log(`[replaceSalesImportBatch] STEP 1: Deleting sales_orders...`)
+    const { error: deleteError, count: deletedCount } = await supabase
+      .from('sales_orders')
+      .delete({ count: 'exact' })
+      .eq('import_batch_id', existingBatchId)
+      .eq('created_by', user.id) // Safety: only delete user's own data
+
+    if (deleteError) {
+      console.error('[replaceSalesImportBatch] Delete failed:', deleteError)
+      return {
+        success: false,
+        error: `Failed to delete existing data: ${deleteError.message}`,
+      }
+    }
+
+    console.log(`[replaceSalesImportBatch] ✓ Deleted ${deletedCount || 0} rows from sales_orders`)
+
+    // STEP 2: Mark batch as replaced
+    console.log(`[replaceSalesImportBatch] STEP 2: Marking batch as replaced...`)
+    const replacedAt = new Date().toISOString()
+    const { error: updateError } = await supabase
+      .from('import_batches')
+      .update({
+        status: 'replaced',
+        notes: `Replaced by re-import at ${replacedAt}. Original count: ${existingBatch.inserted_count || 0}`,
+        updated_at: replacedAt,
+      })
+      .eq('id', existingBatchId)
+
+    if (updateError) {
+      console.error('[replaceSalesImportBatch] Update batch failed:', updateError)
+      // Non-fatal: data already deleted, just log warning
+      console.warn('[replaceSalesImportBatch] WARNING: Batch status not updated but data deleted')
+    } else {
+      console.log(`[replaceSalesImportBatch] ✓ Batch marked as replaced`)
+    }
+
+    console.log(`[replaceSalesImportBatch] ✅ REPLACE SUCCESS`)
+    console.log(`[replaceSalesImportBatch] ━━━━━━━━━━━━━━━━━━━━━━━━`)
+
+    return {
+      success: true,
+      deletedCount: deletedCount || 0,
+    }
+  } catch (error: unknown) {
+    console.error('[replaceSalesImportBatch] Unexpected error:', error)
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    return {
+      success: false,
+      error: errorMessage,
+    }
+  }
+}
+
+/**
  * Import a chunk of sales data
  * @param formData - FormData containing: batchId, chunkDataJson, chunkIndex, totalChunks
  */
@@ -628,12 +807,31 @@ export async function importSalesChunk(
 ): Promise<{ success: boolean; inserted: number; error?: string }> {
   const supabase = createClient()
 
+  // GUARD: Log Supabase URL for debugging
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'NOT_SET'
+
   try {
     // Extract values from FormData
     const batchId = formData.get('batchId') as string
     const chunkDataJson = formData.get('chunkDataJson') as string
     const chunkIndex = parseInt(formData.get('chunkIndex') as string, 10)
     const totalChunks = parseInt(formData.get('totalChunks') as string, 10)
+
+    // DEFINITIVE LOG: Function entry point
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
+    console.log(`[importSalesChunk] ✓ ENTER - Function called successfully`)
+    console.log(`[importSalesChunk] Batch ID: ${batchId}`)
+    console.log(`[importSalesChunk] Chunk: ${chunkIndex + 1}/${totalChunks}`)
+    console.log(`[importSalesChunk] Data size: ${chunkDataJson?.length || 0} bytes`)
+    console.log(`[importSalesChunk] Project: ${supabaseUrl.replace(/https?:\/\//, '').split('.')[0]}`)
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
+
+    // DEBUG MODE (LOG ONLY — NO THROW)
+    // Set SALES_IMPORT_DEBUG_THROW=1 to see function execution without breaking import
+    if (process.env.SALES_IMPORT_DEBUG_THROW === '1') {
+      console.log(`[importSalesChunk] 🔍 DEBUG MODE ACTIVE: Function executed successfully (chunk ${chunkIndex + 1}/${totalChunks})`)
+      console.log(`[importSalesChunk] 🔍 DEBUG: Continuing with normal import flow...`)
+    }
 
     // Validate required fields
     if (!batchId || !chunkDataJson || isNaN(chunkIndex) || isNaN(totalChunks)) {
@@ -720,12 +918,19 @@ export async function importSalesChunk(
         delivered_at: row.delivered_at,
         seller_sku: row.seller_sku,
         sku_id: row.sku_id,
+
+        // TikTok Business Timestamps (from parser)
+        created_time: row.created_time,
+        paid_time: row.paid_time,
+        cancelled_time: row.cancelled_time,
       }
     })
 
     // Upsert with idempotency (safe field updates on conflict)
     let insertedCount = 0
     let updatedCount = 0
+
+    console.log(`[importSalesChunk] Upserting ${salesRows.length} rows...`)
 
     const { data: upsertedRows, error: upsertError } = await supabase
       .from('sales_orders')
@@ -736,28 +941,41 @@ export async function importSalesChunk(
       .select()
 
     if (upsertError) {
-      console.error(`Upsert error (chunk ${chunkIndex + 1}/${totalChunks}):`, upsertError)
+      console.error(`[importSalesChunk] Upsert error (chunk ${chunkIndex + 1}/${totalChunks}):`, upsertError)
+      console.error(`[importSalesChunk] Error details:`, {
+        code: upsertError.code,
+        message: upsertError.message,
+        details: upsertError.details,
+        hint: upsertError.hint
+      })
 
       // Mark batch as failed
       await supabase
         .from('import_batches')
         .update({
           status: 'failed',
-          notes: `Chunk ${chunkIndex + 1}/${totalChunks} failed: ${upsertError.message}`
+          notes: `Chunk ${chunkIndex + 1}/${totalChunks} failed: ${upsertError.message}. Code: ${upsertError.code}. Batch: ${batchId}`
         })
         .eq('id', batchId)
 
       return {
         success: false,
         inserted: 0,
-        error: `Upsert failed: ${upsertError.message}`,
+        error: `Upsert failed: ${upsertError.message} (Code: ${upsertError.code})`,
       }
     }
 
     // Count inserted rows (new rows have been created)
     // Note: Supabase upsert doesn't distinguish between insert and update
-    // We'll assume success and count all returned rows as processed
+    // We'll count all returned rows as processed
     insertedCount = upsertedRows?.length || 0
+
+    console.log(`[importSalesChunk] ✓ Upsert completed: ${insertedCount} rows processed`)
+
+    // GUARD: Warn if returned count doesn't match expected
+    if (insertedCount !== salesRows.length) {
+      console.warn(`[importSalesChunk] WARNING: Upsert returned ${insertedCount} rows but expected ${salesRows.length}`)
+    }
 
     return {
       success: true,
@@ -796,11 +1014,30 @@ export async function finalizeImportBatch(
 ): Promise<SalesImportResult> {
   const supabase = createClient()
 
+  // GUARD: Log Supabase URL for debugging environment mismatches
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'NOT_SET'
+
   try {
     // Extract values from FormData
     const batchId = formData.get('batchId') as string
     const totalInserted = parseInt(formData.get('totalInserted') as string, 10)
     const parsedDataJson = formData.get('parsedDataJson') as string
+
+    // DEFINITIVE LOG: Function entry point
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
+    console.log(`[finalizeImportBatch] ✓ ENTER - Function called successfully`)
+    console.log(`[finalizeImportBatch] Batch ID: ${batchId}`)
+    console.log(`[finalizeImportBatch] Total Inserted: ${totalInserted}`)
+    console.log(`[finalizeImportBatch] Data size: ${parsedDataJson?.length || 0} bytes`)
+    console.log(`[finalizeImportBatch] Project: ${supabaseUrl.replace(/https?:\/\//, '').split('.')[0]}`)
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
+
+    // DEBUG MODE (LOG ONLY — NO THROW)
+    // Set SALES_IMPORT_DEBUG_THROW=1 to see function execution without breaking import
+    if (process.env.SALES_IMPORT_DEBUG_THROW === '1') {
+      console.log(`[finalizeImportBatch] 🔍 DEBUG MODE ACTIVE: Function executed successfully`)
+      console.log(`[finalizeImportBatch] 🔍 DEBUG: Continuing with verification and finalization...`)
+    }
 
     // Validate required fields
     if (!batchId || isNaN(totalInserted) || !parsedDataJson) {
@@ -810,7 +1047,7 @@ export async function finalizeImportBatch(
           .from('import_batches')
           .update({
             status: 'failed',
-            notes: 'Finalization failed: Missing required fields'
+            notes: `Finalization failed: Missing required fields. Project: ${supabaseUrl.split('.')[0]}`
           })
           .eq('id', batchId)
       }
@@ -819,6 +1056,7 @@ export async function finalizeImportBatch(
         success: false,
         error: 'Missing required fields: batchId, totalInserted, or parsedDataJson',
         inserted: 0,
+        updated: 0,
         skipped: 0,
         errors: 0,
       }
@@ -827,20 +1065,32 @@ export async function finalizeImportBatch(
     // Parse JSON string to array
     const parsedData: ParsedSalesRow[] = JSON.parse(parsedDataJson)
 
-    // Post-insert verification: Count actual rows in database
+    // CRITICAL: Post-insert verification - Count actual rows in database
+    // This is the ONLY source of truth for success/failure
+    console.log(`[finalizeImportBatch][VERIFY] ━━━━━━━━━━━━━━━━━━━━━━━━`)
+    console.log(`[finalizeImportBatch][VERIFY] Batch: ${batchId.substring(0, 8)}...`)
+    console.log(`[finalizeImportBatch][VERIFY] Expected rows: ${parsedData.length}`)
+    console.log(`[finalizeImportBatch][VERIFY] Querying sales_orders...`)
+
     const { count: actualCount, error: countError } = await supabase
       .from('sales_orders')
       .select('*', { count: 'exact', head: true })
       .eq('import_batch_id', batchId)
 
+    const verifiedCount = actualCount || 0
+
+    console.log(`[finalizeImportBatch][VERIFY] Result: expected=${parsedData.length}, actual=${verifiedCount}`)
+    console.log(`[finalizeImportBatch][VERIFY] Count error: ${countError?.message || 'none'}`)
+    console.log(`[finalizeImportBatch][VERIFY] ━━━━━━━━━━━━━━━━━━━━━━━━`)
+
     if (countError) {
-      console.error('Count verification error:', countError)
+      console.error('[finalizeImportBatch][VERIFY] ❌ Count verification ERROR:', countError)
       // Mark batch as failed
       await supabase
         .from('import_batches')
         .update({
           status: 'failed',
-          notes: `Verification error: ${countError.message}`
+          notes: `Verification error: ${countError.message}. Project: ${supabaseUrl.split('.')[0]}. Batch: ${batchId}`
         })
         .eq('id', batchId)
 
@@ -848,42 +1098,113 @@ export async function finalizeImportBatch(
         success: false,
         error: `Verification failed: ${countError.message}`,
         inserted: 0,
+        updated: 0,
         skipped: 0,
         errors: parsedData.length,
       }
     }
 
-    const verifiedCount = actualCount || 0
-
-    // Check if insert was actually successful
+    // CRITICAL CHECK: Verify rows actually exist in database
+    // This prevents false success when import silently fails
     if (verifiedCount === 0) {
-      // No rows inserted (possible RLS block or silent failure)
+      console.error(`[finalizeImportBatch][VERIFY] ❌❌❌ CRITICAL: 0 rows found in DB`)
+      console.error(`[finalizeImportBatch][VERIFY] Expected: ${parsedData.length} rows`)
+      console.error(`[finalizeImportBatch][VERIFY] Got: 0 rows`)
+      console.error(`[finalizeImportBatch][VERIFY] Project: ${supabaseUrl}`)
+      console.error(`[finalizeImportBatch][VERIFY] Batch ID: ${batchId}`)
+
+      // DOUBLE-CHECK: Query one more time to be absolutely sure
+      console.log(`[finalizeImportBatch][VERIFY] Running double-check query...`)
+      const { data: doubleCheckRows, error: doubleCheckError } = await supabase
+        .from('sales_orders')
+        .select('id')
+        .eq('import_batch_id', batchId)
+        .limit(1)
+
+      const doubleCheckCount = doubleCheckRows?.length || 0
+      console.error(`[finalizeImportBatch][VERIFY] Double-check result: ${doubleCheckCount} rows found`)
+
+      if (doubleCheckCount === 0) {
+        console.error(`[finalizeImportBatch][DECISION] ❌ FAIL IMPORT - 0 rows verified in DB`)
+      }
+
+      // No rows inserted (possible RLS block, auth failure, or environment mismatch)
       await supabase
         .from('import_batches')
         .update({
           status: 'failed',
           inserted_count: 0,
           error_count: parsedData.length,
-          notes: 'Import failed: 0 rows inserted. Possible RLS policy issue or authentication error.',
+          notes: `Import failed: 0 rows verified in DB (expected ${parsedData.length}). Possible causes: RLS block, auth error, or wrong Supabase project. Project: ${supabaseUrl.split('.')[0]}. Batch: ${batchId}`,
         })
         .eq('id', batchId)
 
       return {
         success: false,
-        error: 'Import failed: 0 rows inserted. กรุณาตรวจสอบ permissions หรือติดต่อผู้ดูแลระบบ',
+        error: `Import failed: 0 rows inserted into database.\n\nExpected: ${parsedData.length} rows\nVerified: 0 rows\nBatch ID: ${batchId.substring(0, 8)}...\nProject: ${supabaseUrl.split('.')[0]}\n\nกรุณาตรวจสอบว่าคุณกำลังใช้ Supabase project ที่ถูกต้อง หรือติดต่อผู้ดูแลระบบ`,
         inserted: 0,
+        updated: 0,
         skipped: 0,
         errors: parsedData.length,
       }
     }
 
-    // Update batch status to success
+    console.log(`[finalizeImportBatch][VERIFY] ✅ Verification PASSED: ${verifiedCount} rows confirmed in DB`)
+    console.log(`[finalizeImportBatch][DECISION] ✅ IMPORT SUCCESS`)
+
+    // Calculate date range and determine date basis
+    let dateMin: string | null = null
+    let dateMax: string | null = null
+    let dateBasisUsed: 'order_date' | 'paid_at' = 'order_date'
+
+    // Check if most rows have paid_at
+    const paidAtCount = parsedData.filter(r => r.paid_at).length
+    const paidAtRatio = paidAtCount / parsedData.length
+
+    // Use paid_at as basis if >50% of rows have it
+    if (paidAtRatio > 0.5) {
+      dateBasisUsed = 'paid_at'
+      const paidDates = parsedData
+        .filter(r => r.paid_at)
+        .map(r => r.paid_at!.split(' ')[0]) // Extract date part
+        .sort()
+      if (paidDates.length > 0) {
+        dateMin = paidDates[0]
+        dateMax = paidDates[paidDates.length - 1]
+      }
+    } else {
+      // Use order_date as basis
+      dateBasisUsed = 'order_date'
+      const orderDates = parsedData
+        .filter(r => r.order_date)
+        .map(r => r.order_date.split(' ')[0]) // Extract date part
+        .sort()
+      if (orderDates.length > 0) {
+        dateMin = orderDates[0]
+        dateMax = orderDates[orderDates.length - 1]
+      }
+    }
+
+    // Calculate insert vs skip counts
+    // verifiedCount = actual rows in DB (unique lines after deduplication)
+    // parsedData.length = total lines attempted to import
+    // skipped = lines that were duplicates (blocked by order_line_hash unique constraint)
+    const insertedCount = verifiedCount
+    const skippedCount = Math.max(0, parsedData.length - verifiedCount)
+    const updatedCount = 0 // Upsert with ON CONFLICT DO NOTHING doesn't update
+
+    // Update batch status to success with date tracking
     const { error: updateError } = await supabase
       .from('import_batches')
       .update({
         status: 'success',
-        inserted_count: verifiedCount,
-        notes: `Successfully imported ${verifiedCount} rows (chunked import)`,
+        inserted_count: insertedCount,
+        updated_count: updatedCount,
+        skipped_count: skippedCount,
+        date_min: dateMin,
+        date_max: dateMax,
+        date_basis_used: dateBasisUsed,
+        notes: `Successfully imported ${insertedCount} rows (skipped ${skippedCount} duplicates, basis: ${dateBasisUsed})`,
       })
       .eq('id', batchId)
 
@@ -902,6 +1223,7 @@ export async function finalizeImportBatch(
         success: false,
         error: 'Failed to finalize import batch',
         inserted: 0,
+        updated: 0,
         skipped: 0,
         errors: parsedData.length,
       }
@@ -914,18 +1236,21 @@ export async function finalizeImportBatch(
 
     const uniqueOrders = new Set(parsedData.map(r => r.order_id)).size
 
-    const dateRange = parsedData.length > 0
-      ? `${parsedData[0].order_date} to ${parsedData[parsedData.length - 1].order_date}`
+    const dateRangeString = dateMin && dateMax
+      ? `${dateMin} to ${dateMax}`
       : 'N/A'
 
     return {
       success: true,
       batchId: batchId,
-      inserted: verifiedCount,
-      skipped: 0,
+      inserted: insertedCount,
+      updated: updatedCount,
+      skipped: skippedCount,
       errors: 0,
+      dateBasisUsed,
+      dateRange: dateMin && dateMax ? { min: dateMin, max: dateMax } : undefined,
       summary: {
-        dateRange,
+        dateRange: dateRangeString,
         totalRevenue,
         orderCount: uniqueOrders,
       },
@@ -950,6 +1275,7 @@ export async function finalizeImportBatch(
       success: false,
       error: errorMessage,
       inserted: 0,
+      updated: 0,
       skipped: 0,
       errors: 0,
     }
@@ -975,6 +1301,7 @@ export async function importSalesToSystem(
         success: false,
         error: 'Authentication required',
         inserted: 0,
+        updated: 0,
         skipped: 0,
         errors: 0,
       }
@@ -997,6 +1324,7 @@ export async function importSalesToSystem(
         success: false,
         error: `ไฟล์นี้ถูก import สำเร็จไปแล้ว - "${existingBatch.file_name}" (${formatBangkok(new Date(existingBatch.created_at), 'yyyy-MM-dd HH:mm')})`,
         inserted: 0,
+        updated: 0,
         skipped: 0,
         errors: 0,
       }
@@ -1032,6 +1360,7 @@ export async function importSalesToSystem(
         success: false,
         error: 'Failed to create import batch',
         inserted: 0,
+        updated: 0,
         skipped: 0,
         errors: 0,
       }
@@ -1080,6 +1409,11 @@ export async function importSalesToSystem(
         delivered_at: row.delivered_at,
         seller_sku: row.seller_sku,
         sku_id: row.sku_id,
+
+        // TikTok Business Timestamps (from parser)
+        created_time: row.created_time,
+        paid_time: row.paid_time,
+        cancelled_time: row.cancelled_time,
       }
     })
 
@@ -1110,6 +1444,7 @@ export async function importSalesToSystem(
         success: false,
         error: `Upsert failed: ${upsertError.message}`,
         inserted: 0,
+        updated: 0,
         skipped: 0,
         errors: parsedData.length,
       }
@@ -1137,6 +1472,7 @@ export async function importSalesToSystem(
         success: false,
         error: 'Import failed: 0 rows inserted. กรุณาตรวจสอบ permissions หรือติดต่อผู้ดูแลระบบ',
         inserted: 0,
+        updated: 0,
         skipped: 0,
         errors: parsedData.length,
       }
@@ -1163,6 +1499,7 @@ export async function importSalesToSystem(
       success: true,
       batchId: batch.id,
       inserted: insertedCount,
+      updated: 0, // Legacy function doesn't track updates separately
       skipped: 0, // Upsert doesn't track skipped (updates in place)
       errors: 0,
       summary: {
@@ -1179,6 +1516,7 @@ export async function importSalesToSystem(
       success: false,
       error: errorMessage,
       inserted: 0,
+      updated: 0,
       skipped: 0,
       errors: 0,
     }

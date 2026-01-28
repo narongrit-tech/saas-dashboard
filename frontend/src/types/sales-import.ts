@@ -187,6 +187,11 @@ export interface ParsedSalesRow {
   delivered_at?: string | null // YYYY-MM-DD HH:MM:SS (Bangkok)
   seller_sku?: string | null // Seller-defined SKU
   sku_id?: string | null // Platform SKU ID
+
+  // TikTok Business Timestamps (from OrderSKUList export)
+  created_time?: string | null // When customer placed order (Create Time)
+  paid_time?: string | null // When payment confirmed (Paid Time)
+  cancelled_time?: string | null // When order cancelled (Cancelled Time)
 }
 
 /**
@@ -224,9 +229,15 @@ export interface SalesImportResult {
   success: boolean
   batchId?: string
   inserted: number
+  updated: number
   skipped: number
   errors: number
   error?: string
+  dateBasisUsed?: 'order_date' | 'paid_at'
+  dateRange?: {
+    min: string // YYYY-MM-DD
+    max: string // YYYY-MM-DD
+  }
   summary?: {
     dateRange: string
     totalRevenue: number

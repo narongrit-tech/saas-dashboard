@@ -3,13 +3,14 @@
 import { useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { SalesOrder, SalesOrderFilters } from '@/types/sales'
+import { SalesOrder, SalesOrderFilters, GroupedSalesOrder, SalesAggregates } from '@/types/sales'
 import { endOfDayBangkok, formatBangkok, getBangkokNow, startOfDayBangkok } from '@/lib/bangkok-time'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SingleDateRangePicker, DateRangeResult } from '@/components/shared/SingleDateRangePicker'
 import { SalesSummaryBar } from '@/components/sales/SalesSummaryBar'
-import { getSalesAggregates, SalesAggregates } from '@/app/(dashboard)/sales/actions'
+import { SalesStoryPanel } from '@/components/sales/SalesStoryPanel'
+import { getSalesAggregates, getSalesOrdersGrouped, getSalesAggregatesTikTokLike, TikTokStyleAggregates } from '@/app/(dashboard)/sales/actions'
 import {
   Select,
   SelectContent,
@@ -28,11 +29,12 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
-import { ChevronLeft, ChevronRight, Download, FileUp, Plus, Pencil, Trash2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, FileUp, Plus, Pencil, Trash2, Eye } from 'lucide-react'
 import { AddOrderDialog } from '@/components/sales/AddOrderDialog'
 import { EditOrderDialog } from '@/components/sales/EditOrderDialog'
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
 import { SalesImportDialog } from '@/components/sales/SalesImportDialog'
+import { OrderDetailDrawer } from '@/components/sales/OrderDetailDrawer'
 import { deleteOrder, exportSalesOrders } from '@/app/(dashboard)/sales/actions'
 
 const PLATFORMS = [
@@ -65,6 +67,7 @@ export default function SalesPage() {
   const searchParams = useSearchParams()
 
   const [orders, setOrders] = useState<SalesOrder[]>([])
+  const [groupedOrders, setGroupedOrders] = useState<GroupedSalesOrder[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [totalCount, setTotalCount] = useState(0)
@@ -72,84 +75,164 @@ export default function SalesPage() {
   const [showEditDialog, setShowEditDialog] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showImportDialog, setShowImportDialog] = useState(false)
+  const [showDetailDrawer, setShowDetailDrawer] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<SalesOrder | null>(null)
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
   const [aggregates, setAggregates] = useState<SalesAggregates | null>(null)
   const [aggregatesLoading, setAggregatesLoading] = useState(true)
   const [aggregatesError, setAggregatesError] = useState<string | null>(null)
+  const [tiktokAggregates, setTiktokAggregates] = useState<TikTokStyleAggregates | null>(null)
+  const [tiktokAggregatesLoading, setTiktokAggregatesLoading] = useState(true)
 
-  // Parse filters from URL params
-  const getFiltersFromURL = (): SalesOrderFilters => {
+  // View state (order or line)
+  const [view, setView] = useState<'order' | 'line'>('order')
+
+  // Date basis state (order or paid) - uses TikTok timestamps (created_time or paid_time)
+  const [dateBasis, setDateBasis] = useState<'order' | 'paid'>('order')
+
+  // Initial filters state (will be synced from URL)
+  const [filters, setFilters] = useState<SalesOrderFilters>({
+    page: 1,
+    perPage: 20,
+  })
+
+  // Effect A: URL → State (read URL and update state, NO router calls)
+  useEffect(() => {
     const statusParam = searchParams.get('status')
+    const basisParam = searchParams.get('basis') // Can be 'order' | 'paid' | 'order_date' | 'paid_at' | null
+    const viewParam = searchParams.get('view') as 'order' | 'line' | null
 
     // Default date range: Today (Bangkok timezone) if no params
     const hasDateParams = searchParams.get('startDate') || searchParams.get('endDate')
     const todayStart = hasDateParams ? undefined : formatBangkok(startOfDayBangkok(), 'yyyy-MM-dd')
     const todayEnd = hasDateParams ? undefined : formatBangkok(getBangkokNow(), 'yyyy-MM-dd')
 
-    return {
+    // Parse and clamp pagination params
+    const pageRaw = parseInt(searchParams.get('page') || '1', 10)
+    const perPageRaw = parseInt(searchParams.get('perPage') || '20', 10)
+
+    // Clamp page: min 1
+    const pageClamped = Math.max(1, pageRaw)
+
+    // Clamp perPage: 1-200
+    const perPageClamped = Math.max(1, Math.min(200, perPageRaw))
+
+    const urlFilters: SalesOrderFilters = {
       sourcePlatform: searchParams.get('platform') || undefined,
       status: statusParam ? statusParam.split(',') : undefined,
       paymentStatus: searchParams.get('paymentStatus') || undefined,
       startDate: searchParams.get('startDate') || todayStart,
       endDate: searchParams.get('endDate') || todayEnd,
       search: searchParams.get('search') || undefined,
-      page: parseInt(searchParams.get('page') || '1', 10),
-      perPage: parseInt(searchParams.get('perPage') || '20', 10),
+      page: pageClamped,
+      perPage: perPageClamped,
+      view: viewParam || 'order',
     }
-  }
 
-  const [filters, setFilters] = useState<SalesOrderFilters>(getFiltersFromURL())
+    // Update view from URL (guarded)
+    const newView = (viewParam === 'order' || viewParam === 'line') ? viewParam : 'order'
+    setView(prev => prev !== newView ? newView : prev)
 
-  // Update URL when filters change
-  const updateURL = (newFilters: SalesOrderFilters) => {
+    // Update date basis from URL (guarded) - convert old values to new
+    let newBasis: 'order' | 'paid' = 'order'
+    if (basisParam === 'order' || basisParam === 'order_date') {
+      newBasis = 'order'
+    } else if (basisParam === 'paid' || basisParam === 'paid_at') {
+      newBasis = 'paid'
+    }
+    setDateBasis(prev => prev !== newBasis ? newBasis : prev)
+
+    // Update filters from URL (guarded)
+    setFilters(prev => {
+      const changed = (
+        prev.sourcePlatform !== urlFilters.sourcePlatform ||
+        JSON.stringify(prev.status) !== JSON.stringify(urlFilters.status) ||
+        prev.paymentStatus !== urlFilters.paymentStatus ||
+        prev.startDate !== urlFilters.startDate ||
+        prev.endDate !== urlFilters.endDate ||
+        prev.search !== urlFilters.search ||
+        prev.page !== urlFilters.page ||
+        prev.perPage !== urlFilters.perPage ||
+        prev.view !== urlFilters.view
+      )
+      return changed ? urlFilters : prev
+    })
+  }, [searchParams])
+
+  // Effect B: State → URL (read state and update URL if needed, NO setState calls)
+  useEffect(() => {
     const params = new URLSearchParams()
 
-    if (newFilters.sourcePlatform && newFilters.sourcePlatform !== 'all') {
-      params.set('platform', newFilters.sourcePlatform)
+    // Add view
+    params.set('view', view)
+
+    // Add date basis
+    params.set('basis', dateBasis)
+
+    if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
+      params.set('platform', filters.sourcePlatform)
     }
-    if (newFilters.status && newFilters.status.length > 0) {
-      params.set('status', newFilters.status.join(','))
+    if (filters.status && filters.status.length > 0) {
+      params.set('status', filters.status.join(','))
     }
-    if (newFilters.paymentStatus && newFilters.paymentStatus !== 'all') {
-      params.set('paymentStatus', newFilters.paymentStatus)
+    if (filters.paymentStatus && filters.paymentStatus !== 'all') {
+      params.set('paymentStatus', filters.paymentStatus)
     }
-    if (newFilters.startDate) {
-      params.set('startDate', newFilters.startDate)
+    if (filters.startDate) {
+      params.set('startDate', filters.startDate)
     }
-    if (newFilters.endDate) {
-      params.set('endDate', newFilters.endDate)
+    if (filters.endDate) {
+      params.set('endDate', filters.endDate)
     }
-    if (newFilters.search) {
-      params.set('search', newFilters.search)
+    if (filters.search) {
+      params.set('search', filters.search)
     }
-    if (newFilters.page > 1) {
-      params.set('page', newFilters.page.toString())
+    if (filters.page > 1) {
+      params.set('page', filters.page.toString())
     }
-    if (newFilters.perPage !== 20) {
-      params.set('perPage', newFilters.perPage.toString())
+    if (filters.perPage !== 20) {
+      params.set('perPage', filters.perPage.toString())
     }
 
-    router.push(`/sales?${params.toString()}`, { scroll: false })
-  }
+    const newQueryString = params.toString()
+    const currentQueryString = searchParams.toString()
 
-  // Sync URL params to state
-  useEffect(() => {
-    const urlFilters = getFiltersFromURL()
-    setFilters(urlFilters)
-  }, [searchParams])
+    // Only update URL if query string changed
+    if (newQueryString !== currentQueryString) {
+      router.replace(`/sales?${newQueryString}`, { scroll: false })
+    }
+  }, [view, dateBasis, filters.sourcePlatform, filters.status, filters.paymentStatus, filters.startDate, filters.endDate, filters.search, filters.page, filters.perPage])
+
+  // FIX: Extract primitive dependencies to prevent infinite loop
+  const {
+    sourcePlatform,
+    status,
+    paymentStatus,
+    startDate,
+    endDate,
+    search,
+    page,
+    perPage,
+  } = filters
+
+  // Convert array to string for stable comparison
+  const statusString = status?.join(',') || ''
 
   useEffect(() => {
     fetchOrders()
     fetchAggregates()
-  }, [filters])
+  }, [sourcePlatform, statusString, paymentStatus, startDate, endDate, search, page, perPage, dateBasis, view])
 
   const fetchAggregates = async () => {
     try {
       setAggregatesLoading(true)
+      setTiktokAggregatesLoading(true)
       setAggregatesError(null)
 
+      // Fetch main aggregates with TikTok semantics (respects dateBasis)
+      // This now includes all metrics: revenue, orders, cancel rates, units, AOV, import completeness
       const result = await getSalesAggregates({
         sourcePlatform: filters.sourcePlatform,
         status: filters.status,
@@ -157,6 +240,7 @@ export default function SalesPage() {
         startDate: filters.startDate,
         endDate: filters.endDate,
         search: filters.search,
+        dateBasis: dateBasis, // CRITICAL: 'order' uses created_time, 'paid' uses paid_time
       })
 
       if (!result.success) {
@@ -166,12 +250,32 @@ export default function SalesPage() {
       }
 
       setAggregates(result.data || null)
+
+      // Fetch TikTok-style aggregates (for comparison/reference only, always uses created_at)
+      const tiktokResult = await getSalesAggregatesTikTokLike({
+        sourcePlatform: filters.sourcePlatform,
+        status: filters.status,
+        paymentStatus: filters.paymentStatus,
+        startDate: filters.startDate,
+        endDate: filters.endDate,
+        search: filters.search,
+        // Note: dateBasis is ignored in TikTok aggregates (always uses created_at)
+      })
+
+      if (tiktokResult.success) {
+        setTiktokAggregates(tiktokResult.data || null)
+      } else {
+        console.warn('TikTok aggregates failed:', tiktokResult.error)
+        setTiktokAggregates(null)
+      }
     } catch (err) {
       console.error('Error fetching aggregates:', err)
       setAggregatesError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการโหลดสรุปข้อมูล')
       setAggregates(null)
+      setTiktokAggregates(null)
     } finally {
       setAggregatesLoading(false)
+      setTiktokAggregatesLoading(false)
     }
   }
 
@@ -180,103 +284,168 @@ export default function SalesPage() {
       setLoading(true)
       setError(null)
 
-      const supabase = createClient()
-      let query = supabase
-        .from('sales_orders')
-        .select('*', { count: 'exact' })
-        .order('paid_at', { ascending: false })
+      // Log query params for debugging
+      console.log('[Sales Pagination Debug] Query params:', {
+        view,
+        page: filters.page,
+        perPage: filters.perPage,
+        basis: dateBasis,
+        startDate: filters.startDate,
+        endDate: filters.endDate,
+        platform: filters.sourcePlatform,
+        status: filters.status,
+        paymentStatus: filters.paymentStatus,
+        search: filters.search,
+      })
 
-      // Platform filter (UX v2)
-      if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
-        query = query.eq('source_platform', filters.sourcePlatform)
+      // Branch: Order View vs Line View
+      if (view === 'order') {
+        // Order View: Use grouped query (1 row per order_id)
+        const result = await getSalesOrdersGrouped({
+          sourcePlatform: filters.sourcePlatform,
+          status: filters.status,
+          paymentStatus: filters.paymentStatus,
+          startDate: filters.startDate,
+          endDate: filters.endDate,
+          search: filters.search,
+          dateBasis: dateBasis,
+          page: filters.page,
+          perPage: filters.perPage,
+        })
+
+        if (!result.success) {
+          setError(result.error || 'เกิดข้อผิดพลาดในการโหลดข้อมูล')
+          setGroupedOrders([])
+          setTotalCount(0)
+          return
+        }
+
+        setGroupedOrders(result.data || [])
+        setTotalCount(result.count || 0)
+        console.log('[Sales Pagination Debug] Order View results:', {
+          orders: result.data?.length || 0,
+          count: result.count,
+        })
+      } else {
+        // Line View: Use existing Supabase query (raw lines)
+        const offset = (filters.page - 1) * filters.perPage
+        const from = offset
+        const to = offset + filters.perPage - 1
+
+        const supabase = createClient()
+
+        // Build query with appropriate order by field
+        let query = supabase
+          .from('sales_orders')
+          .select('*', { count: 'exact' })
+
+        // Apply order by based on date basis (TikTok timestamps)
+        if (dateBasis === 'order') {
+          query = query.order('created_time', { ascending: false })
+        } else {
+          query = query.order('paid_time', { ascending: false })
+        }
+
+        // Platform filter (UX v2)
+        if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
+          query = query.eq('source_platform', filters.sourcePlatform)
+        }
+
+        // Status filter (multi-select, UX v2) - now filters by platform_status (Thai values)
+        if (filters.status && filters.status.length > 0) {
+          query = query.in('platform_status', filters.status)
+        }
+
+        // Payment status filter (UX v2)
+        if (filters.paymentStatus && filters.paymentStatus !== 'all') {
+          query = query.eq('payment_status', filters.paymentStatus)
+        }
+
+        // Date range filters based on selected date basis (TikTok timestamps)
+        if (dateBasis === 'order') {
+          if (filters.startDate) {
+            query = query.gte('created_time', filters.startDate)
+          }
+          if (filters.endDate) {
+            const endBangkok = endOfDayBangkok(filters.endDate)
+            query = query.lte('created_time', endBangkok.toISOString())
+          }
+        } else {
+          // For paid basis, also filter out null paid_time
+          query = query.not('paid_time', 'is', null)
+          if (filters.startDate) {
+            query = query.gte('paid_time', filters.startDate)
+          }
+          if (filters.endDate) {
+            const endBangkok = endOfDayBangkok(filters.endDate)
+            query = query.lte('paid_time', endBangkok.toISOString())
+          }
+        }
+
+        // Search filter (order_id, product_name, external_order_id)
+        if (filters.search && filters.search.trim()) {
+          query = query.or(
+            `order_id.ilike.%${filters.search}%,product_name.ilike.%${filters.search}%,external_order_id.ilike.%${filters.search}%`
+          )
+        }
+
+        // Pagination
+        query = query.range(from, to)
+
+        const { data, error: fetchError, count } = await query
+
+        // Log query results for debugging
+        console.log('[Sales Pagination Debug] Line View results:', {
+          rows: data?.length || 0,
+          count,
+          error: fetchError?.message || null,
+        })
+
+        if (fetchError) throw fetchError
+
+        setOrders(data || [])
+        setTotalCount(count || 0)
       }
-
-      // Status filter (multi-select, UX v2) - now filters by platform_status (Thai values)
-      if (filters.status && filters.status.length > 0) {
-        query = query.in('platform_status', filters.status)
-      }
-
-      // Payment status filter (UX v2)
-      if (filters.paymentStatus && filters.paymentStatus !== 'all') {
-        query = query.eq('payment_status', filters.paymentStatus)
-      }
-
-      // CRITICAL: Date range filters now use paid_at (not order_date)
-      // Only paid orders contribute to revenue
-      if (filters.startDate) {
-        query = query.gte('paid_at', filters.startDate)
-      }
-
-      if (filters.endDate) {
-        // Use Bangkok timezone for end of day
-        const endBangkok = endOfDayBangkok(filters.endDate)
-        query = query.lte('paid_at', endBangkok.toISOString())
-      }
-
-      // Search filter (order_id, product_name, external_order_id)
-      if (filters.search && filters.search.trim()) {
-        query = query.or(
-          `order_id.ilike.%${filters.search}%,product_name.ilike.%${filters.search}%,external_order_id.ilike.%${filters.search}%`
-        )
-      }
-
-      // Pagination
-      const from = (filters.page - 1) * filters.perPage
-      const to = from + filters.perPage - 1
-      query = query.range(from, to)
-
-      const { data, error: fetchError, count } = await query
-
-      if (fetchError) throw fetchError
-
-      setOrders(data || [])
-      setTotalCount(count || 0)
     } catch (err) {
-      console.error('Error fetching orders:', err)
-      setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการโหลดข้อมูล')
+      console.error('[Sales Pagination Error]:', err)
+      const errorMessage = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการโหลดข้อมูล'
+      setError(`เกิดข้อผิดพลาด: ${errorMessage}`)
     } finally {
       setLoading(false)
     }
   }
 
   const handleFilterChange = (key: keyof SalesOrderFilters, value: string | string[] | number | undefined) => {
-    const newFilters = { ...filters, [key]: value, page: 1 }
-    setFilters(newFilters)
-    updateURL(newFilters)
+    setFilters(prev => ({ ...prev, [key]: value, page: 1 }))
   }
 
   const handleDateRangeChange = (range: DateRangeResult) => {
-    const newFilters = {
-      ...filters,
+    setFilters(prev => ({
+      ...prev,
       startDate: formatBangkok(range.startDate, 'yyyy-MM-dd'),
       endDate: formatBangkok(range.endDate, 'yyyy-MM-dd'),
       page: 1
-    }
-    setFilters(newFilters)
-    updateURL(newFilters)
+    }))
   }
 
   const handleStatusToggle = (status: string) => {
-    const currentStatuses = filters.status || []
-    const newStatuses = currentStatuses.includes(status)
-      ? currentStatuses.filter((s) => s !== status)
-      : [...currentStatuses, status]
-
-    const newFilters = { ...filters, status: newStatuses, page: 1 }
-    setFilters(newFilters)
-    updateURL(newFilters)
+    setFilters(prev => {
+      const currentStatuses = prev.status || []
+      const newStatuses = currentStatuses.includes(status)
+        ? currentStatuses.filter((s) => s !== status)
+        : [...currentStatuses, status]
+      return { ...prev, status: newStatuses, page: 1 }
+    })
   }
 
   const handlePageChange = (newPage: number) => {
-    const newFilters = { ...filters, page: newPage }
-    setFilters(newFilters)
-    updateURL(newFilters)
+    setFilters(prev => ({ ...prev, page: newPage }))
   }
 
   const handlePageSizeChange = (newPageSize: number) => {
-    const newFilters = { ...filters, perPage: newPageSize, page: 1 }
-    setFilters(newFilters)
-    updateURL(newFilters)
+    // Clamp perPage to 1-200
+    const clamped = Math.max(1, Math.min(200, newPageSize))
+    setFilters(prev => ({ ...prev, perPage: clamped, page: 1 }))
   }
 
   const handleJumpToPage = (pageInput: string) => {
@@ -285,6 +454,20 @@ export default function SalesPage() {
     if (pageNum >= 1 && pageNum <= totalPages) {
       handlePageChange(pageNum)
     }
+  }
+
+  const handleDateBasisChange = (newBasis: 'order' | 'paid') => {
+    setDateBasis(newBasis)
+  }
+
+  const handleViewChange = (newView: 'order' | 'line') => {
+    setView(newView)
+    setFilters(prev => ({ ...prev, page: 1 })) // Reset to page 1 when changing view
+  }
+
+  const handleViewOrderDetail = (orderId: string) => {
+    setSelectedOrderId(orderId)
+    setShowDetailDrawer(true)
   }
 
   const formatDate = (dateString: string) => {
@@ -403,7 +586,7 @@ export default function SalesPage() {
     }
   }
 
-  const handleExport = async () => {
+  const handleExport = async (exportView: 'order' | 'line') => {
     setExportLoading(true)
     setError(null)
 
@@ -415,6 +598,8 @@ export default function SalesPage() {
         startDate: filters.startDate,
         endDate: filters.endDate,
         search: filters.search,
+        view: exportView, // Explicit export view
+        dateBasis: dateBasis, // Pass dateBasis for consistency
       })
 
       if (!result.success || !result.csv || !result.filename) {
@@ -446,15 +631,73 @@ export default function SalesPage() {
         <h1 className="text-3xl font-bold">Sales Orders</h1>
       </div>
 
-      {/* Summary Bar - Above Filters */}
-      <SalesSummaryBar
+      {/* Story Panel (60/40 Layout) - Above Filters */}
+      <SalesStoryPanel
         aggregates={aggregates}
         loading={aggregatesLoading}
         error={aggregatesError}
       />
 
+      {/* Secondary Row: Units / AOV / Cancelled Amount */}
+      <SalesSummaryBar
+        aggregates={aggregates}
+        loading={aggregatesLoading}
+        error={aggregatesError}
+        tiktokAggregates={tiktokAggregates}
+        tiktokLoading={tiktokAggregatesLoading}
+        showOnlySecondaryRow={true}
+      />
+
       {/* Filters - UX v2 */}
       <div className="space-y-4">
+        {/* Row -1: View Toggle */}
+        <div className="flex items-center gap-4 p-3 border rounded-lg bg-purple-50 dark:bg-purple-950">
+          <label className="text-sm font-medium">มุมมอง:</label>
+          <div className="flex items-center gap-2">
+            <Button
+              variant={view === 'order' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => handleViewChange('order')}
+            >
+              Order View (1 row per order)
+            </Button>
+            <Button
+              variant={view === 'line' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => handleViewChange('line')}
+            >
+              Line View (raw lines)
+            </Button>
+          </div>
+          <span className="text-xs text-muted-foreground ml-auto">
+            {view === 'order' ? 'แสดง 1 แถวต่อออเดอร์ (รวม SKU หลายตัว)' : 'แสดงทุก line items (1 แถวต่อ SKU)'}
+          </span>
+        </div>
+
+        {/* Row 0: Date Basis Selector */}
+        <div className="flex items-center gap-4 p-3 border rounded-lg bg-blue-50 dark:bg-blue-950">
+          <label className="text-sm font-medium">กรองวันที่ตาม:</label>
+          <div className="flex items-center gap-2">
+            <Button
+              variant={dateBasis === 'order' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => handleDateBasisChange('order')}
+            >
+              วันสั่งซื้อ (Order Date)
+            </Button>
+            <Button
+              variant={dateBasis === 'paid' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => handleDateBasisChange('paid')}
+            >
+              วันชำระเงิน (Paid Date)
+            </Button>
+          </div>
+          <span className="text-xs text-muted-foreground ml-auto">
+            {dateBasis === 'order' ? 'แสดงทุกออเดอร์ตามวันที่สั่ง' : 'แสดงเฉพาะออเดอร์ที่ชำระเงินแล้ว'}
+          </span>
+        </div>
+
         {/* Row 1: Platform, Status Multi-Select, Payment Status */}
         <div className="flex flex-col gap-4 md:flex-row md:items-end">
           <div className="flex-1 space-y-2">
@@ -550,7 +793,7 @@ export default function SalesPage() {
       </div>
 
       {/* Action Buttons */}
-      <div className="flex gap-2">
+      <div className="flex gap-2 flex-wrap">
         <Button onClick={() => setShowAddDialog(true)}>
           <Plus className="mr-2 h-4 w-4" />
           Add Order
@@ -559,14 +802,24 @@ export default function SalesPage() {
           <FileUp className="mr-2 h-4 w-4" />
           Import
         </Button>
-        <Button
-          variant="outline"
-          onClick={handleExport}
-          disabled={exportLoading || loading || orders.length === 0}
-        >
-          <Download className="mr-2 h-4 w-4" />
-          {exportLoading ? 'Exporting...' : 'Export CSV'}
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => handleExport('line')}
+            disabled={exportLoading || loading || orders.length === 0}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            {exportLoading ? 'Exporting...' : 'Export Lines CSV'}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => handleExport('order')}
+            disabled={exportLoading || loading || (view === 'order' ? groupedOrders.length === 0 : orders.length === 0)}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            {exportLoading ? 'Exporting...' : 'Export Orders CSV'}
+          </Button>
+        </div>
       </div>
 
       {/* Error Message */}
@@ -576,23 +829,38 @@ export default function SalesPage() {
         </div>
       )}
 
-      {/* Table - UX v2 with Platform Status & Payment */}
+      {/* Table - Order View / Line View */}
       <div className="rounded-md border bg-white overflow-x-auto">
         <Table>
           <TableHeader className="sticky top-0 bg-white z-10">
-            <TableRow>
-              <TableHead className="min-w-[140px]">Order ID</TableHead>
-              <TableHead className="min-w-[100px]">Platform</TableHead>
-              <TableHead className="min-w-[200px]">Product Name</TableHead>
-              <TableHead className="text-right min-w-[60px]">Qty</TableHead>
-              <TableHead className="text-right min-w-[120px]">Amount</TableHead>
-              <TableHead className="min-w-[140px]">Status</TableHead>
-              <TableHead className="min-w-[120px]">Status Group</TableHead>
-              <TableHead className="min-w-[80px]">Payment</TableHead>
-              <TableHead className="min-w-[100px]">Paid Date</TableHead>
-              <TableHead className="min-w-[120px]">Order Date</TableHead>
-              <TableHead className="text-right min-w-[100px]">Actions</TableHead>
-            </TableRow>
+            {view === 'order' ? (
+              <TableRow>
+                <TableHead className="min-w-[140px]">Order ID</TableHead>
+                <TableHead className="min-w-[100px]">Platform</TableHead>
+                <TableHead className="min-w-[140px]">Status</TableHead>
+                <TableHead className="min-w-[80px]">Payment</TableHead>
+                <TableHead className="text-right min-w-[80px]">Total Units</TableHead>
+                <TableHead className="text-right min-w-[120px]">Order Amount</TableHead>
+                <TableHead className="min-w-[100px]">Paid Date</TableHead>
+                <TableHead className="min-w-[110px]">Shipped Date</TableHead>
+                <TableHead className="min-w-[120px]">Order Date</TableHead>
+                <TableHead className="text-right min-w-[80px]">Actions</TableHead>
+              </TableRow>
+            ) : (
+              <TableRow>
+                <TableHead className="min-w-[140px]">Order ID</TableHead>
+                <TableHead className="min-w-[100px]">Platform</TableHead>
+                <TableHead className="min-w-[200px]">Product Name</TableHead>
+                <TableHead className="text-right min-w-[60px]">Qty</TableHead>
+                <TableHead className="text-right min-w-[120px]">Amount</TableHead>
+                <TableHead className="min-w-[140px]">Status</TableHead>
+                <TableHead className="min-w-[120px]">Status Group</TableHead>
+                <TableHead className="min-w-[80px]">Payment</TableHead>
+                <TableHead className="min-w-[100px]">Paid Date</TableHead>
+                <TableHead className="min-w-[120px]">Order Date</TableHead>
+                <TableHead className="text-right min-w-[100px]">Actions</TableHead>
+              </TableRow>
+            )}
           </TableHeader>
           <TableBody>
             {loading ? (
@@ -625,18 +893,94 @@ export default function SalesPage() {
                   </TableCell>
                 </TableRow>
               ))
-            ) : orders.length === 0 ? (
-              // Empty state
+            ) : view === 'order' && groupedOrders.length === 0 ? (
+              // Empty state (Order View)
               <TableRow>
-                <TableCell colSpan={11} className="h-32 text-center">
-                  <div className="flex flex-col items-center justify-center text-muted-foreground">
+                <TableCell colSpan={10} className="h-32 text-center">
+                  <div className="flex flex-col items-center justify-center text-muted-foreground space-y-2">
                     <p className="text-lg font-medium">ไม่พบข้อมูล</p>
                     <p className="text-sm">No orders found</p>
+                    {dateBasis === 'paid' && (
+                      <div className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                        <p>💡 ถ้าไฟล์ import ไม่มี Paid Date ให้ลอง</p>
+                        <Button
+                          variant="link"
+                          size="sm"
+                          onClick={() => handleDateBasisChange('order')}
+                          className="text-amber-600 dark:text-amber-400 underline"
+                        >
+                          สลับไปดู "วันสั่งซื้อ (Order Date)"
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 </TableCell>
               </TableRow>
+            ) : view === 'line' && orders.length === 0 ? (
+              // Empty state (Line View)
+              <TableRow>
+                <TableCell colSpan={11} className="h-32 text-center">
+                  <div className="flex flex-col items-center justify-center text-muted-foreground space-y-2">
+                    <p className="text-lg font-medium">ไม่พบข้อมูล</p>
+                    <p className="text-sm">No orders found</p>
+                    {dateBasis === 'paid' && (
+                      <div className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                        <p>💡 ถ้าไฟล์ import ไม่มี Paid Date ให้ลอง</p>
+                        <Button
+                          variant="link"
+                          size="sm"
+                          onClick={() => handleDateBasisChange('order')}
+                          className="text-amber-600 dark:text-amber-400 underline"
+                        >
+                          สลับไปดู "วันสั่งซื้อ (Order Date)"
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </TableCell>
+              </TableRow>
+            ) : view === 'order' ? (
+              // Order View rows
+              groupedOrders.map((order) => (
+                <TableRow key={order.order_id}>
+                  <TableCell className="font-medium" title={order.external_order_id || order.order_id}>
+                    <div className="max-w-[140px] truncate">
+                      {order.external_order_id || order.order_id}
+                    </div>
+                  </TableCell>
+                  <TableCell>{getPlatformLabel(order.source_platform || order.marketplace)}</TableCell>
+                  <TableCell>{getPlatformStatusBadge(order.platform_status)}</TableCell>
+                  <TableCell>{getPaymentStatusBadge(order.payment_status)}</TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex flex-col items-end">
+                      <span className="font-medium">{order.total_units}</span>
+                      <span className="text-xs text-muted-foreground">({order.sku_count} SKUs)</span>
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-right font-medium">
+                    ฿{formatCurrency(order.order_amount)}
+                  </TableCell>
+                  <TableCell>
+                    {order.paid_at ? formatDate(order.paid_at) : '-'}
+                  </TableCell>
+                  <TableCell>
+                    {order.shipped_at ? formatDate(order.shipped_at) : '-'}
+                  </TableCell>
+                  <TableCell>{formatDate(order.order_date)}</TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleViewOrderDetail(order.order_id)}
+                      title="View Details"
+                    >
+                      <Eye className="h-4 w-4" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))
             ) : (
-              // Data rows - UX v2 with platform status & payment
+              // Line View rows
               orders.map((order) => (
                 <TableRow key={order.id}>
                   <TableCell className="font-medium" title={order.external_order_id || order.order_id}>
@@ -792,6 +1136,13 @@ export default function SalesPage() {
         open={showImportDialog}
         onOpenChange={setShowImportDialog}
         onSuccess={fetchOrders}
+      />
+
+      {/* Order Detail Drawer */}
+      <OrderDetailDrawer
+        orderId={selectedOrderId}
+        open={showDetailDrawer}
+        onOpenChange={setShowDetailDrawer}
       />
     </div>
   )

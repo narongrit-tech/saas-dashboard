@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   Dialog,
   DialogContent,
@@ -16,13 +17,15 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { FileSpreadsheet, CheckCircle2, AlertCircle, Loader2, Info } from 'lucide-react'
+import { FileSpreadsheet, CheckCircle2, AlertCircle, Loader2, Info, ExternalLink } from 'lucide-react'
+import { useToast } from '@/hooks/use-toast'
 import {
   createImportBatch,
   importSalesChunk,
   finalizeImportBatch,
+  replaceSalesImportBatch,
 } from '@/app/(dashboard)/sales/sales-import-actions'
-import { SalesImportPreview, ParsedSalesRow } from '@/types/sales-import'
+import { SalesImportPreview, ParsedSalesRow, SalesImportResult } from '@/types/sales-import'
 import { calculateFileHash, toPlain } from '@/lib/file-hash'
 import { parseTikTokFile } from '@/lib/sales-parser'
 
@@ -87,15 +90,23 @@ function buildFinalizeFormData(
 }
 
 export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImportDialogProps) {
+  const router = useRouter()
+  const { toast } = useToast()
   const [step, setStep] = useState<Step>('upload')
   const [file, setFile] = useState<File | null>(null)
   const [fileBuffer, setFileBuffer] = useState<ArrayBuffer | null>(null)
   const [preview, setPreview] = useState<SalesImportPreview | null>(null)
   const [parsedData, setParsedData] = useState<ParsedSalesRow[]>([])
-  const [result, setResult] = useState<{ success: boolean; message: string } | null>(null)
+  const [result, setResult] = useState<SalesImportResult | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null)
-  const [duplicateInfo, setDuplicateInfo] = useState<{ fileName: string; importedAt: string } | null>(null)
+  const [duplicateInfo, setDuplicateInfo] = useState<{
+    fileName: string;
+    importedAt: string;
+    existingBatchId?: string;
+    existingRowCount?: number;
+    fileHash?: string;
+  } | null>(null)
   const [processingInfo, setProcessingInfo] = useState<{ batchId?: string; fileName?: string; createdAt?: string } | null>(null)
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -141,7 +152,19 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
   }
 
   const handleConfirmImport = async (allowReimport = false) => {
+    console.log('[IMPORT] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+    console.log('[IMPORT] START handleConfirmImport')
+    console.log('[IMPORT] allowReimport:', allowReimport)
+    console.log('[IMPORT] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+
     if (!file || !fileBuffer || !preview || !preview.success || parsedData.length === 0) {
+      console.error('[IMPORT] Pre-condition failed:', {
+        hasFile: !!file,
+        hasFileBuffer: !!fileBuffer,
+        hasPreview: !!preview,
+        previewSuccess: preview?.success,
+        parsedDataLength: parsedData.length
+      })
       return
     }
 
@@ -152,16 +175,21 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
     try {
       // Calculate file hash (client-side)
       const fileHash = await calculateFileHash(fileBuffer)
+      console.log('[IMPORT] File hash calculated:', fileHash.substring(0, 16) + '...')
 
       // Sanitize parsed data to plain objects (remove Date objects, etc.)
       const plainData = toPlain(parsedData)
+      console.log('[IMPORT] Plain data rows:', plainData.length)
 
       // Determine date range for batch
       const dateRange = plainData.length > 0
         ? `${plainData[0].order_date} to ${plainData[plainData.length - 1].order_date}`
         : 'N/A'
 
-      // Step 1: Create import batch (with allowReimport flag)
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      // STEP 1: Create import batch
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      console.log('[IMPORT] STEP 1: Calling createImportBatch')
       const batchFormData = buildBatchFormData(
         fileHash,
         file.name,
@@ -170,10 +198,18 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
         allowReimport
       )
       const batchResult = await createImportBatch(batchFormData)
+      console.log('[IMPORT] createImportBatch result:', {
+        status: batchResult.status,
+        success: batchResult.success,
+        batchId: batchResult.batchId,
+        error: batchResult.error
+      })
 
-      // Handle duplicate file detection
+      // Handle duplicate file detection - THROW ERROR instead of early return
       if (batchResult.status === 'duplicate_file') {
-        // Format timestamp from ISO to Thai format
+        console.log('[IMPORT] Server returned: DUPLICATE_FILE')
+        console.log('[IMPORT] Message:', batchResult.message)
+
         let formattedDate = 'Unknown'
         if (batchResult.importedAt) {
           try {
@@ -194,15 +230,29 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
         setDuplicateInfo({
           fileName: batchResult.fileName || file.name,
           importedAt: formattedDate,
+          existingBatchId: batchResult.existingBatchId,
+          existingRowCount: batchResult.existingRowCount,
+          fileHash,
         })
         setIsProcessing(false)
         setStep('duplicate')
-        return
+
+        // Show toast notification
+        toast({
+          variant: 'default',
+          title: 'ไฟล์ซ้ำ',
+          description: `ไฟล์นี้ถูก import ไปแล้วเมื่อ ${formattedDate} (${batchResult.existingRowCount || 0} รายการ)`,
+        })
+
+        // THROW to prevent chunk/finalize from running
+        throw new Error(`DUPLICATE_FILE: File imported at ${formattedDate}`)
       }
 
-      // Handle already processing detection
+      // Handle already processing detection - THROW ERROR instead of early return
       if (batchResult.status === 'already_processing') {
-        // Format timestamp from ISO to Thai format
+        console.log('[IMPORT] Server returned: ALREADY_PROCESSING')
+        console.log('[IMPORT] Message:', batchResult.message)
+
         let formattedDate = 'Unknown'
         if (batchResult.createdAt) {
           try {
@@ -227,32 +277,47 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
         })
         setIsProcessing(false)
         setStep('already_processing')
-        return
+
+        // Show toast notification
+        toast({
+          variant: 'default',
+          title: 'กำลัง import อยู่',
+          description: `ไฟล์นี้กำลังถูก import อยู่ (เริ่มเมื่อ ${formattedDate})`,
+        })
+
+        // THROW to prevent chunk/finalize from running
+        throw new Error(`ALREADY_PROCESSING: File started at ${formattedDate}`)
       }
 
+      // Batch creation failed - THROW ERROR
       if (!batchResult.success || !batchResult.batchId) {
-        setResult({
-          success: false,
-          message: batchResult.error || 'Failed to create import batch'
-        })
-        setIsProcessing(false)
-        setStep('result')
-        return
+        const errorMsg = batchResult.error || 'Failed to create import batch'
+        console.error('[IMPORT] Batch creation failed:', errorMsg)
+        throw new Error(`BATCH_FAILED: ${errorMsg}`)
       }
 
       const batchId = batchResult.batchId
+      console.log('[IMPORT] ✅ Batch created successfully:', batchId)
 
-      // Step 2: Split data into chunks (500 rows per chunk)
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      // STEP 2: Import chunks sequentially
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
       const CHUNK_SIZE = 500
       const chunks: ParsedSalesRow[][] = []
       for (let i = 0; i < plainData.length; i += CHUNK_SIZE) {
         chunks.push(plainData.slice(i, i + CHUNK_SIZE))
       }
 
-      // Step 3: Import chunks sequentially
+      console.log('[IMPORT] STEP 2: Importing chunks')
+      console.log('[IMPORT] Total chunks:', chunks.length)
+
       let totalInserted = 0
       for (let i = 0; i < chunks.length; i++) {
         setImportProgress({ current: i + 1, total: chunks.length })
+
+        console.log(`[IMPORT] ━━━ Chunk ${i + 1}/${chunks.length} ━━━`)
+        console.log(`[IMPORT] Chunk rows:`, chunks[i].length)
+        console.log(`[IMPORT] Calling importSalesChunk...`)
 
         const chunkFormData = buildChunkFormData(
           batchId,
@@ -260,49 +325,124 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
           i,
           chunks.length
         )
-        const chunkResult = await importSalesChunk(chunkFormData)
 
+        const chunkResult = await importSalesChunk(chunkFormData)
+        console.log(`[IMPORT] Chunk ${i + 1} result:`, {
+          success: chunkResult.success,
+          inserted: chunkResult.inserted,
+          error: chunkResult.error
+        })
+
+        // Chunk failed - THROW ERROR
         if (!chunkResult.success) {
-          // Chunk failed - finalize with error
-          setResult({
-            success: false,
-            message: `Import failed at chunk ${i + 1}/${chunks.length}: ${chunkResult.error || 'Unknown error'}`
-          })
-          setIsProcessing(false)
-          setStep('result')
-          return
+          const errorMsg = `Chunk ${i + 1}/${chunks.length} failed: ${chunkResult.error || 'Unknown error'}`
+          console.error('[IMPORT] Chunk error:', errorMsg)
+          throw new Error(`CHUNK_FAILED: ${errorMsg}`)
         }
 
         totalInserted += chunkResult.inserted
+        console.log(`[IMPORT] Chunk ${i + 1} success, total inserted so far:`, totalInserted)
       }
 
-      // Step 4: Finalize import batch
+      console.log('[IMPORT] ✅ All chunks imported successfully, total:', totalInserted)
+
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      // STEP 3: Finalize import batch (MUST RUN)
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      console.log('[IMPORT] STEP 3: Calling finalizeImportBatch')
+      console.log('[IMPORT] Batch ID:', batchId)
+      console.log('[IMPORT] Total inserted:', totalInserted)
+
       const finalizeFormData = buildFinalizeFormData(
         batchId,
         totalInserted,
         JSON.stringify(plainData)
       )
-      const finalResult = await finalizeImportBatch(finalizeFormData)
 
-      if (finalResult.success) {
-        setResult({
-          success: true,
-          message: `Import สำเร็จ: ${finalResult.inserted} รายการ${finalResult.summary ? ` | รายได้รวม: ฿${finalResult.summary.totalRevenue.toLocaleString()}` : ''}`
-        })
-        onSuccess()
-      } else {
-        setResult({
-          success: false,
-          message: finalResult.error || 'Import failed'
-        })
-      }
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-      setResult({
-        success: false,
-        message: errorMessage
+      const finalResult = await finalizeImportBatch(finalizeFormData)
+      console.log('[IMPORT] finalizeImportBatch result:', {
+        success: finalResult.success,
+        inserted: finalResult.inserted,
+        updated: finalResult.updated,
+        error: finalResult.error
       })
+
+      // Finalize failed - THROW ERROR
+      if (!finalResult.success) {
+        const errorMsg = finalResult.error || 'Finalize failed'
+        console.error('[IMPORT] Finalize error:', errorMsg)
+        throw new Error(`FINALIZE_FAILED: ${errorMsg}`)
+      }
+
+      console.log('[IMPORT] ✅ ✅ ✅ IMPORT SUCCESS ✅ ✅ ✅')
+      console.log('[IMPORT] Final result:', {
+        inserted: finalResult.inserted,
+        updated: finalResult.updated,
+        dateRange: finalResult.dateRange
+      })
+
+      setResult(finalResult)
+
+      // Show success toast
+      toast({
+        title: 'Import Success',
+        description: `นำเข้า ${finalResult.inserted} รายการ${finalResult.skipped > 0 ? ` (ข้าม ${finalResult.skipped} duplicates)` : ''}${finalResult.updated > 0 ? `, อัปเดต ${finalResult.updated} รายการ` : ''}`,
+      })
+
+      onSuccess()
+
+    } catch (error: unknown) {
+      console.error('[IMPORT] ❌❌❌ IMPORT FAILED ❌❌❌')
+      console.error('[IMPORT] Error:', error)
+      console.error('[IMPORT] Error stack:', error instanceof Error ? error.stack : 'N/A')
+
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+
+      // Check if error is from duplicate/already_processing - don't show error result
+      if (errorMessage.startsWith('DUPLICATE_FILE:') || errorMessage.startsWith('ALREADY_PROCESSING:')) {
+        console.log('[IMPORT] User action required (duplicate/processing), UI already updated')
+        return
+      }
+
+      // Real error - show error result with user-friendly messages
+      let userFriendlyError = errorMessage.replace(/^(BATCH_FAILED|CHUNK_FAILED|FINALIZE_FAILED): /, '')
+
+      // Add helpful context based on error type
+      if (errorMessage.includes('BATCH_FAILED')) {
+        userFriendlyError = `ไม่สามารถสร้าง import batch ได้\n\nรายละเอียด: ${userFriendlyError}\n\nกรุณาลองอีกครั้งหรือติดต่อผู้ดูแลระบบ`
+      } else if (errorMessage.includes('CHUNK_FAILED')) {
+        userFriendlyError = `การนำเข้าข้อมูลล้มเหลว\n\nรายละเอียด: ${userFriendlyError}\n\nอาจเกิดจากข้อมูลไม่ถูกต้องหรือปัญหาการเชื่อมต่อ กรุณาตรวจสอบไฟล์และลองอีกครั้ง`
+      } else if (errorMessage.includes('FINALIZE_FAILED')) {
+        userFriendlyError = `ไม่สามารถตรวจสอบผลการ import ได้\n\nรายละเอียด: ${userFriendlyError}\n\nกรุณาตรวจสอบว่าข้อมูลถูกนำเข้าสำเร็จหรือไม่ใน Sales Orders`
+      } else if (errorMessage.includes('Authentication')) {
+        userFriendlyError = `การยืนยันตัวตนล้มเหลว\n\nกรุณา login ใหม่แล้วลองอีกครั้ง`
+      } else if (errorMessage.includes('RLS')) {
+        userFriendlyError = `ไม่มีสิทธิ์เข้าถึงข้อมูล\n\nกรุณาติดต่อผู้ดูแลระบบเพื่อตรวจสอบ permissions`
+      }
+
+      const errorResult: SalesImportResult = {
+        success: false,
+        error: userFriendlyError,
+        inserted: 0,
+        updated: 0,
+        skipped: 0,
+        errors: 0,
+      }
+      setResult(errorResult)
+
+      // Show error toast with truncated message
+      const toastMessage = userFriendlyError.split('\n')[0] // First line only
+      toast({
+        variant: 'destructive',
+        title: 'Import ล้มเหลว',
+        description: toastMessage,
+      })
+
     } finally {
+      console.log('[IMPORT] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+      console.log('[IMPORT] END handleConfirmImport')
+      console.log('[IMPORT] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+
       setIsProcessing(false)
       setImportProgress(null)
       setStep('result')
@@ -348,8 +488,88 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
   }, [step, file, preview, isProcessing])
 
   const handleReimport = () => {
-    // Proceed to import with allowReimport=true
+    // Proceed to import with allowReimport=true (update mode)
     handleConfirmImport(true)
+  }
+
+  const handleReplaceAndReimport = async () => {
+    if (!duplicateInfo?.existingBatchId || !duplicateInfo?.fileHash) {
+      toast({
+        variant: 'destructive',
+        title: 'ข้อมูลไม่ครบ',
+        description: 'ไม่พบข้อมูล batch เดิม กรุณาลองใหม่',
+      })
+      return
+    }
+
+    console.log('[REPLACE] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+    console.log('[REPLACE] START - Replace and re-import')
+    console.log('[REPLACE] Existing batch:', duplicateInfo.existingBatchId)
+    console.log('[REPLACE] Existing rows:', duplicateInfo.existingRowCount)
+
+    setIsProcessing(true)
+    setStep('importing')
+
+    try {
+      // STEP 1: Replace (delete old data)
+      console.log('[REPLACE] STEP 1: Calling replaceSalesImportBatch...')
+      const replaceFormData = new FormData()
+      replaceFormData.append('existingBatchId', duplicateInfo.existingBatchId)
+      replaceFormData.append('marketplace', 'tiktok_shop')
+      replaceFormData.append('reportType', 'sales_order_sku_list')
+      replaceFormData.append('fileHash', duplicateInfo.fileHash)
+
+      const replaceResult = await replaceSalesImportBatch(replaceFormData)
+      console.log('[REPLACE] Replace result:', replaceResult)
+
+      if (!replaceResult.success) {
+        throw new Error(`Replace failed: ${replaceResult.error}`)
+      }
+
+      console.log('[REPLACE] ✅ Replace success - deleted ${replaceResult.deletedCount} rows')
+
+      // Show progress toast
+      toast({
+        title: 'ลบข้อมูลเดิมแล้ว',
+        description: `ลบ ${replaceResult.deletedCount} รายการเดิม กำลังนำเข้าข้อมูลใหม่...`,
+      })
+
+      // STEP 2: Re-import with allowReimport=true
+      console.log('[REPLACE] STEP 2: Re-importing with allowReimport=true...')
+      await handleConfirmImport(true)
+
+      console.log('[REPLACE] ✅ REPLACE AND REIMPORT SUCCESS')
+      console.log('[REPLACE] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+
+    } catch (error: unknown) {
+      console.error('[REPLACE] ❌ Replace and re-import failed:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+
+      // Check if error is from import flow (not replace)
+      if (!errorMessage.includes('Replace failed')) {
+        // Import failed after replace - data already deleted!
+        console.error('[REPLACE] CRITICAL: Data deleted but import failed!')
+      }
+
+      const errorResult: SalesImportResult = {
+        success: false,
+        error: `Replace and re-import failed: ${errorMessage}`,
+        inserted: 0,
+        updated: 0,
+        skipped: 0,
+        errors: 0,
+      }
+      setResult(errorResult)
+      setStep('result')
+
+      toast({
+        variant: 'destructive',
+        title: 'Replace ล้มเหลว',
+        description: errorMessage,
+      })
+    } finally {
+      setIsProcessing(false)
+    }
   }
 
   const handleCancelReimport = () => {
@@ -514,7 +734,7 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
             <Alert className="border-amber-500 bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-100">
               <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
               <AlertDescription>
-                <div className="space-y-2">
+                <div className="space-y-3">
                   <p className="font-semibold text-amber-900 dark:text-amber-100">
                     ไฟล์นี้ถูก import ไปแล้ว
                   </p>
@@ -524,9 +744,23 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
                   <p className="text-sm text-amber-800 dark:text-amber-200">
                     <strong>นำเข้าเมื่อ:</strong> {duplicateInfo.importedAt}
                   </p>
-                  <p className="text-sm text-amber-700 dark:text-amber-300">
-                    คุณสามารถนำเข้าซ้ำเพื่ออัปเดตข้อมูล (สถานะ, วันที่จัดส่ง) หรือเพิ่มออเดอร์ใหม่ที่มีในไฟล์
-                  </p>
+                  {duplicateInfo.existingRowCount !== undefined && (
+                    <p className="text-sm text-amber-800 dark:text-amber-200">
+                      <strong>จำนวนรายการ:</strong> {duplicateInfo.existingRowCount} รายการ
+                    </p>
+                  )}
+                  <div className="border-t border-amber-300 dark:border-amber-700 pt-2 mt-2">
+                    <p className="text-sm text-amber-700 dark:text-amber-300 font-medium mb-1">
+                      💡 คุณต้องการทำอย่างไร?
+                    </p>
+                    <ul className="list-disc list-inside text-sm text-amber-700 dark:text-amber-300 space-y-1">
+                      <li><strong>อัปเดต:</strong> รายการที่ซ้ำจะถูกอัปเดต, รายการใหม่จะถูกเพิ่ม (ข้อมูลเดิมยังอยู่)</li>
+                      <li><strong>แทนที่:</strong> ลบข้อมูลเดิมทั้งหมดแล้วนำเข้าใหม่ (เริ่มต้นใหม่จากศูนย์)</li>
+                    </ul>
+                    <p className="text-xs text-red-600 dark:text-red-400 mt-2 font-medium">
+                      ⚠️ คำเตือน: การแทนที่จะลบข้อมูลเดิมถาวร กรุณาตรวจสอบให้แน่ใจก่อนดำเนินการ
+                    </p>
+                  </div>
                 </div>
               </AlertDescription>
             </Alert>
@@ -535,9 +769,13 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
               <Button variant="outline" onClick={handleCancelReimport}>
                 ยกเลิก
               </Button>
-              <Button onClick={handleReimport} disabled={isProcessing}>
+              <Button variant="secondary" onClick={handleReimport} disabled={isProcessing}>
                 {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                นำเข้าซ้ำเพื่ออัปเดตข้อมูล
+                อัปเดตข้อมูล
+              </Button>
+              <Button variant="destructive" onClick={handleReplaceAndReimport} disabled={isProcessing}>
+                {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                แทนที่ข้อมูลเดิม
               </Button>
             </div>
           </div>
@@ -600,11 +838,78 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
               ) : (
                 <AlertCircle className="h-4 w-4" />
               )}
-              <AlertDescription>{result.message}</AlertDescription>
+              <AlertDescription>
+                {result.success ? (
+                  <div className="space-y-2">
+                    <p className="font-semibold text-green-900 dark:text-green-100">
+                      Import สำเร็จ
+                    </p>
+                    <div className="text-sm space-y-1">
+                      {result.batchId && (
+                        <p className="text-muted-foreground">
+                          <strong>Batch ID:</strong> {result.batchId.substring(0, 8)}...
+                        </p>
+                      )}
+                      <p>
+                        <strong>นำเข้า:</strong> {result.inserted} รายการ
+                        {result.updated > 0 && <span className="ml-2"><strong>อัปเดต:</strong> {result.updated} รายการ</span>}
+                        {result.skipped > 0 && <span className="ml-2"><strong>ข้าม:</strong> {result.skipped} รายการ</span>}
+                      </p>
+                      {result.dateRange && (
+                        <p>
+                          <strong>ช่วงวันที่:</strong> {result.dateRange.min} ถึง {result.dateRange.max}
+                          {result.dateBasisUsed && (
+                            <span className="ml-2 text-xs text-muted-foreground">
+                              (ตาม {result.dateBasisUsed === 'order_date' ? 'วันสั่งซื้อ' : 'วันชำระเงิน'})
+                            </span>
+                          )}
+                        </p>
+                      )}
+                      {result.summary && (
+                        <p>
+                          <strong>รายได้รวม:</strong> ฿{result.summary.totalRevenue.toLocaleString()}
+                          <span className="ml-2"><strong>จำนวน Orders:</strong> {result.summary.orderCount}</span>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="font-semibold">Import ล้มเหลว</p>
+                    <p className="text-sm">{result.error}</p>
+                    {result.errors > 0 && (
+                      <p className="text-sm">
+                        <strong>Errors:</strong> {result.errors} รายการ
+                      </p>
+                    )}
+                  </div>
+                )}
+              </AlertDescription>
             </Alert>
 
-            <div className="flex justify-end">
-              <Button onClick={handleClose}>Close</Button>
+            {/* Action Buttons */}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={handleClose}>
+                ปิด
+              </Button>
+              {result.success && result.dateRange && (
+                <Button
+                  onClick={() => {
+                    handleClose()
+                    // Navigate to sales page with date basis and range
+                    const basis = result.dateBasisUsed || 'order_date'
+                    const params = new URLSearchParams({
+                      basis,
+                      startDate: result.dateRange!.min,
+                      endDate: result.dateRange!.max,
+                    })
+                    router.push(`/sales?${params.toString()}`)
+                  }}
+                >
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  ดูรายการคำสั่งซื้อ
+                </Button>
+              )}
             </div>
           </div>
         )}

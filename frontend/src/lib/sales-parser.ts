@@ -278,6 +278,9 @@ export async function parseTikTokFile(
         const metadata: Record<string, string | null> = {
           source_report: 'OrderSKUList',
           variation: toStringOrNull(row['Variation']),
+          // TikTok business timestamps (also stored as direct columns for query performance)
+          created_time: createdTime ? toBangkokDatetime(createdTime) : null,
+          paid_time: paidTime ? toBangkokDatetime(paidTime) : null,
           cancelled_time: cancelledTime ? toBangkokDatetime(cancelledTime) : null,
           cancel_reason: toStringOrNull(row['Cancel Reason']),
           tracking_id: toStringOrNull(row['Tracking ID']),
@@ -313,6 +316,11 @@ export async function parseTikTokFile(
           delivered_at: deliveredTime ? toBangkokDatetime(deliveredTime) || undefined : undefined,
           seller_sku: row['Seller SKU'] ? String(row['Seller SKU']).trim() : undefined,
           sku_id: row['SKU ID'] ? String(row['SKU ID']).trim() : undefined,
+
+          // TikTok Business Timestamps (direct columns, also stored in metadata for backward compat)
+          created_time: createdTime ? toBangkokDatetime(createdTime) || undefined : undefined,
+          paid_time: paidTime ? toBangkokDatetime(paidTime) || undefined : undefined,
+          cancelled_time: cancelledTime ? toBangkokDatetime(cancelledTime) || undefined : undefined,
         })
 
         uniqueOrderIds.add(String(orderId).trim())
