@@ -296,11 +296,12 @@ async function allocateFIFO(
     } = await supabase.auth.getUser()
     if (!user) return []
 
-    // Get available layers (oldest first, with remaining qty > 0)
+    // Get available layers (oldest first, with remaining qty > 0, not voided)
     const { data: layers, error: layersError } = await supabase
       .from('inventory_receipt_layers')
       .select('*')
       .eq('sku_internal', sku)
+      .eq('is_voided', false)
       .gt('qty_remaining', 0)
       .order('received_at', { ascending: true })
 

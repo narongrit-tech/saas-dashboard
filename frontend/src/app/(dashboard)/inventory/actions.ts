@@ -158,8 +158,10 @@ export async function recordOpeningBalance(data: {
 
 /**
  * Get receipt layers (for audit view)
+ * @param sku_internal - Optional SKU filter
+ * @param include_voided - Include voided layers (default: false)
  */
-export async function getReceiptLayers(sku_internal?: string) {
+export async function getReceiptLayers(sku_internal?: string, include_voided = false) {
   try {
     const supabase = createClient()
 
@@ -170,6 +172,11 @@ export async function getReceiptLayers(sku_internal?: string) {
 
     if (sku_internal) {
       query = query.eq('sku_internal', sku_internal)
+    }
+
+    // Filter out voided layers unless explicitly requested
+    if (!include_voided) {
+      query = query.eq('is_voided', false)
     }
 
     const { data, error } = await query.limit(100)
@@ -183,6 +190,186 @@ export async function getReceiptLayers(sku_internal?: string) {
   } catch (error) {
     console.error('Unexpected error in getReceiptLayers:', error)
     return { success: false, error: 'Unexpected error', data: [] }
+  }
+}
+
+/**
+ * Update opening balance layer (only if not yet consumed)
+ */
+export async function updateOpeningBalanceLayer(
+  layer_id: string,
+  data: {
+    received_at: string // ISO timestamp
+    qty_received: number
+    unit_cost: number
+  }
+) {
+  try {
+    const supabase = createClient()
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'Not authenticated' }
+    }
+
+    // Get the layer and validate
+    const { data: layer, error: fetchError } = await supabase
+      .from('inventory_receipt_layers')
+      .select('*')
+      .eq('id', layer_id)
+      .single()
+
+    if (fetchError || !layer) {
+      return { success: false, error: 'Layer not found' }
+    }
+
+    // Validation 1: Must be OPENING_BALANCE
+    if (layer.ref_type !== 'OPENING_BALANCE') {
+      return { success: false, error: 'Can only edit opening balance layers' }
+    }
+
+    // Validation 2: Must not be voided
+    if (layer.is_voided) {
+      return { success: false, error: 'Cannot edit voided layer' }
+    }
+
+    // Validation 3: Must not be consumed (qty_remaining == qty_received)
+    if (layer.qty_remaining !== layer.qty_received) {
+      return {
+        success: false,
+        error: 'Cannot edit layer that has been partially consumed',
+      }
+    }
+
+    // Validation 4: Must not have any allocations referencing this layer
+    const { data: allocations, error: allocError } = await supabase
+      .from('inventory_cogs_allocations')
+      .select('id')
+      .eq('layer_id', layer_id)
+      .limit(1)
+
+    if (allocError) {
+      return { success: false, error: 'Error checking allocations' }
+    }
+
+    if (allocations && allocations.length > 0) {
+      return {
+        success: false,
+        error: 'Cannot edit layer that has COGS allocations',
+      }
+    }
+
+    // Update the layer
+    const { error: updateError } = await supabase
+      .from('inventory_receipt_layers')
+      .update({
+        received_at: data.received_at,
+        qty_received: data.qty_received,
+        qty_remaining: data.qty_received, // Keep them equal
+        unit_cost: data.unit_cost,
+      })
+      .eq('id', layer_id)
+
+    if (updateError) {
+      console.error('Error updating layer:', updateError)
+      return { success: false, error: updateError.message }
+    }
+
+    revalidatePath('/inventory')
+    return { success: true }
+  } catch (error) {
+    console.error('Unexpected error in updateOpeningBalanceLayer:', error)
+    return { success: false, error: 'Unexpected error' }
+  }
+}
+
+/**
+ * Void (soft delete) opening balance layer (only if not yet consumed)
+ */
+export async function voidOpeningBalanceLayer(layer_id: string) {
+  try {
+    const supabase = createClient()
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'Not authenticated' }
+    }
+
+    // Get the layer and validate
+    const { data: layer, error: fetchError } = await supabase
+      .from('inventory_receipt_layers')
+      .select('*')
+      .eq('id', layer_id)
+      .single()
+
+    if (fetchError || !layer) {
+      return { success: false, error: 'Layer not found' }
+    }
+
+    // Validation 1: Must be OPENING_BALANCE
+    if (layer.ref_type !== 'OPENING_BALANCE') {
+      return { success: false, error: 'Can only void opening balance layers' }
+    }
+
+    // Validation 2: Must not be already voided
+    if (layer.is_voided) {
+      return { success: false, error: 'Layer is already voided' }
+    }
+
+    // Validation 3: Must not be consumed (qty_remaining == qty_received)
+    if (layer.qty_remaining !== layer.qty_received) {
+      return {
+        success: false,
+        error: 'Cannot void layer that has been partially consumed',
+      }
+    }
+
+    // Validation 4: Must not have any allocations referencing this layer
+    const { data: allocations, error: allocError } = await supabase
+      .from('inventory_cogs_allocations')
+      .select('id')
+      .eq('layer_id', layer_id)
+      .limit(1)
+
+    if (allocError) {
+      return { success: false, error: 'Error checking allocations' }
+    }
+
+    if (allocations && allocations.length > 0) {
+      return {
+        success: false,
+        error: 'Cannot void layer that has COGS allocations',
+      }
+    }
+
+    // Void the layer
+    const { error: voidError } = await supabase
+      .from('inventory_receipt_layers')
+      .update({
+        is_voided: true,
+        voided_at: new Date().toISOString(),
+        voided_by: user.id,
+      })
+      .eq('id', layer_id)
+
+    if (voidError) {
+      console.error('Error voiding layer:', voidError)
+      return { success: false, error: voidError.message }
+    }
+
+    revalidatePath('/inventory')
+    return { success: true }
+  } catch (error) {
+    console.error('Unexpected error in voidOpeningBalanceLayer:', error)
+    return { success: false, error: 'Unexpected error' }
   }
 }
 
