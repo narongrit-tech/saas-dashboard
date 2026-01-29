@@ -538,3 +538,273 @@ export async function applyReturnReversal(data: {
     return { success: false, error: 'Unexpected error' }
   }
 }
+
+// ============================================
+// Admin Actions
+// ============================================
+
+/**
+ * Apply COGS for all eligible orders in current month (MTD)
+ * Admin-only function
+ */
+export async function applyCOGSMTD(method: CostingMethod = 'FIFO') {
+  try {
+    const supabase = createClient()
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return {
+        success: false,
+        error: 'ไม่พบข้อมูลผู้ใช้',
+        data: null,
+      }
+    }
+
+    // Check admin role
+    const { data: roleData, error: roleError } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id)
+      .single()
+
+    if (roleError || roleData?.role !== 'admin') {
+      return {
+        success: false,
+        error: 'ไม่มีสิทธิ์เข้าถึงฟังก์ชันนี้ (Admin only)',
+        data: null,
+      }
+    }
+
+    // Get MTD date range (Bangkok timezone)
+    const now = new Date()
+    const bangkokTime = new Date(
+      now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' })
+    )
+    const startOfMonth = new Date(
+      bangkokTime.getFullYear(),
+      bangkokTime.getMonth(),
+      1
+    )
+    const startOfMonthISO = startOfMonth.toISOString().split('T')[0]
+    const todayISO = bangkokTime.toISOString().split('T')[0]
+
+    console.log(`Apply COGS MTD: ${startOfMonthISO} to ${todayISO}`)
+
+    // Get eligible orders (shipped in MTD, not cancelled, has seller_sku, quantity>0)
+    const { data: orders, error: ordersError } = await supabase
+      .from('sales_orders')
+      .select('order_id, seller_sku, quantity, shipped_at, status_group')
+      .not('shipped_at', 'is', null)
+      .neq('status_group', 'ยกเลิกแล้ว')
+      .gte('shipped_at', `${startOfMonthISO}T00:00:00+07:00`)
+      .lte('shipped_at', `${todayISO}T23:59:59+07:00`)
+
+    if (ordersError) {
+      console.error('Error fetching orders:', ordersError)
+      return {
+        success: false,
+        error: ordersError.message,
+        data: null,
+      }
+    }
+
+    if (!orders || orders.length === 0) {
+      return {
+        success: true,
+        data: {
+          total: 0,
+          eligible: 0,
+          successful: 0,
+          skipped: 0,
+          failed: 0,
+          errors: [],
+          message: 'ไม่มี orders ที่ shipped ใน MTD',
+        },
+      }
+    }
+
+    console.log(`Found ${orders.length} shipped orders in MTD`)
+
+    // Filter out orders that already have COGS allocations
+    const order_ids = orders.map((o) => o.order_id)
+    const { data: existingAllocations, error: allocError } = await supabase
+      .from('inventory_cogs_allocations')
+      .select('order_id')
+      .in('order_id', order_ids)
+      .eq('is_reversal', false)
+
+    if (allocError) {
+      console.error('Error checking existing allocations:', allocError)
+      return {
+        success: false,
+        error: allocError.message,
+        data: null,
+      }
+    }
+
+    const allocatedOrderIds = new Set(
+      existingAllocations?.map((a) => a.order_id) || []
+    )
+    console.log(`Found ${allocatedOrderIds.size} orders already allocated`)
+
+    // Prepare result summary
+    const summary = {
+      total: orders.length,
+      eligible: 0,
+      successful: 0,
+      skipped: 0,
+      failed: 0,
+      errors: [] as Array<{ order_id: string; reason: string }>,
+    }
+
+    // Process each order
+    for (const order of orders) {
+      const order_id = order.order_id
+      const sku = order.seller_sku
+      const qty = order.quantity
+      const shipped_at = order.shipped_at
+
+      // Skip if already allocated
+      if (allocatedOrderIds.has(order_id)) {
+        summary.skipped++
+        summary.errors.push({
+          order_id,
+          reason: 'already_allocated',
+        })
+        continue
+      }
+
+      // Validate seller_sku
+      if (!sku || sku.trim() === '') {
+        summary.skipped++
+        summary.errors.push({
+          order_id,
+          reason: 'missing_seller_sku',
+        })
+        continue
+      }
+
+      // Validate quantity
+      if (qty == null || !Number.isFinite(qty) || qty <= 0) {
+        summary.skipped++
+        summary.errors.push({
+          order_id,
+          reason: `invalid_quantity_${qty}`,
+        })
+        continue
+      }
+
+      // Validate shipped_at (should always be true due to query filter)
+      if (!shipped_at) {
+        summary.skipped++
+        summary.errors.push({
+          order_id,
+          reason: 'missing_shipped_at',
+        })
+        continue
+      }
+
+      // This order is eligible
+      summary.eligible++
+
+      // Apply COGS
+      try {
+        const success = await applyCOGSForOrderShippedCore(
+          order_id,
+          sku,
+          qty,
+          shipped_at,
+          method
+        )
+
+        if (success) {
+          summary.successful++
+          console.log(`✓ Order ${order_id}: COGS applied (SKU: ${sku}, Qty: ${qty})`)
+        } else {
+          summary.failed++
+          summary.errors.push({
+            order_id,
+            reason: 'applyCOGS_returned_false',
+          })
+          console.error(`✗ Order ${order_id}: Failed to apply COGS`)
+        }
+      } catch (error) {
+        summary.failed++
+        summary.errors.push({
+          order_id,
+          reason: error instanceof Error ? error.message : 'unknown_error',
+        })
+        console.error(`✗ Order ${order_id}: Exception:`, error)
+      }
+    }
+
+    console.log('Apply COGS MTD Summary:', summary)
+
+    revalidatePath('/inventory')
+    revalidatePath('/sales')
+    revalidatePath('/daily-pl')
+
+    return {
+      success: true,
+      data: summary,
+    }
+  } catch (error) {
+    console.error('Unexpected error in applyCOGSMTD:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+      data: null,
+    }
+  }
+}
+
+/**
+ * Check if current user is admin (for inventory module)
+ */
+export async function checkIsInventoryAdmin(): Promise<{
+  success: boolean
+  isAdmin: boolean
+  error?: string
+}> {
+  try {
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, isAdmin: false, error: 'ไม่พบข้อมูลผู้ใช้' }
+    }
+
+    // Check user_roles table for admin role
+    const { data, error } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id)
+      .single()
+
+    if (error) {
+      // If no role found, user is not admin
+      if (error.code === 'PGRST116') {
+        return { success: true, isAdmin: false }
+      }
+      console.error('Error checking admin status:', error)
+      return { success: false, isAdmin: false, error: error.message }
+    }
+
+    return { success: true, isAdmin: data?.role === 'admin' }
+  } catch (error) {
+    console.error('Unexpected error in checkIsInventoryAdmin:', error)
+    return {
+      success: false,
+      isAdmin: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}

@@ -29,13 +29,14 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
-import { ChevronLeft, ChevronRight, Download, FileUp, Plus, Pencil, Trash2, Eye, RotateCcw } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, FileUp, Plus, Pencil, Trash2, Eye, RotateCcw, Package } from 'lucide-react'
 import { AddOrderDialog } from '@/components/sales/AddOrderDialog'
 import { EditOrderDialog } from '@/components/sales/EditOrderDialog'
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
 import { SalesImportDialog } from '@/components/sales/SalesImportDialog'
 import { ResetTikTokDialog } from '@/components/sales/ResetTikTokDialog'
 import { OrderDetailDrawer } from '@/components/sales/OrderDetailDrawer'
+import { ApplyCOGSMTDModal } from '@/components/inventory/ApplyCOGSMTDModal'
 import { deleteOrder, exportSalesOrders } from '@/app/(dashboard)/sales/actions'
 
 const PLATFORMS = [
@@ -88,6 +89,7 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showImportDialog, setShowImportDialog] = useState(false)
   const [showResetDialog, setShowResetDialog] = useState(false)
+  const [showCOGSMTDModal, setShowCOGSMTDModal] = useState(false)
   const [showDetailDrawer, setShowDetailDrawer] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<SalesOrder | null>(null)
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
@@ -838,6 +840,16 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
             Reset TikTok (OrderSKUList)
           </Button>
         )}
+        {isAdmin && (
+          <Button
+            variant="outline"
+            onClick={() => setShowCOGSMTDModal(true)}
+            className="border-blue-300 text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-950"
+          >
+            <Package className="mr-2 h-4 w-4" />
+            Apply COGS (MTD)
+          </Button>
+        )}
         <div className="flex gap-2">
           <Button
             variant="outline"
@@ -1152,6 +1164,16 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
           onSuccess={() => {
             fetchOrders()
             fetchAggregates()
+          }}
+        />
+      )}
+
+      {isAdmin && (
+        <ApplyCOGSMTDModal
+          open={showCOGSMTDModal}
+          onOpenChange={setShowCOGSMTDModal}
+          onSuccess={() => {
+            fetchOrders()
           }}
         />
       )}

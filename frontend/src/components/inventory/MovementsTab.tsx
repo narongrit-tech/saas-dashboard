@@ -12,8 +12,10 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
+import { Package } from 'lucide-react'
 import { formatBangkok } from '@/lib/bangkok-time'
-import { getReceiptLayers, getCOGSAllocations } from '@/app/(dashboard)/inventory/actions'
+import { getReceiptLayers, getCOGSAllocations, checkIsInventoryAdmin } from '@/app/(dashboard)/inventory/actions'
+import { ApplyCOGSMTDModal } from '@/components/inventory/ApplyCOGSMTDModal'
 
 interface ReceiptLayer {
   id: string
@@ -41,9 +43,12 @@ export function MovementsTab() {
   const [layers, setLayers] = useState<ReceiptLayer[]>([])
   const [allocations, setAllocations] = useState<COGSAllocation[]>([])
   const [loading, setLoading] = useState(true)
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [showCOGSMTDModal, setShowCOGSMTDModal] = useState(false)
 
   useEffect(() => {
     loadData()
+    checkAdmin()
   }, [])
 
   async function loadData() {
@@ -60,6 +65,13 @@ export function MovementsTab() {
       setAllocations(allocationsResult.data)
     }
     setLoading(false)
+  }
+
+  async function checkAdmin() {
+    const result = await checkIsInventoryAdmin()
+    if (result.success) {
+      setIsAdmin(result.isAdmin)
+    }
   }
 
   return (
@@ -203,11 +215,29 @@ export function MovementsTab() {
         </TabsContent>
       </Tabs>
 
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        {isAdmin && (
+          <Button
+            variant="outline"
+            onClick={() => setShowCOGSMTDModal(true)}
+            className="border-blue-300 text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-950"
+          >
+            <Package className="mr-2 h-4 w-4" />
+            Apply COGS (MTD)
+          </Button>
+        )}
         <Button variant="outline" onClick={loadData}>
           Refresh
         </Button>
       </div>
+
+      {isAdmin && (
+        <ApplyCOGSMTDModal
+          open={showCOGSMTDModal}
+          onOpenChange={setShowCOGSMTDModal}
+          onSuccess={loadData}
+        />
+      )}
     </div>
   )
 }
