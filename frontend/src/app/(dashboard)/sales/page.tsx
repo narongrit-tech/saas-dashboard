@@ -362,13 +362,15 @@ export default function SalesPage() {
         }
 
         // Date range filters based on selected date basis (TikTok timestamps)
+        // CRITICAL FIX (migration-030): Use order_date for DB filter to include created_time=NULL rows
+        // Aggregates use COALESCE(created_time, order_date) logic server-side
         if (dateBasis === 'order') {
           if (filters.startDate) {
-            query = query.gte('created_time', filters.startDate)
+            query = query.gte('order_date', filters.startDate)
           }
           if (filters.endDate) {
             const endBangkok = endOfDayBangkok(filters.endDate)
-            query = query.lte('created_time', endBangkok.toISOString())
+            query = query.lte('order_date', endBangkok.toISOString())
           }
         } else {
           // For paid basis, also filter out null paid_time

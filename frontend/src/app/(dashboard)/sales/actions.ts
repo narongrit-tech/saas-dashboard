@@ -1617,6 +1617,8 @@ export async function getMultiSkuOrders(filters: ExportFilters & { dateBasis?: '
     }
 
     // Date filtering
+    // CRITICAL FIX (migration-030): Use order_date for order basis to include created_time=NULL rows
+    // Client-side filter will apply COALESCE(created_time, order_date) logic below
     if (dateBasis === 'paid') {
       baseQuery = baseQuery.not('paid_time', 'is', null)
       if (filters.startDate) baseQuery = baseQuery.gte('paid_time', filters.startDate)
@@ -1628,13 +1630,14 @@ export async function getMultiSkuOrders(filters: ExportFilters & { dateBasis?: '
         baseQuery = baseQuery.lte('paid_time', endOfDayBangkok.toISOString())
       }
     } else {
-      if (filters.startDate) baseQuery = baseQuery.gte('created_time', filters.startDate)
+      // Use order_date (broader) to fetch rows with created_time=NULL
+      if (filters.startDate) baseQuery = baseQuery.gte('order_date', filters.startDate)
       if (filters.endDate) {
         const { toZonedTime } = await import('date-fns-tz')
         const { endOfDay } = await import('date-fns')
         const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
         const endOfDayBangkok = endOfDay(bangkokDate)
-        baseQuery = baseQuery.lte('created_time', endOfDayBangkok.toISOString())
+        baseQuery = baseQuery.lte('order_date', endOfDayBangkok.toISOString())
       }
     }
 
@@ -1649,6 +1652,37 @@ export async function getMultiSkuOrders(filters: ExportFilters & { dateBasis?: '
       return { success: true, data: [] }
     }
 
+    // CLIENT-SIDE DATE FILTERING WITH COALESCE(created_time, order_date)
+    // CRITICAL FIX: Fetch by order_date (broader), filter by effective_date
+    const { toZonedTime } = await import('date-fns-tz')
+    const lines = rawLines.filter(line => {
+      if (dateBasis === 'paid') {
+        // Paid basis already filtered at DB level
+        return true
+      }
+
+      // Order basis: Use COALESCE(created_time, order_date)
+      const effectiveDate = line.created_time || line.order_date
+
+      if (!effectiveDate) {
+        console.warn('getMultiSkuOrders: Order with no created_time or order_date:', line.order_id)
+        return false
+      }
+
+      // Convert to Bangkok date for date-only comparison
+      const bangkokDate = toZonedTime(new Date(effectiveDate), 'Asia/Bangkok')
+      const bangkokDateStr = bangkokDate.toISOString().split('T')[0] // YYYY-MM-DD
+
+      if (filters.startDate && bangkokDateStr < filters.startDate) return false
+      if (filters.endDate && bangkokDateStr > filters.endDate) return false
+
+      return true
+    })
+
+    if (lines.length === 0) {
+      return { success: true, data: [] }
+    }
+
     // Group by external_order_id
     const orderMap = new Map<string, {
       external_order_id: string
@@ -1659,7 +1693,7 @@ export async function getMultiSkuOrders(filters: ExportFilters & { dateBasis?: '
       paid_time: string | null
     }>()
 
-    for (const line of rawLines) {
+    for (const line of lines) {
       const orderId = line.external_order_id || line.order_id
       const effectiveCreatedTime = line.created_time || line.order_date
 
