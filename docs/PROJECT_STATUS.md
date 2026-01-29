@@ -1,5 +1,5 @@
 # Project Status
-**Last Updated:** 2026-01-25
+**Last Updated:** 2026-01-30
 
 ## ✅ DONE (Phase 7 Completed)
 
@@ -34,6 +34,15 @@
   - UI: Rollback button in ImportAdsDialog (success screen + duplicate error screen)
   - Security: RLS-compliant, user isolation, atomic transactions
 
+### Inventory & COGS (2026-01-30)
+- ✅ **Inventory Costing Engine (FIFO + Moving Average)** - Accurate COGS for P&L
+  - Tables: inventory_items, receipt_layers, cost_snapshots, cogs_allocations, bundle_components
+  - Costing Methods: FIFO (First-In-First-Out) + Moving Average (Weighted)
+  - Features: Opening Balance, Bundle SKU support, Returns (Reverse COGS), Idempotent allocations
+  - P&L Integration: COGS now from inventory_cogs_allocations (not expenses.COGS)
+  - UI: 4-tab inventory page (Products, Opening Balance, Bundles, Movements/Audit)
+  - See: migration-033, lib/inventory-costing.ts, QA_INVENTORY_COSTING.md
+
 ---
 
 ## 🚧 IN PROGRESS
@@ -53,7 +62,7 @@ None (all pending tasks are in TODO)
 
 ### Phase 9 - Advanced Features
 - [ ] CEO Commission Flow (TikTok) - Personal income vs Director's Loan tracking
-- [ ] Inventory Management - Product master, stock tracking, low stock alerts
+- [ ] Inventory Advanced Features - Reorder points, low stock alerts, multi-warehouse
 - [ ] Payables/Receivables - Supplier payment tracking, aging reports
 - [ ] Tax Calculation - VAT, Withholding tax, Monthly/Quarterly reports
 - [ ] Permission System - Role-based access control (uses existing audit logs)

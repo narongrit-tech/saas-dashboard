@@ -8,7 +8,7 @@
  * Business Logic (DO NOT CHANGE WITHOUT APPROVAL):
  * - Revenue: Sum of sales_orders.total_amount (excluding cancelled)
  * - Advertising Cost: Sum of expenses where category = 'Advertising'
- * - COGS: Sum of expenses where category = 'COGS'
+ * - COGS: Sum of inventory_cogs_allocations.amount (FIFO/AVG costing)
  * - Operating Expenses: Sum of expenses where category = 'Operating'
  * - Net Profit: Revenue - Advertising Cost - COGS - Operating Expenses
  *
@@ -21,6 +21,7 @@
 import { createClient } from '@/lib/supabase/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { toBangkokTime, formatBangkok } from '@/lib/bangkok-time'
+import { computeDailyCOGS } from '@/lib/inventory-costing'
 
 /**
  * Daily P&L Data Structure
@@ -133,10 +134,11 @@ export async function getDailyPL(date: string): Promise<DailyPLData | null> {
     }
 
     // Fetch all components in parallel for performance
+    // NOTE: COGS now comes from inventory_cogs_allocations (FIFO/AVG costing)
     const [revenue, advertisingCost, cogs, operatingExpenses] = await Promise.all([
       getDailyRevenue(supabase, date),
       getDailyExpensesByCategory(supabase, date, 'Advertising'),
-      getDailyExpensesByCategory(supabase, date, 'COGS'),
+      computeDailyCOGS(date), // Inventory-based COGS (replaces expenses.COGS)
       getDailyExpensesByCategory(supabase, date, 'Operating'),
     ])
 

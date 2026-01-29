@@ -7,13 +7,14 @@
 
 ## Project Overview (10–20 lines)
 - Internal dashboard for a small team (≤5 users) to track **Daily P&L** accurately.
-- Core modules: Sales Orders, Expenses, Daily P&L, Dashboard, Cashflow, Wallets, Ads Imports, Bank, Reconciliation, Company Cashflow.
+- Core modules: Sales Orders, Expenses, Daily P&L, Dashboard, Cashflow, Wallets, Ads Imports, Bank, Reconciliation, Company Cashflow, Inventory & COGS.
 - Built with Next.js App Router (React 18 + TypeScript), Tailwind, shadcn/ui, Recharts.
 - Data source is Supabase Postgres with **RLS** and Google OAuth auth.
 - **Bangkok timezone** is authoritative for all date handling and exports.
 - Imports are a major workflow (TikTok cashflow, ads, sales/expenses, bank statements).
 - P&L and Cashflow are separate views; reconciliation bridges the difference.
 - Wallet ledger rules are strict: ad spend must come from imports, top-ups are not expenses.
+- **Inventory costing**: FIFO and Moving Average methods for accurate COGS calculation, bundle support, returns reversal.
 - CSV/Excel exports are server-side for accuracy.
 - Client UI stays thin; server actions enforce business correctness.
 
