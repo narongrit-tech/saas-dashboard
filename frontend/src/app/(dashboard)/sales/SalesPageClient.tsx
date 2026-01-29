@@ -65,9 +65,16 @@ const PAGE_SIZES = [20, 50, 100]
 
 interface SalesPageClientProps {
   isAdmin: boolean
+  debugInfo?: {
+    userId?: string
+    hasUser: boolean
+    roleError?: string
+    roleData?: string
+    source: string
+  }
 }
 
-export default function SalesPageClient({ isAdmin }: SalesPageClientProps) {
+export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -629,6 +636,44 @@ export default function SalesPageClient({ isAdmin }: SalesPageClientProps) {
         tiktokLoading={tiktokAggregatesLoading}
         showOnlySecondaryRow={true}
       />
+
+      {/* DEBUG CHIP (Dev Only) */}
+      {process.env.NODE_ENV !== 'production' && debugInfo && (
+        <div className="rounded-md border border-blue-300 bg-blue-50 p-3 text-xs dark:bg-blue-950">
+          <div className="font-bold text-blue-900 dark:text-blue-100 mb-1">
+            🔍 Admin Debug Info (Dev Only)
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-blue-800 dark:text-blue-200">
+            <div>
+              <span className="font-medium">isAdmin:</span>{' '}
+              <code className={isAdmin ? 'text-green-600 dark:text-green-400 font-bold' : 'text-red-600 dark:text-red-400 font-bold'}>
+                {isAdmin ? 'true ✅' : 'false ❌'}
+              </code>
+            </div>
+            <div>
+              <span className="font-medium">Source:</span> <code>{debugInfo.source}</code>
+            </div>
+            <div>
+              <span className="font-medium">User ID:</span>{' '}
+              <code>{debugInfo.userId || 'N/A'}</code>
+            </div>
+            <div>
+              <span className="font-medium">Has User:</span>{' '}
+              <code>{debugInfo.hasUser ? 'Yes' : 'No'}</code>
+            </div>
+            <div>
+              <span className="font-medium">Role Data:</span>{' '}
+              <code>{debugInfo.roleData || 'N/A'}</code>
+            </div>
+            <div>
+              <span className="font-medium">Role Error:</span>{' '}
+              <code className="text-red-600 dark:text-red-400">
+                {debugInfo.roleError || 'None'}
+              </code>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="space-y-4">
         {/* View Toggle */}

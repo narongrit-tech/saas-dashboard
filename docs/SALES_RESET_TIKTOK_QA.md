@@ -553,9 +553,65 @@ Before testing, ensure:
 
 ---
 
+## Troubleshooting
+
+### Issue: Reset Button Not Visible (Even Though User Has Admin Role)
+
+**Symptoms:**
+- User has `role = 'admin'` in `user_roles` table
+- Button "Reset TikTok (OrderSKUList)" does NOT appear on `/sales` page
+- Debug chip (dev mode) shows `isAdmin = false`
+
+**Root Cause:**
+- RLS (Row Level Security) policies on `user_roles` table are blocking the query
+- Migration-031 created recursive RLS policies that cause circular dependency
+- Server-side admin check cannot read user_roles table
+
+**Solution:**
+1. **Apply Migration-032** (RLS Fix):
+   ```sql
+   -- Run in Supabase SQL Editor
+   \i database-scripts/migration-032-user-roles-rls-fix.sql
+   ```
+
+2. **Verify RLS Policies:**
+   ```sql
+   -- Check policies on user_roles
+   SELECT policyname, cmd, qual
+   FROM pg_policies
+   WHERE schemaname = 'public' AND tablename = 'user_roles';
+
+   -- Expected: Only 1 policy "user_roles_select_own" with cmd = 'SELECT'
+   -- Should NOT have: "user_roles_select_admin" or "user_roles_admin_all"
+   ```
+
+3. **Test Admin Check:**
+   ```sql
+   -- Test as authenticated user
+   SELECT role FROM public.user_roles WHERE user_id = auth.uid();
+
+   -- Expected: Returns your role (e.g., 'admin')
+   -- If error or no rows: RLS policy is still blocking
+   ```
+
+4. **Check Debug Chip (Dev Mode):**
+   - Navigate to `/sales` page in development mode
+   - Debug chip shows:
+     - `isAdmin`: Should be `true ✅` for admin users
+     - `Role Data`: Should show `'admin'`
+     - `Role Error`: Should be `None`
+   - If `Role Error` shows RLS error code → migration-032 not applied
+
+**Prevention:**
+- Always apply migration-032 after migration-031
+- Test admin button visibility after each deployment
+- Use debug chip in dev mode to diagnose issues
+
+---
+
 ## Known Issues / Limitations
 
-1. **Migration Required:** Feature requires migration-031 to be applied first
+1. **Migration Required:** Feature requires migration-031 AND migration-032 to be applied
 2. **Single Platform:** Only resets TikTok OrderSKUList data (not Shopee, Lazada, etc.)
 3. **No Undo:** Once executed, data is permanently deleted (no soft delete)
 4. **Admin Setup:** Requires manual admin role assignment in DB (no UI for role management yet)
@@ -597,8 +653,10 @@ For questions or issues during QA:
 - **Feature Owner:** [Your Name]
 - **QA Lead:** [QA Team]
 - **Documentation:** `docs/SALES_RESET_TIKTOK_QA.md`
-- **Migration File:** `database-scripts/migration-031-reset-tiktok-ordersku-list.sql`
+- **Migration Files:**
+  - `database-scripts/migration-031-reset-tiktok-ordersku-list.sql` (main feature)
+  - `database-scripts/migration-032-user-roles-rls-fix.sql` (RLS fix, REQUIRED)
 
 ---
 
-**Last Updated:** 2026-01-29
+**Last Updated:** 2026-01-29 (Updated with migration-032 and troubleshooting guide)
