@@ -6,6 +6,8 @@ This document provides a comprehensive QA checklist for testing the "Reset TikTo
 
 **Feature Location:** `/sales` page → "Reset TikTok (OrderSKUList)" button
 
+**Implementation Note:** Admin role detection is performed **server-side** (in page.tsx Server Component) for security. The button visibility is determined on the server before the page renders to the client, eliminating client-side role checks.
+
 ---
 
 ## Prerequisites
