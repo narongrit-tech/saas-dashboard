@@ -298,3 +298,195 @@ ORDER BY date DESC;
 - For production, COGS should be triggered automatically when orders are marked as shipped
 - Current implementation requires manual COGS application (via admin actions)
 - Future enhancement: Add background job or trigger to auto-apply COGS on order status change
+
+---
+
+## Test Set H: Sales Integration - FINAL LOCK
+
+**Goal:** ตรวจสอบว่า integration กับ sales_orders ทำงานถูกต้องตาม FINAL RULES
+
+### FINAL RULES (LOCKED):
+1. sku_internal = sales_orders.seller_sku
+2. quantity = sales_orders.quantity (NO fallback, NO total_units)
+3. Apply COGS only when shipped_at IS NOT NULL
+4. Skip status_group = 'ยกเลิกแล้ว'
+5. Validate quantity > 0 before allocating
+
+### Test H1: Single SKU Order (NEWONN001)
+
+**Setup:**
+1. Create inventory item: SKU `NEWONN001`, cost 50, is_bundle=false
+2. Create opening balance: NEWONN001, qty=100, cost=50, date=2026-01-01
+3. Create sales order in database:
+   ```sql
+   INSERT INTO sales_orders (
+     order_id, seller_sku, quantity, shipped_at, status_group,
+     product_name, marketplace, unit_price, total_amount, order_date
+   ) VALUES (
+     'TEST-SALES-001', 'NEWONN001', 1, '2026-01-30T10:00:00+07:00', 'ที่จัดส่ง',
+     'Test Product', 'TikTok', 100, 100, '2026-01-30T09:00:00+07:00'
+   );
+   ```
+
+**Execute:**
+```javascript
+// Using integration helper
+import { applyCOGSForSingleOrder } from '@/lib/inventory-sales-integration'
+
+const success = await applyCOGSForSingleOrder('TEST-SALES-001', 'FIFO')
+```
+
+**Verify:**
+```sql
+-- Should have exactly 1 allocation
+SELECT * FROM inventory_cogs_allocations
+WHERE order_id = 'TEST-SALES-001';
+```
+
+**Expected Result:**
+- ✅ 1 row in inventory_cogs_allocations
+- order_id = 'TEST-SALES-001'
+- sku_internal = 'NEWONN001'
+- qty = 1
+- unit_cost_used = 50
+- amount = 50
+
+---
+
+### Test H2: Bundle Order (#0007)
+
+**Setup:**
+1. Create inventory items:
+   - SKU `#0007`, cost 0, is_bundle=true (bundle)
+   - SKU `NEWONN001`, cost 50, is_bundle=false (component 1)
+   - SKU `NEWONN002`, cost 30, is_bundle=false (component 2)
+2. Create opening balances:
+   - NEWONN001: qty=100, cost=50, date=2026-01-01
+   - NEWONN002: qty=100, cost=30, date=2026-01-01
+3. Create bundle recipe:
+   - Bundle: `#0007`
+   - Components:
+     - NEWONN001 qty=1
+     - NEWONN002 qty=1
+4. Create sales order:
+   ```sql
+   INSERT INTO sales_orders (
+     order_id, seller_sku, quantity, shipped_at, status_group,
+     product_name, marketplace, unit_price, total_amount, order_date
+   ) VALUES (
+     'TEST-BUNDLE-001', '#0007', 3, '2026-01-30T11:00:00+07:00', 'ที่จัดส่ง',
+     'Test Bundle', 'TikTok', 250, 750, '2026-01-30T10:00:00+07:00'
+   );
+   ```
+
+**Execute:**
+```javascript
+const success = await applyCOGSForSingleOrder('TEST-BUNDLE-001', 'FIFO')
+```
+
+**Verify:**
+```sql
+-- Should have 2 allocations (bundle exploded to components)
+SELECT * FROM inventory_cogs_allocations
+WHERE order_id = 'TEST-BUNDLE-001'
+ORDER BY sku_internal;
+```
+
+**Expected Result:**
+- ✅ 2 rows in inventory_cogs_allocations
+- Row 1: sku_internal='NEWONN001', qty=3 (1*3), unit_cost=50, amount=150
+- Row 2: sku_internal='NEWONN002', qty=3 (1*3), unit_cost=30, amount=90
+- Total COGS = 240
+
+---
+
+### Test H3: Invalid Orders (Should Skip)
+
+**Test H3a: Missing seller_sku**
+```sql
+INSERT INTO sales_orders (
+  order_id, seller_sku, quantity, shipped_at, status_group,
+  product_name, marketplace, unit_price, total_amount, order_date
+) VALUES (
+  'TEST-INVALID-001', NULL, 1, '2026-01-30T10:00:00+07:00', 'ที่จัดส่ง',
+  'Invalid Product', 'TikTok', 100, 100, '2026-01-30T09:00:00+07:00'
+);
+```
+**Expected:** Skipped (log: "Missing seller_sku")
+
+**Test H3b: quantity <= 0**
+```sql
+INSERT INTO sales_orders (
+  order_id, seller_sku, quantity, shipped_at, status_group,
+  product_name, marketplace, unit_price, total_amount, order_date
+) VALUES (
+  'TEST-INVALID-002', 'NEWONN001', 0, '2026-01-30T10:00:00+07:00', 'ที่จัดส่ง',
+  'Invalid Qty', 'TikTok', 100, 100, '2026-01-30T09:00:00+07:00'
+);
+```
+**Expected:** Skipped (log: "Invalid quantity (0), must be > 0")
+
+**Test H3c: shipped_at IS NULL**
+```sql
+INSERT INTO sales_orders (
+  order_id, seller_sku, quantity, shipped_at, status_group,
+  product_name, marketplace, unit_price, total_amount, order_date
+) VALUES (
+  'TEST-INVALID-003', 'NEWONN001', 1, NULL, 'ชำระเงินแล้ว',
+  'Not Shipped', 'TikTok', 100, 100, '2026-01-30T09:00:00+07:00'
+);
+```
+**Expected:** Skipped (not queried, filter: WHERE shipped_at IS NOT NULL)
+
+**Test H3d: status_group = 'ยกเลิกแล้ว'**
+```sql
+INSERT INTO sales_orders (
+  order_id, seller_sku, quantity, shipped_at, status_group,
+  product_name, marketplace, unit_price, total_amount, order_date
+) VALUES (
+  'TEST-INVALID-004', 'NEWONN001', 1, '2026-01-30T10:00:00+07:00', 'ยกเลิกแล้ว',
+  'Cancelled', 'TikTok', 100, 100, '2026-01-30T09:00:00+07:00'
+);
+```
+**Expected:** Skipped (not queried, filter: WHERE status_group != 'ยกเลิกแล้ว')
+
+---
+
+### Test H4: Batch Processing
+
+**Setup:** Create multiple valid orders
+
+**Execute:**
+```javascript
+import { applyCOGSForShippedOrders } from '@/lib/inventory-sales-integration'
+
+const result = await applyCOGSForShippedOrders(undefined, 'FIFO')
+console.log(result)
+```
+
+**Expected Result:**
+```javascript
+{
+  total_orders: 2,    // TEST-SALES-001 + TEST-BUNDLE-001
+  successful: 2,
+  skipped: 0,
+  failed: 0,
+  errors: []
+}
+```
+
+---
+
+## Summary Checklist (Updated)
+
+- [ ] Test A: FIFO allocation ✅
+- [ ] Test B: Moving Average ✅
+- [ ] Test C: Bundle expansion ✅
+- [ ] Test D: Returns (FIFO & AVG) ✅
+- [ ] Test E: Idempotency ✅
+- [ ] Test F: P&L integration ✅
+- [ ] Test G: Build successful ✅
+- [ ] **Test H1: Single SKU (NEWONN001) ✅**
+- [ ] **Test H2: Bundle (#0007) explodes correctly ✅**
+- [ ] **Test H3: Invalid orders skipped ✅**
+- [ ] **Test H4: Batch processing ✅**

@@ -482,9 +482,9 @@ async function allocateAVG(
  * Apply COGS for a shipped order (idempotent)
  *
  * @param order_id - Sales order ID
- * @param sku - SKU internal code (or bundle SKU)
- * @param qty - Quantity sold
- * @param shipped_at - Timestamp when shipped (Bangkok TZ)
+ * @param sku - SKU internal code (or bundle SKU) from sales_orders.seller_sku
+ * @param qty - Quantity sold from sales_orders.quantity (must be > 0)
+ * @param shipped_at - Timestamp when shipped (Bangkok TZ) from sales_orders.shipped_at
  * @param method - Costing method (FIFO or AVG)
  * @returns True if successful (or already allocated)
  */
@@ -506,6 +506,29 @@ export async function applyCOGSForOrderShipped(
 
     if (authError || !user) {
       console.error('Authentication failed in applyCOGSForOrderShipped')
+      return false
+    }
+
+    // VALIDATION: Quantity must be valid
+    if (qty == null || !Number.isFinite(qty)) {
+      console.error(`Order ${order_id}: Invalid quantity (null or non-finite)`)
+      return false
+    }
+
+    if (qty <= 0) {
+      console.error(`Order ${order_id}: Invalid quantity (${qty}), must be > 0. Skipping.`)
+      return false
+    }
+
+    // VALIDATION: SKU must not be empty
+    if (!sku || sku.trim() === '') {
+      console.error(`Order ${order_id}: Missing SKU (seller_sku). Skipping.`)
+      return false
+    }
+
+    // VALIDATION: shipped_at must be valid
+    if (!shipped_at) {
+      console.error(`Order ${order_id}: Missing shipped_at timestamp. Skipping.`)
       return false
     }
 
