@@ -29,13 +29,14 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
-import { ChevronLeft, ChevronRight, Download, FileUp, Plus, Pencil, Trash2, Eye } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, FileUp, Plus, Pencil, Trash2, Eye, RotateCcw } from 'lucide-react'
 import { AddOrderDialog } from '@/components/sales/AddOrderDialog'
 import { EditOrderDialog } from '@/components/sales/EditOrderDialog'
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
 import { SalesImportDialog } from '@/components/sales/SalesImportDialog'
+import { ResetTikTokDialog } from '@/components/sales/ResetTikTokDialog'
 import { OrderDetailDrawer } from '@/components/sales/OrderDetailDrawer'
-import { deleteOrder, exportSalesOrders } from '@/app/(dashboard)/sales/actions'
+import { deleteOrder, exportSalesOrders, checkIsAdmin } from '@/app/(dashboard)/sales/actions'
 
 const PLATFORMS = [
   { value: 'all', label: 'All Platforms' },
@@ -75,11 +76,14 @@ export default function SalesPage() {
   const [showEditDialog, setShowEditDialog] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showImportDialog, setShowImportDialog] = useState(false)
+  const [showResetDialog, setShowResetDialog] = useState(false)
   const [showDetailDrawer, setShowDetailDrawer] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<SalesOrder | null>(null)
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [adminCheckLoading, setAdminCheckLoading] = useState(true)
   const [aggregates, setAggregates] = useState<SalesAggregates | null>(null)
   const [aggregatesLoading, setAggregatesLoading] = useState(true)
   const [aggregatesError, setAggregatesError] = useState<string | null>(null)
@@ -224,6 +228,25 @@ export default function SalesPage() {
     fetchOrders()
     fetchAggregates()
   }, [sourcePlatform, statusString, paymentStatus, startDate, endDate, search, page, perPage, dateBasis, view])
+
+  // Check if user is admin (for showing Reset button)
+  useEffect(() => {
+    const checkAdmin = async () => {
+      try {
+        setAdminCheckLoading(true)
+        const result = await checkIsAdmin()
+        if (result.success) {
+          setIsAdmin(result.isAdmin)
+        }
+      } catch (error) {
+        console.error('Error checking admin status:', error)
+        setIsAdmin(false)
+      } finally {
+        setAdminCheckLoading(false)
+      }
+    }
+    checkAdmin()
+  }, [])
 
   const fetchAggregates = async () => {
     try {
@@ -804,6 +827,16 @@ export default function SalesPage() {
           <FileUp className="mr-2 h-4 w-4" />
           Import
         </Button>
+        {isAdmin && !adminCheckLoading && (
+          <Button
+            variant="outline"
+            onClick={() => setShowResetDialog(true)}
+            className="border-red-300 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950"
+          >
+            <RotateCcw className="mr-2 h-4 w-4" />
+            Reset TikTok (OrderSKUList)
+          </Button>
+        )}
         <div className="flex gap-2">
           <Button
             variant="outline"
@@ -1139,6 +1172,19 @@ export default function SalesPage() {
         onOpenChange={setShowImportDialog}
         onSuccess={fetchOrders}
       />
+
+      {/* Reset TikTok OrderSKUList Dialog (Admin Only) */}
+      {isAdmin && (
+        <ResetTikTokDialog
+          open={showResetDialog}
+          onOpenChange={setShowResetDialog}
+          onSuccess={() => {
+            // Refresh all data after successful reset
+            fetchOrders()
+            fetchAggregates()
+          }}
+        />
+      )}
 
       {/* Order Detail Drawer */}
       <OrderDetailDrawer

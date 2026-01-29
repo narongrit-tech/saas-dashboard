@@ -2040,3 +2040,150 @@ export async function getImportCoverage(filters: ExportFilters & { dateBasis?: '
     }
   }
 }
+
+/**
+ * =====================================================
+ * ADMIN FUNCTIONS - Reset TikTok OrderSKUList Data
+ * =====================================================
+ */
+
+export interface ResetTikTokResult {
+  dry_run: boolean
+  sales_orders_before: number
+  import_batches_before: number
+  sales_orders_deleted: number
+  import_batches_deleted: number
+  message: string
+}
+
+/**
+ * Preview Reset TikTok OrderSKUList (Dry-run)
+ * Returns counts of rows that would be deleted without actually deleting
+ */
+export async function previewResetTikTokOrderSkuList(): Promise<{
+  success: boolean
+  data?: ResetTikTokResult
+  error?: string
+}> {
+  try {
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+    }
+
+    // Call RPC function with dry_run=true
+    const { data, error } = await supabase.rpc('reset_tiktok_ordersku_list', {
+      p_dry_run: true,
+    })
+
+    if (error) {
+      console.error('Error previewing reset:', error)
+      return { success: false, error: `เกิดข้อผิดพลาด: ${error.message}` }
+    }
+
+    return { success: true, data }
+  } catch (error) {
+    console.error('Unexpected error in previewResetTikTokOrderSkuList:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
+
+/**
+ * Reset TikTok OrderSKUList (Execute Deletion)
+ * ADMIN ONLY: Deletes sales_orders and import_batches for TikTok OrderSKUList
+ * Requires admin role in user_roles table
+ */
+export async function resetTikTokOrderSkuList(): Promise<{
+  success: boolean
+  data?: ResetTikTokResult
+  error?: string
+}> {
+  try {
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+    }
+
+    // Call RPC function with dry_run=false (actual deletion)
+    const { data, error } = await supabase.rpc('reset_tiktok_ordersku_list', {
+      p_dry_run: false,
+    })
+
+    if (error) {
+      console.error('Error executing reset:', error)
+      // Check if it's an authorization error
+      if (error.message.includes('Unauthorized') || error.message.includes('admin')) {
+        return { success: false, error: 'ไม่มีสิทธิ์: เฉพาะ Admin เท่านั้นที่สามารถรีเซ็ตข้อมูลได้' }
+      }
+      return { success: false, error: `เกิดข้อผิดพลาด: ${error.message}` }
+    }
+
+    return { success: true, data }
+  } catch (error) {
+    console.error('Unexpected error in resetTikTokOrderSkuList:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
+
+/**
+ * Check if current user is admin
+ * Used to conditionally show/hide admin-only UI elements
+ */
+export async function checkIsAdmin(): Promise<{
+  success: boolean
+  isAdmin: boolean
+  error?: string
+}> {
+  try {
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, isAdmin: false, error: 'ไม่พบข้อมูลผู้ใช้' }
+    }
+
+    // Check user_roles table for admin role
+    const { data, error } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id)
+      .single()
+
+    if (error) {
+      // If no role found, user is not admin
+      if (error.code === 'PGRST116') {
+        return { success: true, isAdmin: false }
+      }
+      console.error('Error checking admin status:', error)
+      return { success: false, isAdmin: false, error: error.message }
+    }
+
+    return { success: true, isAdmin: data?.role === 'admin' }
+  } catch (error) {
+    console.error('Unexpected error in checkIsAdmin:', error)
+    return {
+      success: false,
+      isAdmin: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
