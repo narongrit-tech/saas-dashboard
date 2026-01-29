@@ -1,6 +1,9 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
+import { formatInTimeZone } from 'date-fns-tz';
+
+const BANGKOK_TZ = 'Asia/Bangkok';
 
 export type CampaignTypeFilter = 'all' | 'product' | 'live';
 
@@ -19,12 +22,16 @@ export async function getAdsSummary(
       return { success: false, error: 'Unauthorized' };
     }
 
+    // Format dates as Bangkok date strings (YYYY-MM-DD) to avoid UTC shift
+    const startDateStr = formatInTimeZone(startDate, BANGKOK_TZ, 'yyyy-MM-dd');
+    const endDateStr = formatInTimeZone(endDate, BANGKOK_TZ, 'yyyy-MM-dd');
+
     let query = supabase
       .from('ad_daily_performance')
       .select('spend, revenue, orders')
       .eq('created_by', user.id)
-      .gte('ad_date', startDate.toISOString().split('T')[0])
-      .lte('ad_date', endDate.toISOString().split('T')[0]);
+      .gte('ad_date', startDateStr)
+      .lte('ad_date', endDateStr);
 
     // Apply campaign type filter if not 'all'
     if (campaignType === 'product' || campaignType === 'live') {
@@ -73,12 +80,16 @@ export async function getAdsPerformance(
       return { success: false, error: 'Unauthorized' };
     }
 
+    // Format dates as Bangkok date strings (YYYY-MM-DD) to avoid UTC shift
+    const startDateStr = formatInTimeZone(startDate, BANGKOK_TZ, 'yyyy-MM-dd');
+    const endDateStr = formatInTimeZone(endDate, BANGKOK_TZ, 'yyyy-MM-dd');
+
     let query = supabase
       .from('ad_daily_performance')
       .select('*')
       .eq('created_by', user.id)
-      .gte('ad_date', startDate.toISOString().split('T')[0])
-      .lte('ad_date', endDate.toISOString().split('T')[0]);
+      .gte('ad_date', startDateStr)
+      .lte('ad_date', endDateStr);
 
     // Apply campaign type filter if not 'all'
     if (campaignType === 'product' || campaignType === 'live') {

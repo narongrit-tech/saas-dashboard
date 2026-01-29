@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 import { createClient } from '@/lib/supabase/server';
-import { toZonedTime, fromZonedTime } from 'date-fns-tz';
+import { toZonedTime, fromZonedTime, formatInTimeZone } from 'date-fns-tz';
 import { startOfDay } from 'date-fns';
 import crypto from 'crypto';
 
@@ -1084,15 +1084,15 @@ export function previewAdsExcel(
     const totalRevenue = parseResult.totals.revenue;
     const avgROI = totalSpend > 0 ? totalRevenue / totalSpend : 0;
 
-    // Get date range from kept rows
+    // Get date range from kept rows (format as Bangkok dates)
     const dates = parseResult.keptRows
-      .map((r) => r.ad_date.toISOString().split('T')[0])
+      .map((r) => formatInTimeZone(r.ad_date, BANGKOK_TZ, 'yyyy-MM-dd'))
       .sort();
     const dateRange = dates.length > 0 ? `${dates[0]} to ${dates[dates.length - 1]}` : 'Unknown';
 
     // Get sample rows (first 5 from kept rows)
     const sampleRows = parseResult.keptRows.slice(0, 5).map((row) => ({
-      date: row.ad_date.toISOString().split('T')[0],
+      date: formatInTimeZone(row.ad_date, BANGKOK_TZ, 'yyyy-MM-dd'),
       campaignName: row.campaign_name,
       spend: row.spend,
       orders: row.orders,
@@ -1195,7 +1195,8 @@ export async function upsertAdRows(
 
   for (const row of rows) {
     try {
-      const adDate = row.ad_date.toISOString().split('T')[0];
+      // Format ad_date as Bangkok date (YYYY-MM-DD) to avoid UTC shift
+      const adDate = formatInTimeZone(row.ad_date, BANGKOK_TZ, 'yyyy-MM-dd');
       const campaignType = row.campaign_type || 'product';
       const campaignName = row.campaign_name || '';
       const campaignId = row.campaign_id || '';
