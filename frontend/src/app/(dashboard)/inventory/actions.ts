@@ -808,3 +808,203 @@ export async function checkIsInventoryAdmin(): Promise<{
     }
   }
 }
+
+// ============================================
+// On Hand Inventory
+// ============================================
+
+/**
+ * Get on hand quantities for all SKUs or a specific SKU
+ * Computed as sum(qty_remaining) from non-voided receipt layers
+ *
+ * @param sku_internal - Optional SKU to filter by
+ * @returns Map of SKU -> on hand quantity
+ */
+export async function getInventoryOnHand(
+  sku_internal?: string
+): Promise<{ success: boolean; error?: string; data: Record<string, number> }> {
+  try {
+    const supabase = createClient()
+
+    // Verify authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้', data: {} }
+    }
+
+    // Build query
+    let query = supabase
+      .from('inventory_receipt_layers')
+      .select('sku_internal, qty_remaining')
+      .eq('is_voided', false)
+
+    // Filter by SKU if provided
+    if (sku_internal) {
+      query = query.eq('sku_internal', sku_internal)
+    }
+
+    const { data: layers, error: layersError } = await query
+
+    if (layersError) {
+      console.error('Error fetching receipt layers:', layersError)
+      return { success: false, error: layersError.message, data: {} }
+    }
+
+    // Aggregate by SKU
+    const onHandMap: Record<string, number> = {}
+
+    if (layers && layers.length > 0) {
+      for (const layer of layers) {
+        const sku = layer.sku_internal
+        const qty = layer.qty_remaining || 0
+
+        if (onHandMap[sku]) {
+          onHandMap[sku] += qty
+        } else {
+          onHandMap[sku] = qty
+        }
+      }
+    }
+
+    return { success: true, data: onHandMap }
+  } catch (error) {
+    console.error('Unexpected error in getInventoryOnHand:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+      data: {},
+    }
+  }
+}
+
+// ============================================
+// Stock In (Inbound Receipts)
+// ============================================
+
+/**
+ * Create stock in document and receipt layer for a SKU
+ *
+ * @param params - Stock in parameters
+ * @returns Success/error result
+ */
+export async function createStockInForSku(params: {
+  sku_internal: string
+  received_at: string // ISO date string
+  qty: number
+  unit_cost: number
+  reference: string
+  supplier?: string
+  note?: string
+}): Promise<{ success: boolean; error?: string; data?: { doc_id: string; layer_id: string } }> {
+  try {
+    const supabase = createClient()
+
+    // Verify authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้' }
+    }
+
+    const { sku_internal, received_at, qty, unit_cost, reference, supplier, note } = params
+
+    // Validate: qty > 0
+    if (qty <= 0) {
+      return { success: false, error: 'Quantity ต้องมากกว่า 0' }
+    }
+
+    // Validate: unit_cost >= 0
+    if (unit_cost < 0) {
+      return { success: false, error: 'Unit cost ต้องไม่ติดลบ' }
+    }
+
+    // Validate: reference is required
+    if (!reference || reference.trim() === '') {
+      return { success: false, error: 'Reference จำเป็นต้องระบุ' }
+    }
+
+    // Validate: SKU exists
+    const { data: item, error: itemError } = await supabase
+      .from('inventory_items')
+      .select('sku_internal, is_bundle')
+      .eq('sku_internal', sku_internal)
+      .single()
+
+    if (itemError || !item) {
+      return { success: false, error: `SKU ${sku_internal} ไม่พบในระบบ` }
+    }
+
+    // Validate: SKU is not a bundle
+    if (item.is_bundle) {
+      return { success: false, error: 'ไม่สามารถ Stock In สำหรับ Bundle SKU ได้ (Stock In component SKUs แทน)' }
+    }
+
+    // Insert inventory_stock_in_documents
+    const { data: doc, error: docError } = await supabase
+      .from('inventory_stock_in_documents')
+      .insert({
+        received_at,
+        reference,
+        supplier: supplier || null,
+        note: note || null,
+        created_by: user.id,
+      })
+      .select('id')
+      .single()
+
+    if (docError || !doc) {
+      console.error('Error creating stock in document:', docError)
+      return { success: false, error: 'เกิดข้อผิดพลาดในการสร้าง stock in document' }
+    }
+
+    const doc_id = doc.id
+
+    // Insert inventory_receipt_layers
+    const { data: layer, error: layerError } = await supabase
+      .from('inventory_receipt_layers')
+      .insert({
+        sku_internal,
+        received_at,
+        qty_received: qty,
+        qty_remaining: qty,
+        unit_cost,
+        ref_type: 'PURCHASE',
+        ref_id: doc_id,
+        is_voided: false,
+      })
+      .select('id')
+      .single()
+
+    if (layerError || !layer) {
+      console.error('Error creating receipt layer:', layerError)
+      // Rollback: delete the document we just created
+      await supabase.from('inventory_stock_in_documents').delete().eq('id', doc_id)
+      return { success: false, error: 'เกิดข้อผิดพลาดในการสร้าง receipt layer' }
+    }
+
+    const layer_id = layer.id
+
+    console.log(`✓ Stock In created: SKU=${sku_internal}, Qty=${qty}, Doc=${doc_id}, Layer=${layer_id}`)
+
+    // Revalidate paths
+    revalidatePath('/inventory')
+
+    return {
+      success: true,
+      data: { doc_id, layer_id },
+    }
+  } catch (error) {
+    console.error('Unexpected error in createStockInForSku:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
