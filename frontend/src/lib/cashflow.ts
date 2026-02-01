@@ -23,7 +23,8 @@
 
 import { createClient } from '@/lib/supabase/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { toBangkokTime, formatBangkok } from '@/lib/bangkok-time'
+import { formatBangkok } from '@/lib/bangkok-time'
+import { parseBangkokDateStringToLocalDate } from '@/lib/bangkok-date-range'
 
 /**
  * Daily Cashflow Data Structure
@@ -174,8 +175,9 @@ export async function getDailyCashflowRange(
 ): Promise<(DailyCashflowData & { running_balance: number })[]> {
   try {
     // Generate array of dates using Bangkok timezone
-    const start = toBangkokTime(startDate)
-    const end = toBangkokTime(endDate)
+    // SAFE: Parse Bangkok date strings correctly (not UTC midnight)
+    const start = parseBangkokDateStringToLocalDate(startDate)
+    const end = parseBangkokDateStringToLocalDate(endDate)
     const dates: string[] = []
 
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {

@@ -17,6 +17,7 @@ import { SingleDateRangePicker, DateRangeResult } from '@/components/shared/Sing
 import { formatBangkok, getBangkokNow, startOfDayBangkok } from '@/lib/bangkok-time'
 import { ArrowLeft, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { getSalesReconciliation } from '@/app/(dashboard)/sales/actions'
+import { parseBangkokDateStringToLocalDate } from '@/lib/bangkok-date-range'
 
 export default function SalesReconciliationPage() {
   const router = useRouter()
@@ -123,8 +124,8 @@ export default function SalesReconciliationPage() {
               defaultRange={
                 startDate && endDate
                   ? {
-                      startDate: new Date(startDate),
-                      endDate: new Date(endDate)
+                      startDate: parseBangkokDateStringToLocalDate(startDate),
+                      endDate: parseBangkokDateStringToLocalDate(endDate)
                     }
                   : undefined
               }

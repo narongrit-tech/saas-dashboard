@@ -40,6 +40,7 @@ import type {
   TransactionsResponse,
   TransactionRow,
 } from '@/types/cashflow-api';
+import { toBangkokDateString } from '@/lib/bangkok-date-range';
 
 function formatCurrency(amount: number): string {
   return amount.toLocaleString('th-TH', {
@@ -164,8 +165,8 @@ export default function CashflowPageV3() {
 
       const result = await getCashflowTransactions({
         type: activeTab,
-        startDate: dateRange.startDate.toISOString().split('T')[0],
-        endDate: dateRange.endDate.toISOString().split('T')[0],
+        startDate: toBangkokDateString(dateRange.startDate),
+        endDate: toBangkokDateString(dateRange.endDate),
         page: transactionsPage,
         pageSize: 50,
         sortBy: 'date',
@@ -223,8 +224,8 @@ export default function CashflowPageV3() {
     if (dateRange) {
       try {
         await rebuildCashflowSummary({
-          startDate: dateRange.startDate.toISOString().split('T')[0],
-          endDate: dateRange.endDate.toISOString().split('T')[0],
+          startDate: toBangkokDateString(dateRange.startDate),
+          endDate: toBangkokDateString(dateRange.endDate),
         });
         console.log('[Cashflow] Summary rebuilt');
       } catch (err) {

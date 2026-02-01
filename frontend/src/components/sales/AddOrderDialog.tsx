@@ -22,6 +22,7 @@ import {
 import { createManualOrder } from '@/app/(dashboard)/sales/actions'
 import { CreateOrderInput, SalesOrderStatus } from '@/types/sales'
 import { Loader2 } from 'lucide-react'
+import { getTodayBangkokString } from '@/lib/bangkok-date-range'
 
 interface AddOrderDialogProps {
   open: boolean
@@ -32,7 +33,7 @@ interface AddOrderDialogProps {
 const MARKETPLACES = ['TikTok', 'Shopee', 'Lazada', 'Line', 'Facebook']
 
 function getTodayDate(): string {
-  return new Date().toISOString().split('T')[0]
+  return getTodayBangkokString()
 }
 
 export function AddOrderDialog({ open, onOpenChange, onSuccess }: AddOrderDialogProps) {

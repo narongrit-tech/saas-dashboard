@@ -36,6 +36,7 @@ import {
   getWalletBalance,
 } from '@/app/(dashboard)/wallets/actions'
 import { WalletBalance } from '@/types/wallets'
+import { getTodayBangkokString, parseBangkokDateStringToLocalDate } from '@/lib/bangkok-date-range'
 
 const PER_PAGE = 20
 
@@ -120,7 +121,8 @@ export default function WalletsPage() {
       }
 
       if (filters.endDate) {
-        const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
+        // SAFE: Parse Bangkok date string correctly
+        const bangkokDate = parseBangkokDateStringToLocalDate(filters.endDate)
         const endOfDayBangkok = endOfDay(bangkokDate)
         query = query.lte('date', endOfDayBangkok.toISOString())
       }
@@ -155,10 +157,17 @@ export default function WalletsPage() {
   const fetchBalance = async () => {
     try {
       // Default to last 30 days if no date filter
-      const endDate = filters.endDate || new Date().toISOString().split('T')[0]
-      const startDate =
-        filters.startDate ||
-        new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+      // SAFE: Use Bangkok timezone for date strings
+      const endDate = filters.endDate || getTodayBangkokString()
+      const startDate = filters.startDate || (() => {
+        const today = new Date()
+        today.setDate(today.getDate() - 30)
+        // Convert 30 days ago to Bangkok date string
+        const year = today.getFullYear()
+        const month = String(today.getMonth() + 1).padStart(2, '0')
+        const day = String(today.getDate()).padStart(2, '0')
+        return `${year}-${month}-${day}`
+      })()
 
       const result = await getWalletBalance({
         walletId: selectedWalletId,

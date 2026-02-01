@@ -23,6 +23,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { CreateExpenseInput, ExpenseCategory } from '@/types/expenses'
 import { Loader2 } from 'lucide-react'
 import { createManualExpense } from '@/app/(dashboard)/expenses/actions'
+import { getTodayBangkokString } from '@/lib/bangkok-date-range'
 
 interface AddExpenseDialogProps {
   open: boolean
@@ -33,7 +34,7 @@ interface AddExpenseDialogProps {
 const CATEGORIES: ExpenseCategory[] = ['Advertising', 'COGS', 'Operating']
 
 function getTodayDate(): string {
-  return new Date().toISOString().split('T')[0]
+  return getTodayBangkokString()
 }
 
 export function AddExpenseDialog({ open, onOpenChange, onSuccess }: AddExpenseDialogProps) {

@@ -1,7 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Dialog,
   DialogContent,
@@ -16,8 +18,9 @@ import {
   AlertTitle,
 } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { Loader2, AlertCircle, CheckCircle2, Calendar } from 'lucide-react'
 import { applyCOGSMTD } from '@/app/(dashboard)/inventory/actions'
+import { getTodayBangkokString, getFirstDayOfMonthBangkokString } from '@/lib/bangkok-date-range'
 
 interface ApplyCOGSMTDModalProps {
   open: boolean
@@ -34,20 +37,68 @@ export function ApplyCOGSMTDModal({
   const [result, setResult] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
 
-  // Get MTD date range for display
-  const now = new Date()
-  const bangkokTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }))
-  const startOfMonth = new Date(bangkokTime.getFullYear(), bangkokTime.getMonth(), 1)
-  const startDate = startOfMonth.toISOString().split('T')[0]
-  const endDate = bangkokTime.toISOString().split('T')[0]
+  // Date range state
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+
+  // Initialize date range when modal opens (SAFE: uses Bangkok timezone)
+  useEffect(() => {
+    if (open && !startDate && !endDate) {
+      setStartDate(getFirstDayOfMonthBangkokString())
+      setEndDate(getTodayBangkokString())
+    }
+  }, [open])
+
+  function setThisMonth() {
+    setStartDate(getFirstDayOfMonthBangkokString())
+    setEndDate(getTodayBangkokString())
+  }
+
+  function setLastMonth() {
+    // Calculate last month dates in Bangkok timezone
+    const today = new Date()
+    const year = today.getFullYear()
+    const month = today.getMonth() // 0-indexed
+
+    // First day of last month
+    const firstDayLastMonth = new Date(year, month - 1, 1)
+    const lastMonthYear = firstDayLastMonth.getFullYear()
+    const lastMonthMonth = String(firstDayLastMonth.getMonth() + 1).padStart(2, '0')
+    const startDateStr = `${lastMonthYear}-${lastMonthMonth}-01`
+
+    // Last day of last month (day 0 of current month)
+    const lastDayLastMonth = new Date(year, month, 0)
+    const lastDayYear = lastDayLastMonth.getFullYear()
+    const lastDayMonth = String(lastDayLastMonth.getMonth() + 1).padStart(2, '0')
+    const lastDayDay = String(lastDayLastMonth.getDate()).padStart(2, '0')
+    const endDateStr = `${lastDayYear}-${lastDayMonth}-${lastDayDay}`
+
+    setStartDate(startDateStr)
+    setEndDate(endDateStr)
+  }
 
   async function handleApply() {
+    // Validate dates
+    if (!startDate || !endDate) {
+      setError('กรุณาเลือกวันที่เริ่มต้นและสิ้นสุด')
+      return
+    }
+
+    if (startDate > endDate) {
+      setError('วันที่เริ่มต้นต้องไม่มากกว่าวันที่สิ้นสุด')
+      return
+    }
+
     setLoading(true)
     setError(null)
     setResult(null)
 
     try {
-      const response = await applyCOGSMTD('FIFO')
+      const response = await applyCOGSMTD({
+        method: 'FIFO',
+        startDate,
+        endDate,
+      })
 
       if (!response.success) {
         setError(response.error || 'เกิดข้อผิดพลาด')
@@ -76,13 +127,73 @@ export function ApplyCOGSMTDModal({
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Apply COGS (Month-to-Date)</DialogTitle>
+          <DialogTitle>Apply COGS (Date Range)</DialogTitle>
           <DialogDescription>
-            ตัด COGS สำหรับ orders ที่ shipped ในเดือนนี้ ({startDate} ถึง {endDate})
+            ตัด COGS สำหรับ orders ที่ shipped ในช่วงวันที่ที่เลือก
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
+          {/* Date Range Selector */}
+          {!result && (
+            <div className="space-y-4 p-4 border rounded-md bg-muted/30">
+              <div className="flex items-center gap-2 mb-2">
+                <Calendar className="h-4 w-4" />
+                <span className="text-sm font-semibold">เลือกช่วงวันที่</span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="startDate">วันที่เริ่มต้น</Label>
+                  <Input
+                    id="startDate"
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    disabled={loading}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="endDate">วันที่สิ้นสุด</Label>
+                  <Input
+                    id="endDate"
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    disabled={loading}
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={setThisMonth}
+                  disabled={loading}
+                >
+                  เดือนนี้
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={setLastMonth}
+                  disabled={loading}
+                >
+                  เดือนที่แล้ว
+                </Button>
+              </div>
+
+              {startDate && endDate && (
+                <p className="text-xs text-muted-foreground">
+                  ช่วงวันที่: <strong>{startDate}</strong> ถึง <strong>{endDate}</strong>
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Info */}
           {!result && !error && (
             <Alert>
@@ -90,7 +201,7 @@ export function ApplyCOGSMTDModal({
               <AlertTitle>คำอธิบาย</AlertTitle>
               <AlertDescription>
                 <ul className="list-disc pl-4 space-y-1 text-sm">
-                  <li>ระบบจะตัด COGS สำหรับ orders ที่ shipped ในเดือนนี้เท่านั้น</li>
+                  <li>ระบบจะตัด COGS สำหรับ orders ที่ shipped ในช่วงวันที่ที่เลือก</li>
                   <li>Skip orders ที่ cancelled (ยกเลิกแล้ว)</li>
                   <li>Skip orders ที่ไม่มี seller_sku หรือ quantity ≤ 0</li>
                   <li>
@@ -98,6 +209,9 @@ export function ApplyCOGSMTDModal({
                   </li>
                   <li>
                     <strong>ปลอดภัย:</strong> กดซ้ำได้ ไม่ duplicate allocations
+                  </li>
+                  <li>
+                    <strong>รองรับ orders จำนวนมาก:</strong> ประมวลผลทีละ batch ไม่มีขีดจำกัด
                   </li>
                 </ul>
               </AlertDescription>
@@ -189,9 +303,9 @@ export function ApplyCOGSMTDModal({
               <Button variant="outline" onClick={handleClose} disabled={loading}>
                 ยกเลิก
               </Button>
-              <Button onClick={handleApply} disabled={loading}>
+              <Button onClick={handleApply} disabled={loading || !startDate || !endDate}>
                 {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {loading ? 'กำลังประมวลผล...' : 'Apply COGS (MTD)'}
+                {loading ? 'กำลังประมวลผล...' : 'Apply COGS'}
               </Button>
             </>
           )}

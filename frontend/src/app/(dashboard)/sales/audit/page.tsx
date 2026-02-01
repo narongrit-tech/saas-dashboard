@@ -23,6 +23,7 @@ import {
   DuplicateLine,
   ImportCoverage,
 } from '@/app/(dashboard)/sales/actions'
+import { parseBangkokDateStringToLocalDate } from '@/lib/bangkok-date-range'
 import {
   Select,
   SelectContent,
@@ -202,8 +203,8 @@ export default function SalesAuditPage() {
               defaultRange={
                 startDate && endDate
                   ? {
-                      startDate: new Date(startDate),
-                      endDate: new Date(endDate)
+                      startDate: parseBangkokDateStringToLocalDate(startDate),
+                      endDate: parseBangkokDateStringToLocalDate(endDate)
                     }
                   : undefined
               }

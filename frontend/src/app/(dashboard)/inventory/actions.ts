@@ -12,6 +12,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
+import { getTodayBangkokString, getFirstDayOfMonthBangkokString } from '@/lib/bangkok-date-range'
 import {
   recordOpeningBalance as recordOpeningBalanceCore,
   upsertBundleRecipe as upsertBundleRecipeCore,
@@ -544,10 +545,15 @@ export async function applyReturnReversal(data: {
 // ============================================
 
 /**
- * Apply COGS for all eligible orders in current month (MTD)
- * Admin-only function
+ * Apply COGS for all eligible orders in date range (Bangkok time)
+ * Admin-only function with pagination support for large ranges
  */
-export async function applyCOGSMTD(method: CostingMethod = 'FIFO') {
+export async function applyCOGSMTD(params: {
+  method?: CostingMethod
+  startDate?: string
+  endDate?: string
+} = {}) {
+  const method = params.method || 'FIFO'
   try {
     const supabase = createClient()
 
@@ -580,38 +586,96 @@ export async function applyCOGSMTD(method: CostingMethod = 'FIFO') {
       }
     }
 
-    // Get MTD date range (Bangkok timezone)
-    const now = new Date()
-    const bangkokTime = new Date(
-      now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' })
-    )
-    const startOfMonth = new Date(
-      bangkokTime.getFullYear(),
-      bangkokTime.getMonth(),
-      1
-    )
-    const startOfMonthISO = startOfMonth.toISOString().split('T')[0]
-    const todayISO = bangkokTime.toISOString().split('T')[0]
+    // Get date range (Bangkok timezone)
+    let startDateISO: string
+    let endDateISO: string
 
-    console.log(`Apply COGS MTD: ${startOfMonthISO} to ${todayISO}`)
+    if (params.startDate && params.endDate) {
+      // Use provided dates
+      startDateISO = params.startDate
+      endDateISO = params.endDate
 
-    // Get eligible orders (shipped in MTD, not cancelled, has seller_sku, quantity>0)
-    const { data: orders, error: ordersError } = await supabase
-      .from('sales_orders')
-      .select('order_id, seller_sku, quantity, shipped_at, status_group')
-      .not('shipped_at', 'is', null)
-      .neq('status_group', 'ยกเลิกแล้ว')
-      .gte('shipped_at', `${startOfMonthISO}T00:00:00+07:00`)
-      .lte('shipped_at', `${todayISO}T23:59:59+07:00`)
+      // Validate date format (YYYY-MM-DD)
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/
+      if (!dateRegex.test(startDateISO) || !dateRegex.test(endDateISO)) {
+        return {
+          success: false,
+          error: 'รูปแบบวันที่ไม่ถูกต้อง (ต้องเป็น YYYY-MM-DD)',
+          data: null,
+        }
+      }
 
-    if (ordersError) {
-      console.error('Error fetching orders:', ordersError)
-      return {
-        success: false,
-        error: ordersError.message,
-        data: null,
+      // Validate start <= end
+      if (startDateISO > endDateISO) {
+        return {
+          success: false,
+          error: 'วันที่เริ่มต้นต้องไม่มากกว่าวันที่สิ้นสุด',
+          data: null,
+        }
+      }
+    } else {
+      // Default to current month (MTD)
+      const now = new Date()
+      const bangkokTime = new Date(
+        now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' })
+      )
+      // SAFE: Use Bangkok timezone for date strings
+      startDateISO = getFirstDayOfMonthBangkokString()
+      endDateISO = getTodayBangkokString()
+    }
+
+    console.log(`Apply COGS Range: ${startDateISO} to ${endDateISO}`)
+
+    // Fetch all orders in date range using pagination
+    // CRITICAL: Use pagination to avoid query limits truncating results
+    const PAGE_SIZE = 1000
+    let allOrders: any[] = []
+    let currentPage = 0
+    let hasMore = true
+
+    while (hasMore) {
+      const from = currentPage * PAGE_SIZE
+      const to = from + PAGE_SIZE - 1
+
+      console.log(`Fetching orders page ${currentPage + 1} (${from}-${to})`)
+
+      const { data: pageOrders, error: ordersError } = await supabase
+        .from('sales_orders')
+        .select('order_id, seller_sku, quantity, shipped_at, status_group')
+        .not('shipped_at', 'is', null)
+        .neq('status_group', 'ยกเลิกแล้ว')
+        .gte('shipped_at', `${startDateISO}T00:00:00+07:00`)
+        .lte('shipped_at', `${endDateISO}T23:59:59+07:00`)
+        .order('shipped_at', { ascending: true })
+        .order('order_id', { ascending: true })
+        .range(from, to)
+
+      if (ordersError) {
+        console.error('Error fetching orders:', ordersError)
+        return {
+          success: false,
+          error: ordersError.message,
+          data: null,
+        }
+      }
+
+      if (pageOrders && pageOrders.length > 0) {
+        allOrders = allOrders.concat(pageOrders)
+        console.log(`  Fetched ${pageOrders.length} orders (total so far: ${allOrders.length})`)
+      }
+
+      // Check if we have more pages
+      hasMore = pageOrders && pageOrders.length === PAGE_SIZE
+      currentPage++
+
+      // Safety: stop after 100 pages (100k orders)
+      if (currentPage >= 100) {
+        console.warn('Reached maximum page limit (100 pages, 100k orders)')
+        hasMore = false
       }
     }
+
+    const orders = allOrders
 
     if (!orders || orders.length === 0) {
       return {
@@ -623,34 +687,69 @@ export async function applyCOGSMTD(method: CostingMethod = 'FIFO') {
           skipped: 0,
           failed: 0,
           errors: [],
-          message: 'ไม่มี orders ที่ shipped ใน MTD',
+          message: `ไม่มี orders ที่ shipped ในช่วง ${startDateISO} ถึง ${endDateISO}`,
         },
       }
     }
 
-    console.log(`Found ${orders.length} shipped orders in MTD`)
+    console.log(`Found ${orders.length} total shipped orders in range`)
 
     // Filter out orders that already have COGS allocations
+    // CRITICAL: Use chunked queries to avoid "Bad Request" with large IN lists
     const order_ids = orders.map((o) => o.order_id)
-    const { data: existingAllocations, error: allocError } = await supabase
-      .from('inventory_cogs_allocations')
-      .select('order_id')
-      .in('order_id', order_ids)
-      .eq('is_reversal', false)
+    const allocatedOrderIds = new Set<string>()
 
-    if (allocError) {
-      console.error('Error checking existing allocations:', allocError)
-      return {
-        success: false,
-        error: allocError.message,
-        data: null,
+    if (order_ids.length === 0) {
+      console.log('No orders to check for existing allocations')
+    } else {
+      // Chunk order_ids to avoid PostgREST "Bad Request" (query too large)
+      const CHUNK_SIZE = 200
+      const chunks: string[][] = []
+      for (let i = 0; i < order_ids.length; i += CHUNK_SIZE) {
+        chunks.push(order_ids.slice(i, i + CHUNK_SIZE))
       }
-    }
 
-    const allocatedOrderIds = new Set(
-      existingAllocations?.map((a) => a.order_id) || []
-    )
-    console.log(`Found ${allocatedOrderIds.size} orders already allocated`)
+      console.log(
+        `Checking existing allocations in ${chunks.length} chunks (${order_ids.length} orders total, chunk size: ${CHUNK_SIZE})`
+      )
+      console.log(`  First order_id: ${order_ids[0]}, Last: ${order_ids[order_ids.length - 1]}`)
+
+      // Query each chunk
+      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+        const chunk = chunks[chunkIndex]
+        const { data: chunkAllocations, error: allocError } = await supabase
+          .from('inventory_cogs_allocations')
+          .select('order_id')
+          .in('order_id', chunk)
+          .eq('is_reversal', false)
+
+        if (allocError) {
+          console.error(
+            `Error checking existing allocations (chunk ${chunkIndex + 1}/${chunks.length}):`,
+            allocError
+          )
+          console.error('  Error details:', JSON.stringify(allocError, null, 2))
+          return {
+            success: false,
+            error: `Failed to check existing allocations (chunk ${chunkIndex + 1}/${chunks.length}): ${allocError.message || 'Bad Request'}`,
+            data: null,
+          }
+        }
+
+        // Add to allocated set
+        if (chunkAllocations) {
+          for (const row of chunkAllocations) {
+            allocatedOrderIds.add(String(row.order_id))
+          }
+        }
+
+        console.log(
+          `  Chunk ${chunkIndex + 1}/${chunks.length}: Found ${chunkAllocations?.length || 0} allocated (total so far: ${allocatedOrderIds.size})`
+        )
+      }
+
+      console.log(`Found ${allocatedOrderIds.size} orders already allocated (total)`)
+    }
 
     // Prepare result summary
     const summary = {
@@ -882,19 +981,193 @@ export async function getInventoryOnHand(
 }
 
 // ============================================
+// Bundle On Hand (Available Sets)
+// ============================================
+
+export interface BundleOnHandInfo {
+  available_sets: number
+  limiting_component?: string
+  components: Array<{
+    sku: string
+    required_per_set: number
+    on_hand: number
+    possible_sets: number
+  }>
+}
+
+/**
+ * Get bundle on hand (available sets) for all bundle SKUs
+ * Computed from component inventory availability
+ *
+ * Formula: min over components( floor(component_on_hand / component.quantity) )
+ *
+ * @returns Map of bundle_sku -> BundleOnHandInfo
+ */
+export async function getBundleOnHand(): Promise<{
+  success: boolean
+  error?: string
+  data: Record<string, BundleOnHandInfo>
+}> {
+  try {
+    const supabase = createClient()
+
+    // Verify authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้', data: {} }
+    }
+
+    // 1. Get all bundle SKUs
+    const { data: items, error: itemsError } = await supabase
+      .from('inventory_items')
+      .select('sku_internal, is_bundle')
+      .eq('is_bundle', true)
+
+    if (itemsError) {
+      console.error('Error fetching bundle items:', itemsError)
+      return { success: false, error: itemsError.message, data: {} }
+    }
+
+    if (!items || items.length === 0) {
+      return { success: true, data: {} } // No bundles
+    }
+
+    const bundleSkus = items.map((i) => i.sku_internal)
+
+    // 2. Fetch components for all bundles
+    const { data: components, error: componentsError } = await supabase
+      .from('inventory_bundle_components')
+      .select('bundle_sku, component_sku, quantity')
+      .in('bundle_sku', bundleSkus)
+
+    if (componentsError) {
+      console.error('Error fetching bundle components:', componentsError)
+      return { success: false, error: componentsError.message, data: {} }
+    }
+
+    // 3. Collect all unique component SKUs
+    const componentSkus = Array.from(
+      new Set((components || []).map((c) => c.component_sku))
+    )
+
+    // 4. Fetch on-hand for all component SKUs in one query
+    let componentOnHand: Record<string, number> = {}
+
+    if (componentSkus.length > 0) {
+      const { data: layers, error: layersError } = await supabase
+        .from('inventory_receipt_layers')
+        .select('sku_internal, qty_remaining')
+        .in('sku_internal', componentSkus)
+        .eq('is_voided', false)
+
+      if (layersError) {
+        console.error('Error fetching component layers:', layersError)
+        return { success: false, error: layersError.message, data: {} }
+      }
+
+      // Aggregate by SKU
+      if (layers && layers.length > 0) {
+        for (const layer of layers) {
+          const sku = layer.sku_internal
+          const qty = layer.qty_remaining || 0
+
+          if (componentOnHand[sku]) {
+            componentOnHand[sku] += qty
+          } else {
+            componentOnHand[sku] = qty
+          }
+        }
+      }
+    }
+
+    // 5. Compute available sets for each bundle
+    const bundleOnHandMap: Record<string, BundleOnHandInfo> = {}
+
+    for (const bundleSku of bundleSkus) {
+      const bundleComponents = (components || []).filter(
+        (c) => c.bundle_sku === bundleSku
+      )
+
+      if (bundleComponents.length === 0) {
+        // No components defined
+        bundleOnHandMap[bundleSku] = {
+          available_sets: 0,
+          components: [],
+        }
+        continue
+      }
+
+      // Calculate possible sets per component
+      const componentInfo = bundleComponents.map((c) => {
+        const onHand = componentOnHand[c.component_sku] || 0
+        const requiredPerSet = c.quantity
+        const possibleSets = requiredPerSet > 0 ? Math.floor(onHand / requiredPerSet) : 0
+
+        return {
+          sku: c.component_sku,
+          required_per_set: requiredPerSet,
+          on_hand: onHand,
+          possible_sets: possibleSets,
+        }
+      })
+
+      // Find minimum (limiting component)
+      let minSets = Infinity
+      let limitingComponent: string | undefined
+
+      for (const comp of componentInfo) {
+        if (comp.possible_sets < minSets) {
+          minSets = comp.possible_sets
+          limitingComponent = comp.sku
+        }
+      }
+
+      const availableSets = minSets === Infinity ? 0 : minSets
+
+      bundleOnHandMap[bundleSku] = {
+        available_sets: availableSets,
+        limiting_component: limitingComponent,
+        components: componentInfo,
+      }
+    }
+
+    return { success: true, data: bundleOnHandMap }
+  } catch (error) {
+    console.error('Unexpected error in getBundleOnHand:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+      data: {},
+    }
+  }
+}
+
+// ============================================
 // Stock In (Inbound Receipts)
 // ============================================
 
 /**
  * Create stock in document and receipt layer for a SKU
  *
+ * IMPORTANT: This function creates TWO records atomically:
+ * 1) inventory_stock_in_documents (with item_id, quantity, unit_cost)
+ * 2) inventory_receipt_layers (with sku_internal, qty_received, qty_remaining)
+ *
+ * Receipt layers use sku_internal directly (NO item_id column in that table)
+ *
  * @param params - Stock in parameters
  * @returns Success/error result
  */
 export async function createStockInForSku(params: {
-  sku_internal: string
+  sku_internal?: string
+  sku?: string // alias
+  quantity?: number
+  qty?: number // alias
   received_at: string // ISO date string
-  qty: number
   unit_cost: number
   reference: string
   supplier?: string
@@ -913,16 +1186,33 @@ export async function createStockInForSku(params: {
       return { success: false, error: 'ไม่พบข้อมูลผู้ใช้' }
     }
 
-    const { sku_internal, received_at, qty, unit_cost, reference, supplier, note } = params
+    // ============================================
+    // NORMALIZE SKU: trim + uppercase
+    // ============================================
+    const normalizedSku = String(params.sku_internal ?? params.sku ?? '').trim().toUpperCase()
 
-    // Validate: qty > 0
-    if (qty <= 0) {
-      return { success: false, error: 'Quantity ต้องมากกว่า 0' }
+    if (!normalizedSku) {
+      return { success: false, error: 'SKU is required' }
     }
 
+    // ============================================
+    // NORMALIZE QUANTITY SAFELY
+    // ============================================
+    const rawQty = params.quantity ?? params.qty
+    const quantity = Number(rawQty)
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      return {
+        success: false,
+        error: `Invalid quantity: ${rawQty}. Quantity must be a positive number.`
+      }
+    }
+
+    const { received_at, unit_cost, reference, supplier, note } = params
+
     // Validate: unit_cost >= 0
-    if (unit_cost < 0) {
-      return { success: false, error: 'Unit cost ต้องไม่ติดลบ' }
+    if (!Number.isFinite(unit_cost) || unit_cost < 0) {
+      return { success: false, error: 'Unit cost ต้องเป็นตัวเลขและไม่ติดลบ' }
     }
 
     // Validate: reference is required
@@ -930,26 +1220,42 @@ export async function createStockInForSku(params: {
       return { success: false, error: 'Reference จำเป็นต้องระบุ' }
     }
 
-    // Validate: SKU exists
+    // ============================================
+    // RESOLVE item_id from sku_internal
+    // ============================================
     const { data: item, error: itemError } = await supabase
       .from('inventory_items')
-      .select('sku_internal, is_bundle')
-      .eq('sku_internal', sku_internal)
+      .select('id, sku_internal, is_bundle')
+      .eq('sku_internal', normalizedSku)
       .single()
 
     if (itemError || !item) {
-      return { success: false, error: `SKU ${sku_internal} ไม่พบในระบบ` }
+      console.error('Item lookup failed:', itemError)
+      return {
+        success: false,
+        error: `Inventory item not found: ${normalizedSku}`
+      }
     }
 
     // Validate: SKU is not a bundle
     if (item.is_bundle) {
-      return { success: false, error: 'ไม่สามารถ Stock In สำหรับ Bundle SKU ได้ (Stock In component SKUs แทน)' }
+      return {
+        success: false,
+        error: 'ไม่สามารถ Stock In สำหรับ Bundle SKU ได้ (Stock In component SKUs แทน)'
+      }
     }
 
-    // Insert inventory_stock_in_documents
+    const item_id = item.id
+
+    // ============================================
+    // INSERT stock in document WITH quantity
+    // ============================================
     const { data: doc, error: docError } = await supabase
       .from('inventory_stock_in_documents')
       .insert({
+        item_id,       // ✅ Include item_id
+        quantity,      // ✅ Include quantity (NOT NULL)
+        unit_cost,     // ✅ Include unit_cost
         received_at,
         reference,
         supplier: supplier || null,
@@ -961,21 +1267,27 @@ export async function createStockInForSku(params: {
 
     if (docError || !doc) {
       console.error('Error creating stock in document:', docError)
-      return { success: false, error: 'เกิดข้อผิดพลาดในการสร้าง stock in document' }
+      return {
+        success: false,
+        error: `เกิดข้อผิดพลาดในการสร้าง stock in document: ${docError?.message || 'Unknown'}`
+      }
     }
 
     const doc_id = doc.id
 
-    // Insert inventory_receipt_layers
+    // ============================================
+    // INSERT receipt layer (ALWAYS after document)
+    // Uses REAL schema: sku_internal (NO item_id)
+    // ============================================
     const { data: layer, error: layerError } = await supabase
       .from('inventory_receipt_layers')
       .insert({
-        sku_internal,
+        sku_internal: normalizedSku,  // ✅ Use sku_internal (NO item_id in this table!)
         received_at,
-        qty_received: qty,
-        qty_remaining: qty,
+        qty_received: quantity,       // ✅ Use normalized quantity
+        qty_remaining: quantity,      // ✅ Initially all remaining
         unit_cost,
-        ref_type: 'PURCHASE',
+        ref_type: 'STOCK_IN',         // ✅ Use 'STOCK_IN' (not 'PURCHASE')
         ref_id: doc_id,
         is_voided: false,
       })
@@ -986,12 +1298,15 @@ export async function createStockInForSku(params: {
       console.error('Error creating receipt layer:', layerError)
       // Rollback: delete the document we just created
       await supabase.from('inventory_stock_in_documents').delete().eq('id', doc_id)
-      return { success: false, error: 'เกิดข้อผิดพลาดในการสร้าง receipt layer' }
+      return {
+        success: false,
+        error: `เกิดข้อผิดพลาดในการสร้าง receipt layer: ${layerError?.message || 'Unknown'}`
+      }
     }
 
     const layer_id = layer.id
 
-    console.log(`✓ Stock In created: SKU=${sku_internal}, Qty=${qty}, Doc=${doc_id}, Layer=${layer_id}`)
+    console.log(`✓ Stock In created: SKU=${normalizedSku}, Qty=${quantity}, Doc=${doc_id}, Layer=${layer_id}`)
 
     // Revalidate paths
     revalidatePath('/inventory')

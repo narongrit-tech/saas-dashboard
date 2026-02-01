@@ -23,6 +23,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { createWalletLedgerEntry } from '@/app/(dashboard)/wallets/actions'
 import { Wallet, LedgerEntryType, LedgerDirection } from '@/types/wallets'
 import { useToast } from '@/hooks/use-toast'
+import { getTodayBangkokString } from '@/lib/bangkok-date-range'
 
 interface AddLedgerDialogProps {
   open: boolean
@@ -40,7 +41,7 @@ export function AddLedgerDialog({
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
   const [formData, setFormData] = useState({
-    date: new Date().toISOString().split('T')[0],
+    date: getTodayBangkokString(),
     entry_type: 'TOP_UP' as LedgerEntryType,
     direction: 'IN' as LedgerDirection,
     amount: '',
@@ -79,7 +80,7 @@ export function AddLedgerDialog({
 
       // Reset form
       setFormData({
-        date: new Date().toISOString().split('T')[0],
+        date: getTodayBangkokString(),
         entry_type: 'TOP_UP',
         direction: 'IN',
         amount: '',

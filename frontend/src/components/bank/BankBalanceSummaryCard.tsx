@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Edit } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 import SaveReportedBalanceDialog from './SaveReportedBalanceDialog'
+import { toBangkokDateString } from '@/lib/bangkok-date-range'
 
 interface BankBalanceSummaryCardProps {
   bankAccountId: string
@@ -35,8 +36,8 @@ export default function BankBalanceSummaryCard({
     if (!bankAccountId) return
 
     setLoading(true)
-    const startStr = startDate.toISOString().split('T')[0]
-    const endStr = endDate.toISOString().split('T')[0]
+    const startStr = toBangkokDateString(startDate)
+    const endStr = toBangkokDateString(endDate)
 
     const result = await getBankBalanceSummary(bankAccountId, startStr, endStr)
 

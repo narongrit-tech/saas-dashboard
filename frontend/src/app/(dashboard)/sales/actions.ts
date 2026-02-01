@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { CreateOrderInput, UpdateOrderInput, GroupedSalesOrder, SalesOrder, SalesStoryAggregates, SalesAggregates } from '@/types/sales'
 import { toBangkokTime, formatBangkok, getBangkokNow } from '@/lib/bangkok-time'
 import { unstable_noStore as noStore } from 'next/cache'
+import { toBangkokDateString } from '@/lib/bangkok-date-range'
 
 interface ActionResult {
   success: boolean
@@ -488,10 +489,8 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
         return false
       }
 
-      // Convert to Bangkok date for date-only comparison
-      const { toZonedTime } = require('date-fns-tz')
-      const bangkokDate = toZonedTime(new Date(effectiveDate), 'Asia/Bangkok')
-      const bangkokDateStr = bangkokDate.toISOString().split('T')[0] // YYYY-MM-DD
+      // Convert to Bangkok date for date-only comparison (SAFE: uses Bangkok timezone)
+      const bangkokDateStr = toBangkokDateString(new Date(effectiveDate))
 
       if (filters.startDate) {
         if (bangkokDateStr < filters.startDate) return false
@@ -1362,10 +1361,8 @@ export async function getSalesOrdersGrouped(
         return false
       }
 
-      // Convert to Bangkok date for date-only comparison
-      const { toZonedTime } = require('date-fns-tz')
-      const bangkokDate = toZonedTime(new Date(effectiveDate), 'Asia/Bangkok')
-      const bangkokDateStr = bangkokDate.toISOString().split('T')[0] // YYYY-MM-DD
+      // Convert to Bangkok date for date-only comparison (SAFE: uses Bangkok timezone)
+      const bangkokDateStr = toBangkokDateString(new Date(effectiveDate))
 
       // Apply date filters (startDate/endDate are YYYY-MM-DD)
       if (filters.startDate) {
