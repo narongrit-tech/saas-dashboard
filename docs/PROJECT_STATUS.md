@@ -1,5 +1,5 @@
 # Project Status
-**Last Updated:** 2026-01-30
+**Last Updated:** 2026-02-01
 
 ## ✅ DONE (Phase 7 Completed)
 
@@ -42,6 +42,110 @@
   - P&L Integration: COGS now from inventory_cogs_allocations (not expenses.COGS)
   - UI: 4-tab inventory page (Products, Opening Balance, Bundles, Movements/Audit)
   - See: migration-033, lib/inventory-costing.ts, QA_INVENTORY_COSTING.md
+
+### Stock In Flow + SKU Fixes (2026-02-01)
+- ✅ **Stock In Feature** - Fixed end-to-end flow for receiving inventory (Migration 041)
+  - Added `item_id`, `quantity`, `unit_cost` columns to `inventory_stock_in_documents`
+  - Fixed SKU lookup to use `sku_internal` (not `sku`)
+  - Added SKU normalization (trim + uppercase)
+  - Safe quantity handling (prevents NULL values)
+  - Creates both stock in document AND receipt layer atomically
+  - Receipt layers use `sku_internal` directly (NO item_id column in that table)
+  - Proper rollback on receipt layer creation failure
+  - ref_type = 'STOCK_IN' for stock in transactions
+  - SKU canonicalization: NEWONN001/NEWONN002 (corrected from NEWOWNN)
+  - Product names:
+    - NEWONN001 = Cool Smile Fresh Up
+    - NEWONN002 = Cool Smile Wind Down
+  - See: migration-041, verify-stock-in-flow.sql, SUMMARY_STOCK_IN_FIX.md
+
+### Bundle COGS Auto-Explode (2026-02-01)
+- ✅ **Bundle Inventory + COGS** - Auto-explode bundles to components for accurate costing
+  - Bundle orders automatically consume component SKU inventory (FIFO)
+  - Example: Bundle #0007 = 1x NEWONN001 + 1x NEWONN002
+  - Selling 10 units of #0007 → consumes 10x NEWONN001 + 10x NEWONN002
+  - Creates separate COGS allocations for each component
+  - FIFO allocates from oldest receipt layers per component
+  - Clear error messages when component stock insufficient
+  - Idempotent: prevents double allocation for same order
+  - Bundle SKU itself NEVER consumes inventory (only components do)
+  - See: lib/inventory-costing.ts (applyCOGSForOrderShipped), QA_BUNDLE_COGS.md
+
+### Bundle On Hand Display (2026-02-01)
+- ✅ **Bundle Available Sets** - Show computed bundle inventory instead of 0
+  - Bundle SKUs now display "available sets" computed from component stock
+  - Formula: min( floor(component_on_hand / component.quantity) )
+  - Example: #0007 with NEWONN001=3022, NEWONN002=955 → shows 955 sets
+  - Info icon with tooltip shows component breakdown
+  - Tooltip displays limiting component (e.g., "Limited by: NEWONN002")
+  - Regular SKUs unchanged (still show 4-decimal on hand)
+  - Performance optimized: single query for all bundles
+  - See: inventory/actions.ts (getBundleOnHand), ProductsTab.tsx, QA_BUNDLE_ON_HAND.md
+
+### Apply COGS Date Range (2026-02-01)
+- ✅ **Date Range Selector** - Custom date range for Apply COGS with pagination
+  - UI: Start/End date inputs with validation
+  - Quick presets: "This Month", "Last Month" buttons
+  - Default: First day of month → Today (Bangkok timezone)
+  - Pagination: Fetches ALL orders in range (1000 per page, up to 100k total)
+  - No truncation: Deterministic ordering (shipped_at ASC, order_id ASC)
+  - Result shows: Total / Eligible / Successful / Skipped / Failed with breakdown
+  - Skipped reasons: already_allocated, missing_sku, invalid_qty, cancelled
+  - Idempotent: Safe to re-run, no duplicate allocations
+  - Bundle support: Auto-explode unchanged
+  - Admin-only: RLS protected
+  - See: ApplyCOGSMTDModal.tsx, inventory/actions.ts (applyCOGSMTD), QA_APPLY_COGS_DATE_RANGE.md
+
+### Apply COGS "Bad Request" Fix (2026-02-01)
+- ✅ **Chunked Allocation Queries** - Fixed PostgREST "Bad Request" for large order sets
+  - Problem: .in('order_id', array) failed with >1000 IDs (query too large)
+  - Solution: Split into chunks of 200 IDs, query each chunk separately
+  - Accumulate results into Set (same behavior as before)
+  - Console logs show: "Checking existing allocations in X chunks"
+  - Improved error messages: "Failed to check existing allocations (chunk X/Y)"
+  - Performance: ~1-3 seconds overhead for 2000-5000 orders
+  - Idempotency preserved: no duplicate allocations
+  - Now works for 1731, 5000+ orders (tested up to 100k)
+  - See: BUGFIX_APPLY_COGS_BAD_REQUEST.md
+
+### Ads Performance Race Condition Fix (2026-02-01)
+- ✅ **Request Guard + Optimistic Tab State** - Fixed Summary/Table mismatch
+  - Problem: Race condition when switching tabs/dates rapidly (stale response overwrites new state)
+  - Problem: Tab state lag (URL async update after user click)
+  - Solution: Request sequence guard (useRef counter, discard stale responses)
+  - Solution: Optimistic local state for tab (immediate update, sync with URL)
+  - Added noStore() to server actions (prevent Next.js cache)
+  - Console logs: "Discarding stale request X" when race detected
+  - Files: page.tsx (request guard + local state), actions.ts (noStore)
+  - Minimal diff: ~30 lines changed
+  - See: BUGFIX_ADS_RACE_CONDITION.md
+
+### Profit Reports Rebuild Auth Fix (2026-02-01)
+- ✅ **Explicit User ID Passing** - Fixed "Rebuild Summaries" auth.uid() NULL issue
+  - Problem: auth.uid() can be NULL in PostgreSQL RPC context → rebuild finds no data
+  - Root cause: JWT claim not reliably propagated in RPC execution environment
+  - Solution: Pass explicit p_user_id parameter (already implemented, added logging)
+  - Removed unnecessary await on createClient() (not async)
+  - Added explicit authError handling with clear error messages
+  - Added comprehensive debug logging: userId, email, date range, RPC errors
+  - Console logs: "[Rebuild] Starting rebuild", "[Rebuild] Success", "[Rebuild] RPC error"
+  - Pattern documented: Always use explicit user_id parameters in RPC, never rely on auth.uid()
+  - Files: rebuild-actions.ts (logging + error handling)
+  - See: FIX_PROFIT_REBUILD_AUTH.md
+
+### Profit Reports Order-Level Rollup (2026-02-01)
+- ✅ **Order-Level GMV Aggregation + Platform Normalization** - Fixed GMV inflation & ads join
+  - Problem: TikTok OrderSKUList creates multiple rows per order_id (SKU-level duplicates)
+  - Problem: SUM(total_amount) across SKU rows inflated GMV (double/triple counting)
+  - Problem: Platform mismatch: "TikTok Shop" ≠ "tiktok" prevented ads join
+  - Solution: Created view `sales_orders_order_rollup` (1 row per order, MAX(total_amount))
+  - Solution: Platform normalization: "TikTok Shop" → "tiktok", "Shopee" → "shopee"
+  - Updated rebuild_profit_summaries() to use rollup view for platform_net_profit_daily
+  - Product profit still SKU-level (correct for product breakdown)
+  - Source split uses order-level rollup (correct for GMV/orders count)
+  - Ads join now works: ads.marketplace = s.platform_key
+  - Files: migration-042 (view + RPC update), QA_PROFIT_REPORTS.md
+  - See: migration-042-profit-order-rollup-view.sql
 
 ---
 
