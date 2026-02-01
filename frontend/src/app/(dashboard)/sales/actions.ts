@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { CreateOrderInput, UpdateOrderInput, GroupedSalesOrder, SalesOrder, SalesStoryAggregates, SalesAggregates } from '@/types/sales'
 import { toBangkokTime, formatBangkok, getBangkokNow } from '@/lib/bangkok-time'
+import { unstable_noStore as noStore } from 'next/cache'
 
 interface ActionResult {
   success: boolean
@@ -606,6 +607,7 @@ export async function getSalesAggregates(filters: ExportFilters & { dateBasis?: 
   data?: SalesAggregates
   error?: string
 }> {
+  noStore() // Prevent Next.js caching
   try {
     // 1. Authenticate user
     const supabase = createClient()
@@ -934,6 +936,7 @@ export async function getSalesAggregatesTikTokLike(filters: ExportFilters): Prom
   data?: TikTokStyleAggregates
   error?: string
 }> {
+  noStore() // Prevent Next.js caching
   try {
     // 1. Authenticate user
     const supabase = createClient()
@@ -1259,6 +1262,7 @@ export async function getSalesOrdersGrouped(
   count?: number
   error?: string
 }> {
+  noStore() // Prevent Next.js caching
   try {
     // 1. Authenticate user
     const supabase = createClient()

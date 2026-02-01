@@ -11,6 +11,7 @@ import { SingleDateRangePicker, DateRangeResult } from '@/components/shared/Sing
 import { SalesSummaryBar } from '@/components/sales/SalesSummaryBar'
 import { SalesStoryPanel } from '@/components/sales/SalesStoryPanel'
 import { getSalesAggregates, getSalesOrdersGrouped, getSalesAggregatesTikTokLike, TikTokStyleAggregates } from '@/app/(dashboard)/sales/actions'
+import { useLatestOnly } from '@/hooks/useLatestOnly'
 import {
   Select,
   SelectContent,
@@ -82,6 +83,9 @@ interface SalesPageClientProps {
 export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
+
+  // Race condition guard for async operations
+  const { runLatest } = useLatestOnly()
 
   const [orders, setOrders] = useState<SalesOrder[]>([])
   const [groupedOrders, setGroupedOrders] = useState<GroupedSalesOrder[]>([])
@@ -249,78 +253,14 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
   }, [sourcePlatform, statusString, paymentStatus, startDate, endDate, search, page, perPage, dateBasis, view])
 
   const fetchAggregates = async () => {
-    try {
-      setAggregatesLoading(true)
-      setTiktokAggregatesLoading(true)
-      setAggregatesError(null)
+    await runLatest(async (signal) => {
+      try {
+        setAggregatesLoading(true)
+        setTiktokAggregatesLoading(true)
+        setAggregatesError(null)
 
-      // Fetch main aggregates with TikTok semantics (respects dateBasis)
-      const result = await getSalesAggregates({
-        sourcePlatform: filters.sourcePlatform,
-        status: filters.status,
-        paymentStatus: filters.paymentStatus,
-        startDate: filters.startDate,
-        endDate: filters.endDate,
-        search: filters.search,
-        dateBasis: dateBasis,
-      })
-
-      if (!result.success) {
-        setAggregatesError(result.error || 'เกิดข้อผิดพลาดในการโหลดสรุปข้อมูล')
-        setAggregates(null)
-        return
-      }
-
-      setAggregates(result.data || null)
-
-      // Fetch TikTok-style aggregates
-      const tiktokResult = await getSalesAggregatesTikTokLike({
-        sourcePlatform: filters.sourcePlatform,
-        status: filters.status,
-        paymentStatus: filters.paymentStatus,
-        startDate: filters.startDate,
-        endDate: filters.endDate,
-        search: filters.search,
-      })
-
-      if (tiktokResult.success) {
-        setTiktokAggregates(tiktokResult.data || null)
-      } else {
-        console.warn('TikTok aggregates failed:', tiktokResult.error)
-        setTiktokAggregates(null)
-      }
-    } catch (err) {
-      console.error('Error fetching aggregates:', err)
-      setAggregatesError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการโหลดสรุปข้อมูล')
-      setAggregates(null)
-      setTiktokAggregates(null)
-    } finally {
-      setAggregatesLoading(false)
-      setTiktokAggregatesLoading(false)
-    }
-  }
-
-  const fetchOrders = async () => {
-    try {
-      setLoading(true)
-      setError(null)
-
-      console.log('[Sales Pagination Debug] Query params:', {
-        view,
-        page: filters.page,
-        perPage: filters.perPage,
-        basis: dateBasis,
-        startDate: filters.startDate,
-        endDate: filters.endDate,
-        platform: filters.sourcePlatform,
-        status: filters.status,
-        paymentStatus: filters.paymentStatus,
-        search: filters.search,
-      })
-
-      // Branch: Order View vs Line View
-      if (view === 'order') {
-        const result = await getSalesOrdersGrouped({
+        // Fetch main aggregates with TikTok semantics (respects dateBasis)
+        const result = await getSalesAggregates({
           sourcePlatform: filters.sourcePlatform,
           status: filters.status,
           paymentStatus: filters.paymentStatus,
@@ -328,114 +268,214 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
           endDate: filters.endDate,
           search: filters.search,
           dateBasis: dateBasis,
-          page: filters.page,
-          perPage: filters.perPage,
         })
 
+        // Guard: discard stale responses
+        if (signal.isStale) return
+
         if (!result.success) {
-          setError(result.error || 'เกิดข้อผิดพลาดในการโหลดข้อมูล')
-          setGroupedOrders([])
-          setTotalCount(0)
+          setAggregatesError(result.error || 'เกิดข้อผิดพลาดในการโหลดสรุปข้อมูล')
+          setAggregates(null)
           return
         }
 
-        setGroupedOrders(result.data || [])
-        setTotalCount(result.count || 0)
-        console.log('[Sales Pagination Debug] Order View results:', {
-          orders: result.data?.length || 0,
-          count: result.count,
+        setAggregates(result.data || null)
+
+        // Fetch TikTok-style aggregates
+        const tiktokResult = await getSalesAggregatesTikTokLike({
+          sourcePlatform: filters.sourcePlatform,
+          status: filters.status,
+          paymentStatus: filters.paymentStatus,
+          startDate: filters.startDate,
+          endDate: filters.endDate,
+          search: filters.search,
         })
 
-        // Batch fetch attributions for order view
-        const orderIds = (result.data || []).map(o => o.order_id)
-        if (orderIds.length > 0) {
-          const attributionMap = await batchFetchAttributions(orderIds)
-          setAttributions(attributionMap)
-        }
-      } else {
-        // Line View
-        const offset = (filters.page - 1) * filters.perPage
-        const from = offset
-        const to = offset + filters.perPage - 1
+        // Guard: discard stale responses
+        if (signal.isStale) return
 
-        const supabase = createClient()
-
-        let query = supabase
-          .from('sales_orders')
-          .select('*', { count: 'exact' })
-
-        if (dateBasis === 'order') {
-          query = query.order('created_time', { ascending: false })
+        if (tiktokResult.success) {
+          setTiktokAggregates(tiktokResult.data || null)
         } else {
-          query = query.order('paid_time', { ascending: false })
+          console.warn('TikTok aggregates failed:', tiktokResult.error)
+          setTiktokAggregates(null)
         }
+      } catch (err) {
+        // Guard: discard stale errors
+        if (signal.isStale) return
 
-        if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
-          query = query.eq('source_platform', filters.sourcePlatform)
-        }
-
-        if (filters.status && filters.status.length > 0) {
-          query = query.in('platform_status', filters.status)
-        }
-
-        if (filters.paymentStatus && filters.paymentStatus !== 'all') {
-          query = query.eq('payment_status', filters.paymentStatus)
-        }
-
-        if (dateBasis === 'order') {
-          if (filters.startDate) {
-            query = query.gte('order_date', filters.startDate)
-          }
-          if (filters.endDate) {
-            const endBangkok = endOfDayBangkok(filters.endDate)
-            query = query.lte('order_date', endBangkok.toISOString())
-          }
-        } else {
-          query = query.not('paid_time', 'is', null)
-          if (filters.startDate) {
-            query = query.gte('paid_time', filters.startDate)
-          }
-          if (filters.endDate) {
-            const endBangkok = endOfDayBangkok(filters.endDate)
-            query = query.lte('paid_time', endBangkok.toISOString())
-          }
-        }
-
-        if (filters.search && filters.search.trim()) {
-          query = query.or(
-            `order_id.ilike.%${filters.search}%,product_name.ilike.%${filters.search}%,external_order_id.ilike.%${filters.search}%`
-          )
-        }
-
-        query = query.range(from, to)
-
-        const { data, error: fetchError, count } = await query
-
-        console.log('[Sales Pagination Debug] Line View results:', {
-          rows: data?.length || 0,
-          count,
-          error: fetchError?.message || null,
-        })
-
-        if (fetchError) throw fetchError
-
-        setOrders(data || [])
-        setTotalCount(count || 0)
-
-        // Batch fetch attributions for line view
-        const orderIds = (data || []).map(o => o.order_id)
-        if (orderIds.length > 0) {
-          const attributionMap = await batchFetchAttributions(orderIds)
-          setAttributions(attributionMap)
+        console.error('Error fetching aggregates:', err)
+        setAggregatesError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการโหลดสรุปข้อมูล')
+        setAggregates(null)
+        setTiktokAggregates(null)
+      } finally {
+        // Only clear loading if this is still the latest request
+        if (!signal.isStale) {
+          setAggregatesLoading(false)
+          setTiktokAggregatesLoading(false)
         }
       }
-    } catch (err) {
-      console.error('[Sales Pagination Error]:', err)
-      const errorMessage = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการโหลดข้อมูล'
-      setError(`เกิดข้อผิดพลาด: ${errorMessage}`)
-    } finally {
-      setLoading(false)
-    }
+    })
+  }
+
+  const fetchOrders = async () => {
+    await runLatest(async (signal) => {
+      try {
+        setLoading(true)
+        setError(null)
+
+        console.log('[Sales Pagination Debug] Query params:', {
+          view,
+          page: filters.page,
+          perPage: filters.perPage,
+          basis: dateBasis,
+          startDate: filters.startDate,
+          endDate: filters.endDate,
+          platform: filters.sourcePlatform,
+          status: filters.status,
+          paymentStatus: filters.paymentStatus,
+          search: filters.search,
+        })
+
+        // Branch: Order View vs Line View
+        if (view === 'order') {
+          const result = await getSalesOrdersGrouped({
+            sourcePlatform: filters.sourcePlatform,
+            status: filters.status,
+            paymentStatus: filters.paymentStatus,
+            startDate: filters.startDate,
+            endDate: filters.endDate,
+            search: filters.search,
+            dateBasis: dateBasis,
+            page: filters.page,
+            perPage: filters.perPage,
+          })
+
+          // Guard: discard stale responses
+          if (signal.isStale) return
+
+          if (!result.success) {
+            setError(result.error || 'เกิดข้อผิดพลาดในการโหลดข้อมูล')
+            setGroupedOrders([])
+            setTotalCount(0)
+            return
+          }
+
+          setGroupedOrders(result.data || [])
+          setTotalCount(result.count || 0)
+          console.log('[Sales Pagination Debug] Order View results:', {
+            orders: result.data?.length || 0,
+            count: result.count,
+          })
+
+          // Batch fetch attributions for order view
+          const orderIds = (result.data || []).map(o => o.order_id)
+          if (orderIds.length > 0) {
+            const attributionMap = await batchFetchAttributions(orderIds)
+
+            // Guard: discard stale responses
+            if (signal.isStale) return
+
+            setAttributions(attributionMap)
+          }
+        } else {
+          // Line View
+          const offset = (filters.page - 1) * filters.perPage
+          const from = offset
+          const to = offset + filters.perPage - 1
+
+          const supabase = createClient()
+
+          let query = supabase
+            .from('sales_orders')
+            .select('*', { count: 'exact' })
+
+          if (dateBasis === 'order') {
+            query = query.order('created_time', { ascending: false })
+          } else {
+            query = query.order('paid_time', { ascending: false })
+          }
+
+          if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
+            query = query.eq('source_platform', filters.sourcePlatform)
+          }
+
+          if (filters.status && filters.status.length > 0) {
+            query = query.in('platform_status', filters.status)
+          }
+
+          if (filters.paymentStatus && filters.paymentStatus !== 'all') {
+            query = query.eq('payment_status', filters.paymentStatus)
+          }
+
+          if (dateBasis === 'order') {
+            if (filters.startDate) {
+              query = query.gte('order_date', filters.startDate)
+            }
+            if (filters.endDate) {
+              const endBangkok = endOfDayBangkok(filters.endDate)
+              query = query.lte('order_date', endBangkok.toISOString())
+            }
+          } else {
+            query = query.not('paid_time', 'is', null)
+            if (filters.startDate) {
+              query = query.gte('paid_time', filters.startDate)
+            }
+            if (filters.endDate) {
+              const endBangkok = endOfDayBangkok(filters.endDate)
+              query = query.lte('paid_time', endBangkok.toISOString())
+            }
+          }
+
+          if (filters.search && filters.search.trim()) {
+            query = query.or(
+              `order_id.ilike.%${filters.search}%,product_name.ilike.%${filters.search}%,external_order_id.ilike.%${filters.search}%`
+            )
+          }
+
+          query = query.range(from, to)
+
+          const { data, error: fetchError, count } = await query
+
+          // Guard: discard stale responses
+          if (signal.isStale) return
+
+          console.log('[Sales Pagination Debug] Line View results:', {
+            rows: data?.length || 0,
+            count,
+            error: fetchError?.message || null,
+          })
+
+          if (fetchError) throw fetchError
+
+          setOrders(data || [])
+          setTotalCount(count || 0)
+
+          // Batch fetch attributions for line view
+          const orderIds = (data || []).map(o => o.order_id)
+          if (orderIds.length > 0) {
+            const attributionMap = await batchFetchAttributions(orderIds)
+
+            // Guard: discard stale responses
+            if (signal.isStale) return
+
+            setAttributions(attributionMap)
+          }
+        }
+      } catch (err) {
+        // Guard: discard stale errors
+        if (signal.isStale) return
+
+        console.error('[Sales Pagination Error]:', err)
+        const errorMessage = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการโหลดข้อมูล'
+        setError(`เกิดข้อผิดพลาด: ${errorMessage}`)
+      } finally {
+        // Only clear loading if this is still the latest request
+        if (!signal.isStale) {
+          setLoading(false)
+        }
+      }
+    })
   }
 
   const handleFilterChange = (key: keyof SalesOrderFilters, value: string | string[] | number | undefined) => {
