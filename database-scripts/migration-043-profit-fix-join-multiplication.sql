@@ -106,50 +106,53 @@ END $$;
 -- ============================================
 -- 2) UPDATE sales_orders_order_rollup VIEW
 -- ============================================
+-- FIX: Use 2-layer CTE to avoid GROUP BY issues with CASE expressions
 
 CREATE OR REPLACE VIEW public.sales_orders_order_rollup AS
+WITH base AS (
+  -- Layer 1: Aggregate by raw source_platform value
+  SELECT
+    created_by,
+    order_id,
+    DATE(order_date AT TIME ZONE 'Asia/Bangkok') as order_date_bkk,
+    COALESCE(source_platform, '') as sp,
+    COALESCE(MAX(order_amount), MAX(total_amount)) as order_amount,
+    MAX(platform_status) as platform_status,
+    MIN(order_date) as order_date_earliest
+  FROM sales_orders
+  GROUP BY
+    created_by,
+    order_id,
+    DATE(order_date AT TIME ZONE 'Asia/Bangkok'),
+    COALESCE(source_platform, '')
+)
+-- Layer 2: Apply platform normalization (no re-aggregation)
 SELECT
-  -- User isolation
   created_by,
-
-  -- Order identity
   order_id,
+  order_date_bkk,
 
-  -- Date (Bangkok timezone, date-only)
-  DATE(order_date AT TIME ZONE 'Asia/Bangkok') as order_date_bkk,
-
-  -- Platform (raw + normalized key)
-  COALESCE(source_platform, 'unknown') as platform_raw,
+  -- Platform raw (restore 'unknown' for empty string)
+  CASE WHEN sp = '' THEN 'unknown' ELSE sp END as platform_raw,
 
   -- Platform normalization for ads join
   CASE
-    WHEN COALESCE(source_platform, '') ILIKE '%tiktok%' THEN 'tiktok'
-    WHEN COALESCE(source_platform, '') ILIKE '%shopee%' THEN 'shopee'
-    WHEN COALESCE(source_platform, '') ILIKE '%lazada%' THEN 'lazada'
-    WHEN COALESCE(source_platform, '') = '' THEN 'unknown'
-    ELSE LOWER(REGEXP_REPLACE(COALESCE(source_platform, 'unknown'), '\s+', '', 'g'))
+    WHEN sp ILIKE '%tiktok%' THEN 'tiktok'
+    WHEN sp ILIKE '%shopee%' THEN 'shopee'
+    WHEN sp ILIKE '%lazada%' THEN 'lazada'
+    WHEN sp = '' THEN 'unknown'
+    ELSE LOWER(REGEXP_REPLACE(sp, '\s+', '', 'g'))
   END as platform_key,
 
-  -- Order amount (prioritize order_amount, fallback to total_amount for backward compat)
-  COALESCE(MAX(order_amount), MAX(total_amount)) as order_amount,
-
-  -- Platform status (MAX - assume consistent per order_id)
-  MAX(platform_status) as platform_status,
-
-  -- Order date (min timestamp for reference)
-  MIN(order_date) as order_date_earliest
-
-FROM sales_orders
-GROUP BY
-  created_by,
-  order_id,
-  DATE(order_date AT TIME ZONE 'Asia/Bangkok'),
-  COALESCE(source_platform, 'unknown');
+  order_amount,
+  platform_status,
+  order_date_earliest
+FROM base;
 
 COMMENT ON VIEW public.sales_orders_order_rollup IS
 'Order-level rollup view (1 row per order_id) with normalized platform_key for ads join.
 GMV = COALESCE(MAX(order_amount), MAX(total_amount)) - prioritizes order_amount for accurate order-level aggregation.
-Handles SKU-level import duplicates safely.';
+Handles SKU-level import duplicates safely. Uses 2-layer CTE for proper GROUP BY handling.';
 
 -- ============================================
 -- 3) FIX rebuild_profit_summaries() WITH PRE-AGGREGATED CTEs
@@ -437,6 +440,131 @@ COMMENT ON FUNCTION public.rebuild_profit_summaries IS
 'Rebuild all 3 profit summary tables for date range using order-level rollup view.
 Fixes: GMV inflation from SKU duplicates, ads join platform mismatch, ads/COGS join multiplication.
 Uses pre-aggregated CTEs for ads and COGS to ensure 1:1 joins with no multiplication.';
+
+-- ============================================
+-- SANITY QUERIES (For QA Manual Testing)
+-- ============================================
+
+/*
+-- 1. Verify rollup view GMV matches manual calculation
+-- Replace YOUR_USER_ID with actual UUID
+-- Replace date range as needed
+
+WITH manual_gmv AS (
+  SELECT SUM(order_gmv) as expected_gmv
+  FROM (
+    SELECT
+      order_id,
+      COALESCE(MAX(order_amount), MAX(total_amount)) as order_gmv
+    FROM sales_orders
+    WHERE created_by = 'YOUR_USER_ID'
+      AND DATE(order_date AT TIME ZONE 'Asia/Bangkok') BETWEEN '2026-01-01' AND '2026-01-31'
+      AND platform_status NOT IN ('Cancelled', 'Refunded')
+    GROUP BY order_id
+  ) t
+),
+rollup_gmv AS (
+  SELECT SUM(order_amount) as rollup_gmv
+  FROM sales_orders_order_rollup
+  WHERE created_by = 'YOUR_USER_ID'
+    AND order_date_bkk BETWEEN '2026-01-01' AND '2026-01-31'
+    AND platform_status NOT IN ('Cancelled', 'Refunded')
+)
+SELECT
+  m.expected_gmv,
+  r.rollup_gmv,
+  CASE
+    WHEN ABS(m.expected_gmv - r.rollup_gmv) < 0.01 THEN '✓ PASS'
+    ELSE '✗ FAIL'
+  END as test_result
+FROM manual_gmv m, rollup_gmv r;
+
+-- Expected: expected_gmv = rollup_gmv (within 0.01 rounding error)
+
+
+-- 2. Verify ads spend sum (no multiplication)
+-- Should match between source table and summary table
+
+WITH ads_source AS (
+  SELECT
+    marketplace,
+    SUM(spend) as source_ads_spend
+  FROM ad_daily_performance
+  WHERE created_by = 'YOUR_USER_ID'
+    AND ad_date BETWEEN '2026-01-01' AND '2026-01-31'
+    AND campaign_type != 'live'
+  GROUP BY marketplace
+),
+ads_summary AS (
+  SELECT
+    platform,
+    SUM(ads_spend) as summary_ads_spend
+  FROM platform_net_profit_daily
+  WHERE created_by = 'YOUR_USER_ID'
+    AND date BETWEEN '2026-01-01' AND '2026-01-31'
+  GROUP BY platform
+)
+SELECT
+  COALESCE(src.marketplace, summ.platform) as platform,
+  src.source_ads_spend,
+  summ.summary_ads_spend,
+  CASE
+    WHEN ABS(COALESCE(src.source_ads_spend, 0) - COALESCE(summ.summary_ads_spend, 0)) < 0.01 THEN '✓ PASS'
+    ELSE '✗ FAIL'
+  END as test_result
+FROM ads_source src
+FULL OUTER JOIN ads_summary summ ON src.marketplace = summ.platform;
+
+-- Expected: source_ads_spend = summary_ads_spend for each platform
+
+
+-- 3. Verify COGS sum (no multiplication)
+
+WITH cogs_source AS (
+  SELECT SUM(amount) as source_cogs
+  FROM inventory_cogs_allocations
+  WHERE created_by = 'YOUR_USER_ID'
+    AND is_reversal = false
+    AND order_id IN (
+      SELECT order_id
+      FROM sales_orders
+      WHERE created_by = 'YOUR_USER_ID'
+        AND DATE(order_date AT TIME ZONE 'Asia/Bangkok') BETWEEN '2026-01-01' AND '2026-01-31'
+        AND platform_status NOT IN ('Cancelled', 'Refunded')
+    )
+),
+cogs_summary AS (
+  SELECT SUM(cogs) as summary_cogs
+  FROM platform_net_profit_daily
+  WHERE created_by = 'YOUR_USER_ID'
+    AND date BETWEEN '2026-01-01' AND '2026-01-31'
+)
+SELECT
+  src.source_cogs,
+  summ.summary_cogs,
+  CASE
+    WHEN ABS(src.source_cogs - summ.summary_cogs) < 0.01 THEN '✓ PASS'
+    ELSE '✗ FAIL'
+  END as test_result
+FROM cogs_source src, cogs_summary summ;
+
+-- Expected: source_cogs = summary_cogs
+
+
+-- 4. Verify order_amount column populated (after re-import)
+
+SELECT
+  COUNT(*) as total_rows,
+  COUNT(order_amount) as with_order_amount,
+  COUNT(order_amount) * 100.0 / COUNT(*) as populate_pct
+FROM sales_orders
+WHERE created_by = 'YOUR_USER_ID'
+  AND DATE(order_date AT TIME ZONE 'Asia/Bangkok') BETWEEN '2026-01-01' AND '2026-01-31'
+  AND source_platform ILIKE '%tiktok%';
+
+-- Expected: populate_pct > 90% (after re-import)
+-- If 0%, need to re-import TikTok OrderSKUList
+*/
 
 -- ============================================
 -- END OF MIGRATION 043
