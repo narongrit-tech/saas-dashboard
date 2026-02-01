@@ -352,6 +352,16 @@ async function parseTikTokFormat(
       // Calculate unit price from line revenue / qty
       const unitPrice = qty > 0 ? lineRevenue / qty : 0
 
+      // Parse order-level fields (same across all SKU rows for same order_id)
+      const orderAmount = normalizeNumber(row['Order Amount'])
+      const shippingFeeAfterDiscount = normalizeNumber(row['Shipping Fee After Discount'])
+      const originalShippingFee = normalizeNumber(row['Original Shipping Fee'])
+      const shippingFeeSellerDiscount = normalizeNumber(row['Shipping Fee Seller Discount'])
+      const shippingFeePlatformDiscount = normalizeNumber(row['Shipping Fee Platform Discount'])
+      const paymentPlatformDiscount = normalizeNumber(row['Payment platform discount'])
+      const taxes = normalizeNumber(row['Taxes'])
+      const smallOrderFee = normalizeNumber(row['Small Order Fee'])
+
       // Parse status (TikTok columns)
       const orderStatus = row['Order Status'] as string | undefined // ที่จัดส่ง, ชำระเงินแล้ว, ยกเลิกแล้ว
       const orderSubstatus = row['Order Substatus'] as string | undefined // รอจัดส่ง, อยู่ระหว่างงานขนส่ง, ยกเลิกคำสั่งซื้อ
@@ -408,6 +418,16 @@ async function parseTikTokFormat(
         delivered_at: deliveredTime ? toBangkokDatetime(deliveredTime) : null,
         seller_sku: row['Seller SKU'] ? String(row['Seller SKU']).trim() : null,
         sku_id: row['SKU ID'] ? String(row['SKU ID']).trim() : null,
+
+        // Order-level fields (duplicated across SKU rows - handled by view)
+        order_amount: orderAmount || null,
+        shipping_fee_after_discount: shippingFeeAfterDiscount || null,
+        original_shipping_fee: originalShippingFee || null,
+        shipping_fee_seller_discount: shippingFeeSellerDiscount || null,
+        shipping_fee_platform_discount: shippingFeePlatformDiscount || null,
+        payment_platform_discount: paymentPlatformDiscount || null,
+        taxes: taxes || null,
+        small_order_fee: smallOrderFee || null,
       })
 
       uniqueOrderIds.add(String(orderId).trim())
@@ -923,6 +943,16 @@ export async function importSalesChunk(
         created_time: row.created_time,
         paid_time: row.paid_time,
         cancelled_time: row.cancelled_time,
+
+        // Order-level fields (TikTok OrderSKUList)
+        order_amount: row.order_amount,
+        shipping_fee_after_discount: row.shipping_fee_after_discount,
+        original_shipping_fee: row.original_shipping_fee,
+        shipping_fee_seller_discount: row.shipping_fee_seller_discount,
+        shipping_fee_platform_discount: row.shipping_fee_platform_discount,
+        payment_platform_discount: row.payment_platform_discount,
+        taxes: row.taxes,
+        small_order_fee: row.small_order_fee,
       }
     })
 
@@ -1414,6 +1444,16 @@ export async function importSalesToSystem(
         created_time: row.created_time,
         paid_time: row.paid_time,
         cancelled_time: row.cancelled_time,
+
+        // Order-level fields (TikTok OrderSKUList)
+        order_amount: row.order_amount,
+        shipping_fee_after_discount: row.shipping_fee_after_discount,
+        original_shipping_fee: row.original_shipping_fee,
+        shipping_fee_seller_discount: row.shipping_fee_seller_discount,
+        shipping_fee_platform_discount: row.shipping_fee_platform_discount,
+        payment_platform_discount: row.payment_platform_discount,
+        taxes: row.taxes,
+        small_order_fee: row.small_order_fee,
       }
     })
 

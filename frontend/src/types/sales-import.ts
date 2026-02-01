@@ -192,6 +192,16 @@ export interface ParsedSalesRow {
   created_time?: string | null // When customer placed order (Create Time)
   paid_time?: string | null // When payment confirmed (Paid Time)
   cancelled_time?: string | null // When order cancelled (Cancelled Time)
+
+  // Order-level fields (TikTok OrderSKUList - duplicated across SKU rows)
+  order_amount?: number | null // Order Amount (order-level total, use for GMV)
+  shipping_fee_after_discount?: number | null // Shipping Fee After Discount
+  original_shipping_fee?: number | null // Original Shipping Fee
+  shipping_fee_seller_discount?: number | null // Shipping Fee Seller Discount
+  shipping_fee_platform_discount?: number | null // Shipping Fee Platform Discount
+  payment_platform_discount?: number | null // Payment platform discount
+  taxes?: number | null // Taxes
+  small_order_fee?: number | null // Small Order Fee
 }
 
 /**
