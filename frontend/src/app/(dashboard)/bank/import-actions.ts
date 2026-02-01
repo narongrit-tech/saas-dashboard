@@ -181,8 +181,16 @@ export async function importBankStatement(
   bankAccountId: string,
   fileBuffer: ArrayBuffer,
   fileName: string,
-  columnMapping?: BankColumnMapping
+  columnMapping?: BankColumnMapping,
+  importMode: 'append' | 'replace_range' | 'replace_all' = 'replace_range'
 ): Promise<ImportBankStatementResponse> {
+  // Validate import mode
+  if (!['append', 'replace_range', 'replace_all'].includes(importMode)) {
+    return { success: false, error: `Invalid import mode: ${importMode}` };
+  }
+
+  console.log(`[Bank Import] Starting import with mode: ${importMode}`);
+
   try {
     const supabase = await createClient();
 
@@ -225,44 +233,158 @@ export async function importBankStatement(
     const buffer = Buffer.from(fileBuffer);
     const fileHash = crypto.createHash('sha256').update(buffer).digest('hex');
 
-    // Check for duplicate file hash
+    // Check for existing batch (for all modes)
     const { data: existingBatch } = await supabase
       .from('bank_statement_import_batches')
-      .select('id, imported_at')
+      .select('id, imported_at, status, inserted_count, import_mode')
       .eq('bank_account_id', bankAccountId)
       .eq('file_hash', fileHash)
-      .single();
+      .maybeSingle();
 
-    if (existingBatch) {
+    // For append mode: reject if batch exists and completed
+    if (importMode === 'append' && existingBatch && existingBatch.status === 'completed') {
       const importedAt = new Date(existingBatch.imported_at).toLocaleString('th-TH');
       return {
         success: false,
-        error: `This file has already been imported on ${importedAt}`,
+        error: `This file has already been imported on ${importedAt}. Use Import History to rollback if needed.`,
       };
     }
 
-    // Create import batch
-    const { data: batch, error: batchError } = await supabase
-      .from('bank_statement_import_batches')
-      .insert({
-        bank_account_id: bankAccountId,
-        file_name: fileName,
-        file_hash: fileHash,
-        imported_by: user.id,
-        row_count: parsed.transactions.length,
-        inserted_count: 0,
-        status: 'pending',
-        metadata: {
-          format_type: parsed.format_type,
-          column_mapping: parsed.auto_mapping || columnMapping,
-        },
-      })
-      .select()
-      .single();
+    // Get date range from parsed transactions
+    const dates = parsed.transactions.map((t) => t.txn_date).sort();
+    const startDate = dates[0];
+    const endDate = dates[dates.length - 1];
 
-    if (batchError || !batch) {
-      console.error('Create import batch error:', batchError);
-      return { success: false, error: 'Failed to create import batch' };
+    // Delete existing transactions based on import mode
+    let deletedCount = 0;
+
+    if (importMode === 'replace_range') {
+      console.log(`[Replace Range] Deleting transactions from ${startDate} to ${endDate}`);
+
+      // Delete transactions in the file's date range
+      // Include rows with created_by = user.id OR created_by IS NULL (legacy data cleanup)
+      const { count, error: deleteError } = await supabase
+        .from('bank_transactions')
+        .delete({ count: 'exact' })
+        .eq('bank_account_id', bankAccountId)
+        .or(`created_by.eq.${user.id},created_by.is.null`)
+        .gte('txn_date', startDate)
+        .lte('txn_date', endDate);
+
+      if (deleteError) {
+        console.error('Delete transactions (replace_range) error:', deleteError);
+        return {
+          success: false,
+          error: `Failed to delete existing transactions: ${deleteError.message}`,
+        };
+      }
+
+      deletedCount = count || 0;
+      console.log(`[Replace Range] ✓ Deleted ${deletedCount} transactions from ${startDate} to ${endDate}`);
+    } else if (importMode === 'replace_all') {
+      console.log(`[Replace All] Deleting ALL transactions for bank account ${bankAccountId}`);
+
+      // Delete all transactions for this bank account
+      // Include rows with created_by = user.id OR created_by IS NULL (legacy data cleanup)
+      const { count, error: deleteError } = await supabase
+        .from('bank_transactions')
+        .delete({ count: 'exact' })
+        .eq('bank_account_id', bankAccountId)
+        .or(`created_by.eq.${user.id},created_by.is.null`);
+
+      if (deleteError) {
+        console.error('Delete transactions (replace_all) error:', deleteError);
+        return {
+          success: false,
+          error: `Failed to delete existing transactions: ${deleteError.message}`,
+        };
+      }
+
+      deletedCount = count || 0;
+      console.log(`[Replace All] ✓ Deleted ${deletedCount} transactions for bank account ${bankAccountId}`);
+    } else if (importMode === 'append') {
+      console.log(`[Append] No deletion required (append mode)`);
+    }
+
+    // Create or reuse import batch (idempotent)
+    let batch;
+
+    if (existingBatch) {
+      console.log(`[Batch] Reusing existing batch ${existingBatch.id} (status: ${existingBatch.status})`);
+
+      // Reuse existing batch - reset status to pending and update metadata
+      const { data: updatedBatch, error: updateError } = await supabase
+        .from('bank_statement_import_batches')
+        .update({
+          status: 'pending',
+          row_count: parsed.transactions.length,
+          inserted_count: 0,
+          import_mode: importMode,
+          imported_at: new Date().toISOString(), // Update timestamp for re-import
+          metadata: {
+            format_type: parsed.format_type,
+            column_mapping: parsed.auto_mapping || columnMapping,
+            date_range: {
+              start: startDate,
+              end: endDate,
+            },
+            deleted_before_import: deletedCount,
+            previous_status: existingBatch.status, // Track that this was a re-import
+          },
+        })
+        .eq('id', existingBatch.id)
+        .select()
+        .single();
+
+      if (updateError || !updatedBatch) {
+        console.error('Update existing batch error:', updateError);
+        return { success: false, error: 'Failed to reuse existing batch' };
+      }
+
+      batch = updatedBatch;
+    } else {
+      console.log(`[Batch] Creating new batch`);
+
+      // Create new batch
+      const { data: newBatch, error: batchError } = await supabase
+        .from('bank_statement_import_batches')
+        .insert({
+          bank_account_id: bankAccountId,
+          file_name: fileName,
+          file_hash: fileHash,
+          imported_by: user.id,
+          row_count: parsed.transactions.length,
+          inserted_count: 0,
+          status: 'pending',
+          import_mode: importMode,
+          metadata: {
+            format_type: parsed.format_type,
+            column_mapping: parsed.auto_mapping || columnMapping,
+            date_range: {
+              start: startDate,
+              end: endDate,
+            },
+            deleted_before_import: deletedCount,
+          },
+        })
+        .select()
+        .single();
+
+      if (batchError || !newBatch) {
+        console.error('Create import batch error:', batchError);
+
+        // Check if it's a race condition (another process created the batch)
+        if (batchError?.code === '23505' || batchError?.message?.includes('duplicate')) {
+          return {
+            success: false,
+            error: 'This file is currently being imported by another process. Please wait and try again.',
+          };
+        }
+
+        return { success: false, error: 'Failed to create import batch' };
+      }
+
+      batch = newBatch;
     }
 
     // Prepare transactions for insert (with txn_hash for deduplication)
@@ -292,78 +414,101 @@ export async function importBankStatement(
     });
 
     // Bulk insert transactions with ON CONFLICT handling
-    // Note: Supabase doesn't support ON CONFLICT in JS client, so we handle errors
+    // Wrapped in try-finally to ensure batch status is ALWAYS updated
     let insertedCount = 0;
     let duplicateCount = 0;
+    let importError: string | null = null;
 
-    // Try bulk insert first
-    const { data: insertedTxns, error: insertError } = await supabase
-      .from('bank_transactions')
-      .insert(transactionsToInsert)
-      .select();
+    try {
+      // Try bulk insert first
+      const { data: insertedTxns, error: insertError } = await supabase
+        .from('bank_transactions')
+        .insert(transactionsToInsert)
+        .select();
 
-    if (insertError) {
-      // Check if it's a duplicate key error (unique constraint violation)
-      if (insertError.code === '23505' || insertError.message.includes('duplicate')) {
-        // Some transactions are duplicates - insert one by one to identify which
-        console.log('Duplicate transactions detected, inserting individually...');
+      if (insertError) {
+        // Check if it's a duplicate key error (unique constraint violation)
+        if (insertError.code === '23505' || insertError.message.includes('duplicate')) {
+          // Some transactions are duplicates - insert one by one to identify which
+          console.log('Duplicate transactions detected, inserting individually...');
 
-        for (const txn of transactionsToInsert) {
-          const { data: singleInsert, error: singleError } = await supabase
-            .from('bank_transactions')
-            .insert(txn)
-            .select();
+          for (const txn of transactionsToInsert) {
+            const { data: singleInsert, error: singleError } = await supabase
+              .from('bank_transactions')
+              .insert(txn)
+              .select();
 
-          if (singleError) {
-            if (singleError.code === '23505' || singleError.message.includes('duplicate')) {
-              duplicateCount++;
-            } else {
-              console.error('Insert transaction error:', singleError);
-              // Continue with other transactions instead of failing completely
+            if (singleError) {
+              if (singleError.code === '23505' || singleError.message.includes('duplicate')) {
+                duplicateCount++;
+              } else {
+                console.error('Insert transaction error:', singleError);
+                // Continue with other transactions instead of failing completely
+              }
+            } else if (singleInsert && singleInsert.length > 0) {
+              insertedCount++;
             }
-          } else if (singleInsert && singleInsert.length > 0) {
-            insertedCount++;
           }
+        } else {
+          // Other error - record it but continue to finalize batch
+          console.error('Insert bank transactions error:', insertError);
+          importError = insertError.message;
         }
       } else {
-        // Other error - fail the import
-        console.error('Insert bank transactions error:', insertError);
-        await supabase
-          .from('bank_statement_import_batches')
-          .update({ status: 'failed' })
-          .eq('id', batch.id);
-
-        return { success: false, error: `Failed to insert transactions: ${insertError.message}` };
+        // Bulk insert succeeded - no duplicates
+        insertedCount = insertedTxns?.length || 0;
       }
-    } else {
-      // Bulk insert succeeded - no duplicates
-      insertedCount = insertedTxns?.length || 0;
+    } finally {
+      // CRITICAL: Always finalize batch status based on actual results
+      const finalStatus = importError && insertedCount === 0 ? 'failed' : 'completed';
+
+      await supabase
+        .from('bank_statement_import_batches')
+        .update({
+          status: finalStatus,
+          inserted_count: insertedCount,
+          metadata: {
+            format_type: parsed.format_type,
+            column_mapping: parsed.auto_mapping || columnMapping,
+            duplicate_count: duplicateCount,
+            total_rows: parsed.transactions.length,
+            date_range: {
+              start: startDate,
+              end: endDate,
+            },
+            deleted_before_import: deletedCount,
+            ...(importError ? { import_error: importError } : {}),
+          },
+        })
+        .eq('id', batch.id);
+
+      console.log(`[Import Finalized] Batch ${batch.id}: status=${finalStatus}, inserted=${insertedCount}, deleted=${deletedCount}`);
     }
 
-    // Update batch status to completed
-    await supabase
-      .from('bank_statement_import_batches')
-      .update({
-        status: 'completed',
-        inserted_count: insertedCount,
-        metadata: {
-          format_type: parsed.format_type,
-          column_mapping: parsed.auto_mapping || columnMapping,
-          duplicate_count: duplicateCount,
-          total_rows: parsed.transactions.length,
-        },
-      })
-      .eq('id', batch.id);
+    // If import failed and no transactions were inserted, return error
+    if (importError && insertedCount === 0) {
+      return { success: false, error: `Failed to insert transactions: ${importError}` };
+    }
 
     revalidatePath('/bank');
     revalidatePath('/company-cashflow');
     revalidatePath('/bank-reconciliation');
     revalidatePath('/reconciliation');
 
-    const message =
-      duplicateCount > 0
-        ? `Imported ${insertedCount} transactions (${duplicateCount} duplicates skipped)`
-        : `Imported ${insertedCount} transactions`;
+    // Build message with deleted count and duplicate count
+    let message = `Imported ${insertedCount} transactions`;
+    const details: string[] = [];
+
+    if (deletedCount > 0) {
+      details.push(`deleted ${deletedCount} existing`);
+    }
+    if (duplicateCount > 0) {
+      details.push(`${duplicateCount} duplicates skipped`);
+    }
+
+    if (details.length > 0) {
+      message += ` (${details.join(', ')})`;
+    }
 
     return {
       success: true,
@@ -413,6 +558,305 @@ export async function getBankStatementColumns(
     return { success: true, columns };
   } catch (error) {
     console.error('getBankStatementColumns exception:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
+
+// ============================================================================
+// Overlap Detection
+// ============================================================================
+
+/**
+ * Check for overlapping transactions before import
+ * Returns count of existing transactions in file's date range
+ */
+export async function checkImportOverlap(
+  bankAccountId: string,
+  fileBuffer: ArrayBuffer,
+  fileName: string,
+  columnMapping?: BankColumnMapping
+): Promise<{
+  success: boolean;
+  overlap?: {
+    existing_count: number;
+    date_range: { start: string; end: string };
+    file_count: number;
+  };
+  error?: string;
+}> {
+  try {
+    const supabase = await createClient();
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      return { success: false, error: 'Unauthorized' };
+    }
+
+    // Parse file to get date range
+    const parsed = columnMapping
+      ? parseWithCustomMapping(fileBuffer, fileName, columnMapping)
+      : parseBankStatementAuto(fileBuffer, fileName);
+
+    if (parsed.requires_manual_mapping) {
+      return { success: false, error: 'Cannot parse file for overlap detection' };
+    }
+
+    if (parsed.transactions.length === 0) {
+      return { success: false, error: 'No transactions found in file' };
+    }
+
+    // Get date range from file
+    const dates = parsed.transactions.map((t) => t.txn_date).sort();
+    const startDate = dates[0];
+    const endDate = dates[dates.length - 1];
+
+    // Query existing transactions in this range
+    const { count, error } = await supabase
+      .from('bank_transactions')
+      .select('*', { count: 'exact', head: true })
+      .eq('bank_account_id', bankAccountId)
+      .eq('created_by', user.id)
+      .gte('txn_date', startDate)
+      .lte('txn_date', endDate);
+
+    if (error) {
+      console.error('checkImportOverlap query error:', error);
+      return { success: false, error: error.message };
+    }
+
+    return {
+      success: true,
+      overlap: {
+        existing_count: count || 0,
+        date_range: { start: startDate, end: endDate },
+        file_count: parsed.transactions.length,
+      },
+    };
+  } catch (error) {
+    console.error('checkImportOverlap exception:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
+
+// ============================================================================
+// Import History
+// ============================================================================
+
+/**
+ * Get import history for a bank account
+ * Returns list of past imports with metadata
+ */
+export async function getBankImportHistory(
+  bankAccountId: string
+): Promise<{
+  success: boolean;
+  data?: any[];
+  error?: string;
+}> {
+  try {
+    const supabase = await createClient();
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      return { success: false, error: 'Unauthorized' };
+    }
+
+    const { data, error } = await supabase
+      .from('bank_statement_import_batches')
+      .select('*')
+      .eq('bank_account_id', bankAccountId)
+      .eq('imported_by', user.id)
+      .order('imported_at', { ascending: false })
+      .limit(50);
+
+    if (error) {
+      console.error('getBankImportHistory query error:', error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, data };
+  } catch (error) {
+    console.error('getBankImportHistory exception:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
+
+// ============================================================================
+// Repair Utilities
+// ============================================================================
+
+/**
+ * Repair pending import batches
+ * Automatically marks batches as 'completed' if they have inserted rows but status is still 'pending'
+ * This is a safety mechanism to fix batches that were interrupted before finalization
+ */
+export async function repairPendingBatches(
+  bankAccountId: string
+): Promise<{
+  success: boolean;
+  repaired_count?: number;
+  message?: string;
+  error?: string;
+}> {
+  try {
+    const supabase = await createClient();
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      return { success: false, error: 'Unauthorized' };
+    }
+
+    // Find pending batches with inserted rows
+    const { data: pendingBatches, error: fetchError } = await supabase
+      .from('bank_statement_import_batches')
+      .select('id, inserted_count')
+      .eq('bank_account_id', bankAccountId)
+      .eq('imported_by', user.id)
+      .eq('status', 'pending');
+
+    if (fetchError) {
+      console.error('repairPendingBatches fetch error:', fetchError);
+      return { success: false, error: fetchError.message };
+    }
+
+    if (!pendingBatches || pendingBatches.length === 0) {
+      return { success: true, repaired_count: 0, message: 'No pending batches to repair' };
+    }
+
+    let repairedCount = 0;
+
+    // For each pending batch, check actual transaction count and update status
+    for (const batch of pendingBatches) {
+      // Query actual transaction count
+      const { count: actualCount, error: countError } = await supabase
+        .from('bank_transactions')
+        .select('*', { count: 'exact', head: true })
+        .eq('import_batch_id', batch.id)
+        .eq('created_by', user.id);
+
+      if (countError) {
+        console.error(`Error counting transactions for batch ${batch.id}:`, countError);
+        continue;
+      }
+
+      // If batch has transactions, mark as completed
+      if (actualCount && actualCount > 0) {
+        const { error: updateError } = await supabase
+          .from('bank_statement_import_batches')
+          .update({
+            status: 'completed',
+            inserted_count: actualCount,
+          })
+          .eq('id', batch.id);
+
+        if (updateError) {
+          console.error(`Error updating batch ${batch.id}:`, updateError);
+        } else {
+          repairedCount++;
+          console.log(`[Repaired] Batch ${batch.id}: ${actualCount} transactions found, marked as completed`);
+        }
+      } else {
+        // No transactions found, mark as failed
+        const { error: updateError } = await supabase
+          .from('bank_statement_import_batches')
+          .update({
+            status: 'failed',
+            inserted_count: 0,
+          })
+          .eq('id', batch.id);
+
+        if (!updateError) {
+          repairedCount++;
+          console.log(`[Repaired] Batch ${batch.id}: No transactions found, marked as failed`);
+        }
+      }
+    }
+
+    return {
+      success: true,
+      repaired_count: repairedCount,
+      message: `Repaired ${repairedCount} pending batches`,
+    };
+  } catch (error) {
+    console.error('repairPendingBatches exception:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
+
+// ============================================================================
+// Rollback
+// ============================================================================
+
+/**
+ * Rollback a bank import batch
+ * Calls RPC function: rollback_bank_import_batch
+ * Deletes transactions and marks batch as 'rolled_back'
+ */
+export async function rollbackBankImport(
+  batchId: string
+): Promise<{
+  success: boolean;
+  deleted_count?: number;
+  message?: string;
+  error?: string;
+}> {
+  try {
+    const supabase = await createClient();
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      return { success: false, error: 'Unauthorized' };
+    }
+
+    // Call RPC function
+    const { data, error } = await supabase.rpc('rollback_bank_import_batch', {
+      p_batch_id: batchId,
+    });
+
+    if (error) {
+      console.error('rollbackBankImport RPC error:', error);
+      return { success: false, error: error.message };
+    }
+
+    const result = data as { success: boolean; deleted_count?: number; error?: string };
+
+    if (!result.success) {
+      return { success: false, error: result.error || 'Rollback failed' };
+    }
+
+    // Revalidate affected paths
+    revalidatePath('/bank');
+    revalidatePath('/company-cashflow');
+    revalidatePath('/bank-reconciliation');
+    revalidatePath('/reconciliation');
+
+    return {
+      success: true,
+      deleted_count: result.deleted_count,
+      message: `Rollback successful: ${result.deleted_count} transactions deleted`,
+    };
+  } catch (error) {
+    console.error('rollbackBankImport exception:', error);
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',

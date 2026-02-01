@@ -38,7 +38,8 @@ export interface BankStatementImportBatch {
   imported_at: string;
   row_count: number;
   inserted_count: number;
-  status: 'pending' | 'completed' | 'failed';
+  status: 'pending' | 'completed' | 'failed' | 'rolled_back';
+  import_mode: 'append' | 'replace_range' | 'replace_all';
   metadata: Record<string, any> | null;
 }
 
@@ -301,4 +302,33 @@ export interface BankBalanceSummary {
   reported_balance: number | null;
   delta: number | null; // reported - expected (null if no reported balance)
   reported_as_of_date: string | null;
+}
+
+// ============================================================================
+// Import Enhancements Types (Overlap Detection + History + Rollback)
+// ============================================================================
+
+export interface ImportOverlapInfo {
+  existing_count: number;
+  date_range: { start: string; end: string };
+  file_count: number;
+}
+
+export interface CheckImportOverlapResponse {
+  success: boolean;
+  overlap?: ImportOverlapInfo;
+  error?: string;
+}
+
+export interface GetBankImportHistoryResponse {
+  success: boolean;
+  data?: BankStatementImportBatch[];
+  error?: string;
+}
+
+export interface RollbackBankImportResponse {
+  success: boolean;
+  deleted_count?: number;
+  message?: string;
+  error?: string;
 }

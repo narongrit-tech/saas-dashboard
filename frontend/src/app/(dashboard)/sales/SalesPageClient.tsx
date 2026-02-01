@@ -29,7 +29,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
-import { ChevronLeft, ChevronRight, Download, FileUp, Plus, Pencil, Trash2, Eye, RotateCcw, Package } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, FileUp, Plus, Pencil, Trash2, Eye, RotateCcw, Package, Link } from 'lucide-react'
 import { AddOrderDialog } from '@/components/sales/AddOrderDialog'
 import { EditOrderDialog } from '@/components/sales/EditOrderDialog'
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
@@ -37,6 +37,10 @@ import { SalesImportDialog } from '@/components/sales/SalesImportDialog'
 import { ResetTikTokDialog } from '@/components/sales/ResetTikTokDialog'
 import { OrderDetailDrawer } from '@/components/sales/OrderDetailDrawer'
 import { ApplyCOGSMTDModal } from '@/components/inventory/ApplyCOGSMTDModal'
+import { AffiliateImportDialog } from '@/components/shared/AffiliateImportDialog'
+import { AttributionBadge } from '@/components/sales/AttributionBadge'
+import { batchFetchAttributions } from '@/app/(dashboard)/sales/attribution-actions'
+import { OrderAttribution } from '@/types/profit-reports'
 import { deleteOrder, exportSalesOrders } from '@/app/(dashboard)/sales/actions'
 
 const PLATFORMS = [
@@ -88,6 +92,7 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
   const [showEditDialog, setShowEditDialog] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showImportDialog, setShowImportDialog] = useState(false)
+  const [showAffiliateImportDialog, setShowAffiliateImportDialog] = useState(false)
   const [showResetDialog, setShowResetDialog] = useState(false)
   const [showCOGSMTDModal, setShowCOGSMTDModal] = useState(false)
   const [showDetailDrawer, setShowDetailDrawer] = useState(false)
@@ -100,6 +105,9 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
   const [aggregatesError, setAggregatesError] = useState<string | null>(null)
   const [tiktokAggregates, setTiktokAggregates] = useState<TikTokStyleAggregates | null>(null)
   const [tiktokAggregatesLoading, setTiktokAggregatesLoading] = useState(true)
+
+  // Attribution data (batch fetched)
+  const [attributions, setAttributions] = useState<Map<string, OrderAttribution>>(new Map())
 
   // View state (order or line)
   const [view, setView] = useState<'order' | 'line'>('order')
@@ -337,6 +345,13 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
           orders: result.data?.length || 0,
           count: result.count,
         })
+
+        // Batch fetch attributions for order view
+        const orderIds = (result.data || []).map(o => o.order_id)
+        if (orderIds.length > 0) {
+          const attributionMap = await batchFetchAttributions(orderIds)
+          setAttributions(attributionMap)
+        }
       } else {
         // Line View
         const offset = (filters.page - 1) * filters.perPage
@@ -406,6 +421,13 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
 
         setOrders(data || [])
         setTotalCount(count || 0)
+
+        // Batch fetch attributions for line view
+        const orderIds = (data || []).map(o => o.order_id)
+        if (orderIds.length > 0) {
+          const attributionMap = await batchFetchAttributions(orderIds)
+          setAttributions(attributionMap)
+        }
       }
     } catch (err) {
       console.error('[Sales Pagination Error]:', err)
@@ -828,7 +850,11 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
         </Button>
         <Button variant="outline" onClick={() => setShowImportDialog(true)}>
           <FileUp className="mr-2 h-4 w-4" />
-          Import
+          Import Sales
+        </Button>
+        <Button variant="outline" onClick={() => setShowAffiliateImportDialog(true)}>
+          <Link className="mr-2 h-4 w-4" />
+          Attach Affiliate
         </Button>
         {isAdmin && (
           <Button
@@ -885,6 +911,7 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
               <TableRow>
                 <TableHead className="min-w-[140px]">Order ID</TableHead>
                 <TableHead className="min-w-[100px]">Platform</TableHead>
+                <TableHead className="min-w-[150px]">Source / Affiliate</TableHead>
                 <TableHead className="min-w-[140px]">Status</TableHead>
                 <TableHead className="min-w-[80px]">Payment</TableHead>
                 <TableHead className="text-right min-w-[80px]">Total Units</TableHead>
@@ -898,6 +925,7 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
               <TableRow>
                 <TableHead className="min-w-[140px]">Order ID</TableHead>
                 <TableHead className="min-w-[100px]">Platform</TableHead>
+                <TableHead className="min-w-[150px]">Source / Affiliate</TableHead>
                 <TableHead className="min-w-[200px]">Product Name</TableHead>
                 <TableHead className="text-right min-w-[60px]">Qty</TableHead>
                 <TableHead className="text-right min-w-[120px]">Amount</TableHead>
@@ -977,6 +1005,9 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
                     </div>
                   </TableCell>
                   <TableCell>{getPlatformLabel(order.source_platform || order.marketplace)}</TableCell>
+                  <TableCell>
+                    <AttributionBadge attribution={attributions.get(order.order_id)} />
+                  </TableCell>
                   <TableCell>{getPlatformStatusBadge(order.platform_status)}</TableCell>
                   <TableCell>{getPaymentStatusBadge(order.payment_status)}</TableCell>
                   <TableCell className="text-right">
@@ -1016,6 +1047,9 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
                     </div>
                   </TableCell>
                   <TableCell>{getPlatformLabel(order.source_platform || order.marketplace)}</TableCell>
+                  <TableCell>
+                    <AttributionBadge attribution={attributions.get(order.order_id)} />
+                  </TableCell>
                   <TableCell title={order.product_name}>
                     <div className="max-w-[200px] truncate">
                       {order.product_name}
@@ -1154,6 +1188,12 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
       <SalesImportDialog
         open={showImportDialog}
         onOpenChange={setShowImportDialog}
+        onSuccess={fetchOrders}
+      />
+
+      <AffiliateImportDialog
+        open={showAffiliateImportDialog}
+        onOpenChange={setShowAffiliateImportDialog}
         onSuccess={fetchOrders}
       />
 
