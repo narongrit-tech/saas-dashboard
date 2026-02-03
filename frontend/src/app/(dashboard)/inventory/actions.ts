@@ -24,6 +24,48 @@ import {
 } from '@/lib/inventory-costing'
 
 // ============================================
+// Helper Functions
+// ============================================
+
+/**
+ * Check if current user has inventory admin role
+ * Used for gating admin-only operations like voiding opening balances
+ */
+export async function checkIsInventoryAdmin(): Promise<{
+  success: boolean
+  isAdmin: boolean
+  error?: string
+}> {
+  try {
+    const supabase = createClient()
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, isAdmin: false }
+    }
+
+    const { data: roleData, error: roleError } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id)
+      .single()
+
+    if (roleError) {
+      return { success: false, isAdmin: false }
+    }
+
+    return { success: true, isAdmin: roleData?.role === 'admin' }
+  } catch (error) {
+    console.error('Error checking admin status:', error)
+    return { success: false, isAdmin: false }
+  }
+}
+
+// ============================================
 // Product Management
 // ============================================
 
@@ -291,10 +333,25 @@ export async function updateOpeningBalanceLayer(
 /**
  * Void (soft delete) opening balance layer (only if not yet consumed)
  */
-export async function voidOpeningBalanceLayer(layer_id: string) {
+/**
+ * Void opening balance layer with COGS reversal (admin only)
+ *
+ * SAFE: Marks layer as voided and reverses all COGS allocations from it
+ * IDEMPOTENT: Can be called multiple times safely
+ *
+ * @param layer_id - Layer to void
+ * @param reason - User-provided reason (required, min 10 chars)
+ */
+export async function voidOpeningBalanceWithReversal(
+  layer_id: string,
+  reason: string
+): Promise<{ success: boolean; error?: string; warning?: string }> {
   try {
     const supabase = createClient()
 
+    // ============================================
+    // 1. AUTH + ADMIN CHECK
+    // ============================================
     const {
       data: { user },
       error: authError,
@@ -304,7 +361,25 @@ export async function voidOpeningBalanceLayer(layer_id: string) {
       return { success: false, error: 'Not authenticated' }
     }
 
-    // Get the layer and validate
+    // Check admin role
+    const { data: roleData, error: roleError } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id)
+      .single()
+
+    if (roleError || roleData?.role !== 'admin') {
+      return { success: false, error: 'Admin access required' }
+    }
+
+    // Validate reason
+    if (!reason || reason.trim().length < 10) {
+      return { success: false, error: 'Reason must be at least 10 characters' }
+    }
+
+    // ============================================
+    // 2. GET LAYER AND VALIDATE
+    // ============================================
     const { data: layer, error: fetchError } = await supabase
       .from('inventory_receipt_layers')
       .select('*')
@@ -315,49 +390,46 @@ export async function voidOpeningBalanceLayer(layer_id: string) {
       return { success: false, error: 'Layer not found' }
     }
 
-    // Validation 1: Must be OPENING_BALANCE
+    // Check: Must be OPENING_BALANCE
     if (layer.ref_type !== 'OPENING_BALANCE') {
       return { success: false, error: 'Can only void opening balance layers' }
     }
 
-    // Validation 2: Must not be already voided
+    // IDEMPOTENCY: If already voided, return success
     if (layer.is_voided) {
-      return { success: false, error: 'Layer is already voided' }
-    }
-
-    // Validation 3: Must not be consumed (qty_remaining == qty_received)
-    if (layer.qty_remaining !== layer.qty_received) {
       return {
-        success: false,
-        error: 'Cannot void layer that has been partially consumed',
+        success: true,
+        warning: 'Layer was already voided',
       }
     }
 
-    // Validation 4: Must not have any allocations referencing this layer
+    // ============================================
+    // 3. FIND ALLOCATIONS (NON-REVERSED)
+    // ============================================
     const { data: allocations, error: allocError } = await supabase
       .from('inventory_cogs_allocations')
-      .select('id')
+      .select('id, order_id, qty, method, layer_id')
       .eq('layer_id', layer_id)
-      .limit(1)
+      .is('reversed_at', null)
+      .eq('is_reversal', false)
 
     if (allocError) {
       return { success: false, error: 'Error checking allocations' }
     }
 
-    if (allocations && allocations.length > 0) {
-      return {
-        success: false,
-        error: 'Cannot void layer that has COGS allocations',
-      }
-    }
+    const allocationCount = allocations?.length || 0
+    const hasAllocations = allocationCount > 0
 
-    // Void the layer
+    // ============================================
+    // 4. MARK LAYER AS VOIDED
+    // ============================================
     const { error: voidError } = await supabase
       .from('inventory_receipt_layers')
       .update({
         is_voided: true,
         voided_at: new Date().toISOString(),
         voided_by: user.id,
+        void_reason: reason.trim(),
       })
       .eq('id', layer_id)
 
@@ -366,10 +438,73 @@ export async function voidOpeningBalanceLayer(layer_id: string) {
       return { success: false, error: voidError.message }
     }
 
+    // ============================================
+    // 5. REVERSE ALLOCATIONS (IF ANY)
+    // ============================================
+    if (hasAllocations) {
+      const reversal_reason = `Opening balance voided: ${reason}`
+      const reversed_at = new Date().toISOString()
+
+      // Mark all allocations as reversed
+      const { error: reverseError } = await supabase
+        .from('inventory_cogs_allocations')
+        .update({
+          reversed_at,
+          reversed_by: user.id,
+          reversed_reason: reversal_reason,
+        })
+        .in(
+          'id',
+          allocations.map((a) => a.id)
+        )
+
+      if (reverseError) {
+        console.error('Error reversing allocations:', reverseError)
+        return {
+          success: false,
+          error: 'Layer voided but failed to reverse allocations. Contact admin.',
+        }
+      }
+
+      console.log(`Reversed ${allocationCount} allocations for layer ${layer_id}`)
+    }
+
+    // ============================================
+    // 6. REBUILD INVENTORY SNAPSHOTS (AVG METHOD)
+    // ============================================
+    const rebuildStartDate = layer.received_at.split('T')[0] // Extract YYYY-MM-DD
+    const rebuildEndDate = getTodayBangkokString()
+
+    const { error: rebuildError } = await supabase.rpc('rebuild_inventory_snapshots', {
+      p_user_id: user.id,
+      p_sku_internal: layer.sku_internal,
+      p_start_date: rebuildStartDate,
+      p_end_date: rebuildEndDate,
+    })
+
+    if (rebuildError) {
+      console.error('Error rebuilding snapshots:', rebuildError)
+      // Non-fatal: void succeeded, but snapshots need manual rebuild
+      return {
+        success: true,
+        warning: `Layer voided successfully, but snapshot rebuild failed. Run manual inventory rebuild for SKU ${layer.sku_internal}.`,
+      }
+    }
+
+    // ============================================
+    // 7. REVALIDATE PATHS
+    // ============================================
     revalidatePath('/inventory')
-    return { success: true }
+    revalidatePath('/daily-pl')
+
+    return {
+      success: true,
+      warning: hasAllocations
+        ? `Voided layer and reversed ${allocationCount} COGS allocation(s)`
+        : undefined,
+    }
   } catch (error) {
-    console.error('Unexpected error in voidOpeningBalanceLayer:', error)
+    console.error('Unexpected error in voidOpeningBalanceWithReversal:', error)
     return { success: false, error: 'Unexpected error' }
   }
 }
@@ -858,52 +993,6 @@ export async function applyCOGSMTD(params: {
       success: false,
       error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
       data: null,
-    }
-  }
-}
-
-/**
- * Check if current user is admin (for inventory module)
- */
-export async function checkIsInventoryAdmin(): Promise<{
-  success: boolean
-  isAdmin: boolean
-  error?: string
-}> {
-  try {
-    const supabase = createClient()
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return { success: false, isAdmin: false, error: 'ไม่พบข้อมูลผู้ใช้' }
-    }
-
-    // Check user_roles table for admin role
-    const { data, error } = await supabase
-      .from('user_roles')
-      .select('role')
-      .eq('user_id', user.id)
-      .single()
-
-    if (error) {
-      // If no role found, user is not admin
-      if (error.code === 'PGRST116') {
-        return { success: true, isAdmin: false }
-      }
-      console.error('Error checking admin status:', error)
-      return { success: false, isAdmin: false, error: error.message }
-    }
-
-    return { success: true, isAdmin: data?.role === 'admin' }
-  } catch (error) {
-    console.error('Unexpected error in checkIsInventoryAdmin:', error)
-    return {
-      success: false,
-      isAdmin: false,
-      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
     }
   }
 }
