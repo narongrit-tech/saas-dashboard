@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DateRangeFilter } from '@/components/shared/DateRangeFilter';
 import { ImportAdsDialog } from '@/components/ads/ImportAdsDialog';
 import { TrendingUp, DollarSign, ShoppingCart, AlertCircle, Upload } from 'lucide-react';
-import { type DateRangeResult } from '@/lib/date-range';
+import { type DateRangeResult, toDateQuery } from '@/lib/date-range';
 import { getAdsSummary, getAdsPerformance, type CampaignTypeFilter } from './actions';
 
 function formatCurrency(amount: number): string {
@@ -56,26 +56,53 @@ export default function AdsPage() {
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [modalInstanceKey, setModalInstanceKey] = useState(0);
 
-  // Get campaign type from URL (default: 'all')
-  const campaignType = (searchParams.get('tab') as CampaignTypeFilter) || 'all';
+  // Request sequence guard to prevent race conditions
+  const latestRequestId = useRef(0);
+
+  // Local state for campaign type (optimistic update)
+  const [campaignTypeState, setCampaignTypeState] = useState<CampaignTypeFilter>(
+    (searchParams.get('tab') as CampaignTypeFilter) || 'all'
+  );
+
+  // Sync campaignTypeState when URL changes (back/forward navigation)
+  useEffect(() => {
+    const urlTab = (searchParams.get('tab') as CampaignTypeFilter) || 'all';
+    if (urlTab !== campaignTypeState) {
+      setCampaignTypeState(urlTab);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     if (dateRange) {
       fetchData();
     }
-  }, [dateRange, campaignType]);
+  }, [dateRange, campaignTypeState]);
 
   const fetchData = async () => {
     if (!dateRange) return;
+
+    // Increment request ID and capture current request
+    latestRequestId.current += 1;
+    const currentRequestId = latestRequestId.current;
 
     try {
       setLoading(true);
       setError(null);
 
+      // Convert calendar strings to Date objects with timestamps for server query
+      const queryStartDate = toDateQuery(dateRange.startDate, false); // Start of day
+      const queryEndDate = toDateQuery(dateRange.endDate, true); // End of day
+
       const [summaryResult, perfResult] = await Promise.all([
-        getAdsSummary(dateRange.startDate, dateRange.endDate, campaignType),
-        getAdsPerformance(dateRange.startDate, dateRange.endDate, campaignType),
+        getAdsSummary(queryStartDate, queryEndDate, campaignTypeState),
+        getAdsPerformance(queryStartDate, queryEndDate, campaignTypeState),
       ]);
+
+      // Guard: discard stale responses
+      if (currentRequestId !== latestRequestId.current) {
+        console.log(`Discarding stale request ${currentRequestId} (latest: ${latestRequestId.current})`);
+        return;
+      }
 
       if (!summaryResult.success) {
         setError(summaryResult.error || 'ไม่สามารถโหลดข้อมูลได้');
@@ -97,10 +124,18 @@ export default function AdsPage() {
       );
       setPerformance(perfResult.data || []);
     } catch (err) {
+      // Guard: discard stale errors
+      if (currentRequestId !== latestRequestId.current) {
+        console.log(`Discarding stale error for request ${currentRequestId}`);
+        return;
+      }
       console.error('Error fetching ads data:', err);
       setError('เกิดข้อผิดพลาดในการโหลดข้อมูล');
     } finally {
-      setLoading(false);
+      // Only clear loading if this is still the latest request
+      if (currentRequestId === latestRequestId.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -119,7 +154,12 @@ export default function AdsPage() {
   };
 
   const handleTabChange = (value: string) => {
-    // Update URL without full page reload
+    const newTab = value as CampaignTypeFilter;
+
+    // Optimistic update: set local state immediately
+    setCampaignTypeState(newTab);
+
+    // Update URL (async, may lag)
     const params = new URLSearchParams(searchParams.toString());
     if (value === 'all') {
       params.delete('tab'); // Default, no need in URL
@@ -144,7 +184,7 @@ export default function AdsPage() {
 
       {/* Filters: Campaign Type Tabs + Date Range */}
       <div className="space-y-4">
-        <Tabs value={campaignType} onValueChange={handleTabChange}>
+        <Tabs value={campaignTypeState} onValueChange={handleTabChange}>
           <TabsList>
             <TabsTrigger value="all">รวมทั้งหมด</TabsTrigger>
             <TabsTrigger value="product">GMV Max (Product)</TabsTrigger>

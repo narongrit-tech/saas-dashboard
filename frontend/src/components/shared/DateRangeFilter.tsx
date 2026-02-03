@@ -86,6 +86,12 @@ export function DateRangeFilter({
     if (end) setCustomEndDate(end);
   };
 
+  // Helper: Convert calendar string (YYYY-MM-DD) to Date for UI display
+  const parseCalendarDate = (dateStr: string): Date => {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    return new Date(year, month - 1, day);
+  };
+
   return (
     <div className={cn('space-y-3', className)}>
       <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center">
@@ -117,14 +123,14 @@ export function DateRangeFilter({
                 {customStartDate
                   ? format(customStartDate, 'dd/MM/yyyy')
                   : preset !== 'custom'
-                  ? format(currentRange.startDate, 'dd/MM/yyyy')
+                  ? format(parseCalendarDate(currentRange.startDate), 'dd/MM/yyyy')
                   : 'วันเริ่มต้น'}
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0" align="start">
               <Calendar
                 mode="single"
-                selected={customStartDate || currentRange.startDate}
+                selected={customStartDate || parseCalendarDate(currentRange.startDate)}
                 onSelect={(date) => handleCustomDateChange(date, customEndDate)}
                 initialFocus
               />
@@ -146,21 +152,21 @@ export function DateRangeFilter({
                 {customEndDate
                   ? format(customEndDate, 'dd/MM/yyyy')
                   : preset !== 'custom'
-                  ? format(currentRange.endDate, 'dd/MM/yyyy')
+                  ? format(parseCalendarDate(currentRange.endDate), 'dd/MM/yyyy')
                   : 'วันสิ้นสุด'}
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0" align="start">
               <Calendar
                 mode="single"
-                selected={customEndDate || currentRange.endDate}
+                selected={customEndDate || parseCalendarDate(currentRange.endDate)}
                 onSelect={(date) => handleCustomDateChange(customStartDate, date)}
                 initialFocus
                 disabled={(date) =>
                   customStartDate
                     ? date < customStartDate
                     : preset !== 'custom'
-                    ? date < currentRange.startDate
+                    ? date < parseCalendarDate(currentRange.startDate)
                     : false
                 }
               />
