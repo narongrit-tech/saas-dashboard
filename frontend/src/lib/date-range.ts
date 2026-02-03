@@ -117,16 +117,22 @@ export function getDateRangeFromPreset(
 /**
  * Convert calendar date string (YYYY-MM-DD) to Date object with Bangkok timezone
  * Used for server queries (adds timestamps)
+ * CRITICAL: Explicitly create Date in Bangkok timezone to avoid drift
  */
 export function toDateQuery(calendarDate: string, isEndOfDay: boolean = false): Date {
-  // Parse YYYY-MM-DD as Bangkok timezone
+  // Parse YYYY-MM-DD as Bangkok timezone date (midnight)
   const [year, month, day] = calendarDate.split('-').map(Number);
-  const bangkokDate = new Date(year, month - 1, day);
 
-  // Apply start/end of day
+  // Create Date object in UTC first (to avoid local timezone issues)
+  const utcDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+
+  // Convert to Bangkok timezone
+  const bangkokDate = toZonedTime(utcDate, BANGKOK_TZ);
+
+  // Apply start/end of day in Bangkok timezone
   const result = isEndOfDay ? endOfDay(bangkokDate) : startOfDay(bangkokDate);
 
-  // Convert to UTC for server query
+  // Convert back to UTC for server query
   return fromZonedTime(result, BANGKOK_TZ);
 }
 
@@ -142,28 +148,37 @@ export function toDateRangeQuery(range: DateRangeResult): DateRangeQuery {
 
 /**
  * Format date range for display (from calendar date strings)
+ * CRITICAL: Format directly from YYYY-MM-DD strings to avoid timezone drift
  */
 export function formatDateRange(startDate: string, endDate: string): string {
-  // Parse YYYY-MM-DD calendar strings
-  const parseCalendarDate = (dateStr: string): Date => {
+  // Format YYYY-MM-DD calendar string to Thai format
+  const formatCalendarDate = (dateStr: string): string => {
     const [year, month, day] = dateStr.split('-').map(Number);
-    return new Date(year, month - 1, day);
+
+    // Thai month names (short)
+    const thaiMonths = [
+      'ม.ค.',
+      'ก.พ.',
+      'มี.ค.',
+      'เม.ย.',
+      'พ.ค.',
+      'มิ.ย.',
+      'ก.ค.',
+      'ส.ค.',
+      'ก.ย.',
+      'ต.ค.',
+      'พ.ย.',
+      'ธ.ค.',
+    ];
+
+    // Convert to Buddhist year (Thai calendar)
+    const buddhistYear = year + 543;
+
+    return `${day} ${thaiMonths[month - 1]} ${buddhistYear}`;
   };
 
-  const startDateObj = parseCalendarDate(startDate);
-  const endDateObj = parseCalendarDate(endDate);
-
-  const startStr = startDateObj.toLocaleDateString('th-TH', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  });
-
-  const endStr = endDateObj.toLocaleDateString('th-TH', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  });
+  const startStr = formatCalendarDate(startDate);
+  const endStr = formatCalendarDate(endDate);
 
   if (startStr === endStr) {
     return startStr;
