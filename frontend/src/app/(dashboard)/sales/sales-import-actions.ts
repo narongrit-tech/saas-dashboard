@@ -122,6 +122,32 @@ function normalizeNumber(value: unknown): number {
 }
 
 /**
+ * Normalize header text for consistent lookups
+ */
+function normalizeHeaderValue(header: unknown): string {
+  return String(header ?? '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+/**
+ * Parse money values (currency symbols, commas, whitespace)
+ */
+function parseMoney(value: unknown): number | null {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value === 'string') {
+    const cleaned = value.replace(/[^\d.-]/g, '')
+    if (!cleaned || cleaned === '-' || cleaned === '.') return null
+    const num = Number.parseFloat(cleaned)
+    return Number.isNaN(num) ? null : num
+  }
+  return null
+}
+
+/**
  * Normalize status to internal status (completed/pending/cancelled)
  * Now supports Thai keywords from TikTok Order Status/Substatus
  */
@@ -255,7 +281,7 @@ async function parseTikTokFormat(
   workbook: XLSX.WorkBook,
   worksheet: XLSX.WorkSheet
 ): Promise<SalesImportPreview> {
-  const rows = XLSX.utils.sheet_to_json(worksheet, { defval: null }) as Record<string, unknown>[]
+  const rows = XLSX.utils.sheet_to_json(worksheet, { defval: null, header: 1 }) as unknown[][]
 
   if (rows.length === 0) {
     return {
@@ -269,8 +295,32 @@ async function parseTikTokFormat(
     }
   }
 
+  const headerRow = rows[0] ?? []
+  const headerIndex = new Map<string, number>()
+  headerRow.forEach((cell, index) => {
+    const normalized = normalizeHeaderValue(cell)
+    if (normalized && !headerIndex.has(normalized)) {
+      headerIndex.set(normalized, index)
+    }
+  })
+
+  const getCellValue = (row: unknown[], header: string): unknown => {
+    const index = headerIndex.get(normalizeHeaderValue(header))
+    return index === undefined ? null : row[index]
+  }
+
+  const getCellValueByHeaders = (row: unknown[], headers: string[]): unknown => {
+    for (const header of headers) {
+      const value = getCellValue(row, header)
+      if (value !== null && value !== undefined && String(value).trim() !== '') {
+        return value
+      }
+    }
+    return null
+  }
+
   // TikTok has Row 1 = headers, Row 2 = description (SKIP), Row 3+ = data
-  // After sheet_to_json, Row 2 might have nulls or invalid data - we'll filter
+  // After sheet_to_json with header:1, Row 2 is rows[1]
 
   const parsedRows: ParsedSalesRow[] = []
   const errors: Array<{ row?: number; field?: string; message: string; severity: 'error' | 'warning' }> = []
@@ -279,14 +329,17 @@ async function parseTikTokFormat(
   let minDate: Date | null = null
   let maxDate: Date | null = null
   let totalRevenue = 0
+  let firstOrderAmountRaw: unknown = null
+  let firstOrderAmountParsed: number | null = null
+  let orderAmountNullCount = 0
 
-  for (let i = 0; i < rows.length; i++) {
+  for (let i = 2; i < rows.length; i++) {
     const row = rows[i]
-    const rowNumber = i + 2 // Excel rows start at 1, + 1 for header = row 2+
+    const rowNumber = i + 1 // Excel rows start at 1 (header row)
 
     // Skip description row (Row 2 in Excel) - typically has null or invalid data
     // Check if Order ID exists and is valid
-    const orderId = row['Order ID']
+    const orderId = getCellValue(row, 'Order ID')
     if (!orderId || String(orderId).trim() === '') {
       // Skip empty rows (likely row 2 or other invalid rows)
       continue
@@ -294,7 +347,7 @@ async function parseTikTokFormat(
 
     try {
       // Parse created_time (use as order_date for P&L bucket)
-      const createdTimeRaw = row['Created Time']
+      const createdTimeRaw = getCellValue(row, 'Created Time')
       const createdTime = parseExcelDate(createdTimeRaw)
 
       if (!createdTime) {
@@ -323,7 +376,7 @@ async function parseTikTokFormat(
       if (!maxDate || createdTime > maxDate) maxDate = createdTime
 
       // Parse product name
-      const productName = row['Product Name']
+      const productName = getCellValue(row, 'Product Name')
       if (!productName || String(productName).trim() === '') {
         errors.push({
           row: rowNumber,
@@ -335,7 +388,7 @@ async function parseTikTokFormat(
       }
 
       // Parse quantity
-      const qty = normalizeNumber(row['Quantity'])
+      const qty = normalizeNumber(getCellValue(row, 'Quantity'))
       if (qty <= 0) {
         errors.push({
           row: rowNumber,
@@ -347,46 +400,80 @@ async function parseTikTokFormat(
       }
 
       // Parse line revenue (SKU Subtotal After Discount)
-      const lineRevenue = normalizeNumber(row['SKU Subtotal After Discount'])
+      const lineRevenue = parseMoney(getCellValue(row, 'SKU Subtotal After Discount')) ?? 0
 
       // Calculate unit price from line revenue / qty
       const unitPrice = qty > 0 ? lineRevenue / qty : 0
 
-      // Parse order-level fields (same across all SKU rows for same order_id)
-      const orderAmount = normalizeNumber(row['Order Amount'])
-      const shippingFeeAfterDiscount = normalizeNumber(row['Shipping Fee After Discount'])
-      const originalShippingFee = normalizeNumber(row['Original Shipping Fee'])
-      const shippingFeeSellerDiscount = normalizeNumber(row['Shipping Fee Seller Discount'])
-      const shippingFeePlatformDiscount = normalizeNumber(row['Shipping Fee Platform Discount'])
-      const paymentPlatformDiscount = normalizeNumber(row['Payment platform discount'])
-      const taxes = normalizeNumber(row['Taxes'])
-      const smallOrderFee = normalizeNumber(row['Small Order Fee'])
-
       // Parse status (TikTok columns)
-      const orderStatus = row['Order Status'] as string | undefined // ที่จัดส่ง, ชำระเงินแล้ว, ยกเลิกแล้ว
-      const orderSubstatus = row['Order Substatus'] as string | undefined // รอจัดส่ง, อยู่ระหว่างงานขนส่ง, ยกเลิกคำสั่งซื้อ
+      const orderStatus = getCellValue(row, 'Order Status') as string | undefined // ที่จัดส่ง, ชำระเงินแล้ว, ยกเลิกแล้ว
+      const orderSubstatus = getCellValue(row, 'Order Substatus') as string | undefined // รอจัดส่ง, อยู่ระหว่างงานขนส่ง, ยกเลิกคำสั่งซื้อ
 
       // Internal status for business logic (completed/pending/cancelled)
       const status = normalizeStatus(orderStatus, orderSubstatus)
 
       // Parse fulfillment timestamps
-      const paidTime = parseExcelDate(row['Paid Time'])
-      const shippedTime = parseExcelDate(row['Shipped Time'])
-      const deliveredTime = parseExcelDate(row['Delivered Time'])
-      const cancelledTime = parseExcelDate(row['Cancelled Time'])
+      const paidTime = parseExcelDate(getCellValue(row, 'Paid Time'))
+      const shippedTime = parseExcelDate(getCellValue(row, 'Shipped Time'))
+      const deliveredTime = parseExcelDate(getCellValue(row, 'Delivered Time'))
+      const cancelledTime = parseExcelDate(getCellValue(row, 'Cancelled Time'))
+
+      const orderAmountRaw = getCellValueByHeaders(row, [
+        'Order Amount',
+        'Order Amount (THB)',
+      ])
+      const orderAmount = parseMoney(orderAmountRaw)
+      const shippingFeeOriginal = parseMoney(getCellValueByHeaders(row, [
+        'Original Shipping Fee',
+        'Shipping Fee (Original)',
+      ]))
+      const shippingFeeSellerDiscount = parseMoney(getCellValueByHeaders(row, [
+        'Shipping Fee Seller Discount',
+        'Shipping Fee (Seller Discount)',
+      ]))
+      const shippingFeePlatformDiscount = parseMoney(getCellValueByHeaders(row, [
+        'Shipping Fee Platform Discount',
+        'Shipping Fee (Platform Discount)',
+      ]))
+      const shippingFeeAfterDiscount = parseMoney(getCellValueByHeaders(row, [
+        'Shipping Fee After Discount',
+        'Shipping Fee (After Discount)',
+      ]))
+      const taxes = parseMoney(getCellValue(row, 'Taxes'))
+      const smallOrderFee = parseMoney(getCellValue(row, 'Small Order Fee'))
+      const paymentPlatformDiscount = parseMoney(getCellValueByHeaders(row, [
+        'Payment platform discount',
+        'Payment Platform Discount',
+      ]))
+
+      if (firstOrderAmountRaw === null) {
+        firstOrderAmountRaw = orderAmountRaw
+        firstOrderAmountParsed = orderAmount
+      }
+      if (orderAmount === null) {
+        orderAmountNullCount += 1
+      }
 
       // Derive payment status
       const paymentStatus = paidTime ? 'paid' : 'unpaid'
 
       // Build metadata for extended TikTok data
       const toStringOrNull = (val: unknown): string | null => val ? String(val) : null
-      const metadata: Record<string, string | null> = {
+      const metadata: Record<string, string | number | null> = {
         source_report: 'OrderSKUList',
-        variation: toStringOrNull(row['Variation']),
+        variation: toStringOrNull(getCellValue(row, 'Variation')),
         cancelled_time: cancelledTime ? toBangkokDatetime(cancelledTime) : null,
-        cancel_reason: toStringOrNull(row['Cancel Reason']),
-        tracking_id: toStringOrNull(row['Tracking ID']),
-        payment_method: toStringOrNull(row['Payment Method']),
+        cancel_reason: toStringOrNull(getCellValue(row, 'Cancel Reason')),
+        tracking_id: toStringOrNull(getCellValue(row, 'Tracking ID')),
+        payment_method: toStringOrNull(getCellValue(row, 'Payment Method')),
+        order_amount: orderAmount,
+        shipping_fee_original: shippingFeeOriginal,
+        shipping_fee_seller_discount: shippingFeeSellerDiscount,
+        shipping_fee_platform_discount: shippingFeePlatformDiscount,
+        shipping_fee_after_discount: shippingFeeAfterDiscount,
+        taxes,
+        small_order_fee: smallOrderFee,
+        payment_platform_discount: paymentPlatformDiscount,
       }
 
       // Add parsed row
@@ -395,7 +482,7 @@ async function parseTikTokFormat(
         marketplace: 'tiktok_shop',
         channel: 'TikTok Shop',
         product_name: String(productName).trim(),
-        sku: row['SKU ID'] ? String(row['SKU ID']).trim() : undefined,
+        sku: getCellValue(row, 'SKU ID') ? String(getCellValue(row, 'SKU ID')).trim() : undefined,
         quantity: qty,
         unit_price: unitPrice,
         total_amount: lineRevenue,
@@ -416,18 +503,12 @@ async function parseTikTokFormat(
         paid_at: paidTime ? toBangkokDatetime(paidTime) : null,
         shipped_at: shippedTime ? toBangkokDatetime(shippedTime) : null,
         delivered_at: deliveredTime ? toBangkokDatetime(deliveredTime) : null,
-        seller_sku: row['Seller SKU'] ? String(row['Seller SKU']).trim() : null,
-        sku_id: row['SKU ID'] ? String(row['SKU ID']).trim() : null,
+        seller_sku: getCellValue(row, 'Seller SKU') ? String(getCellValue(row, 'Seller SKU')).trim() : null,
+        sku_id: getCellValue(row, 'SKU ID') ? String(getCellValue(row, 'SKU ID')).trim() : null,
 
-        // Order-level fields (duplicated across SKU rows - handled by view)
-        order_amount: orderAmount || null,
-        shipping_fee_after_discount: shippingFeeAfterDiscount || null,
-        original_shipping_fee: originalShippingFee || null,
-        shipping_fee_seller_discount: shippingFeeSellerDiscount || null,
-        shipping_fee_platform_discount: shippingFeePlatformDiscount || null,
-        payment_platform_discount: paymentPlatformDiscount || null,
-        taxes: taxes || null,
-        small_order_fee: smallOrderFee || null,
+        created_time: createdTime ? toBangkokDatetime(createdTime) : null,
+        paid_time: paidTime ? toBangkokDatetime(paidTime) : null,
+        cancelled_time: cancelledTime ? toBangkokDatetime(cancelledTime) : null,
       })
 
       uniqueOrderIds.add(String(orderId).trim())
@@ -445,6 +526,14 @@ async function parseTikTokFormat(
         severity: 'error'
       })
     }
+  }
+
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[parseTikTokFormat] Order Amount debug:', {
+      first_raw_order_amount: firstOrderAmountRaw,
+      first_parsed_order_amount: firstOrderAmountParsed,
+      null_order_amount_count: orderAmountNullCount,
+    })
   }
 
   // Check if any valid rows
@@ -943,16 +1032,6 @@ export async function importSalesChunk(
         created_time: row.created_time,
         paid_time: row.paid_time,
         cancelled_time: row.cancelled_time,
-
-        // Order-level fields (TikTok OrderSKUList)
-        order_amount: row.order_amount,
-        shipping_fee_after_discount: row.shipping_fee_after_discount,
-        original_shipping_fee: row.original_shipping_fee,
-        shipping_fee_seller_discount: row.shipping_fee_seller_discount,
-        shipping_fee_platform_discount: row.shipping_fee_platform_discount,
-        payment_platform_discount: row.payment_platform_discount,
-        taxes: row.taxes,
-        small_order_fee: row.small_order_fee,
       }
     })
 
@@ -1005,6 +1084,106 @@ export async function importSalesChunk(
     // GUARD: Warn if returned count doesn't match expected
     if (insertedCount !== salesRows.length) {
       console.warn(`[importSalesChunk] WARNING: Upsert returned ${insertedCount} rows but expected ${salesRows.length}`)
+    }
+
+    const getMetadataNumber = (metadata: ParsedSalesRow['metadata'], key: string): number | null => {
+      const value = metadata?.[key]
+      if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : null
+      }
+      if (typeof value === 'string') {
+        return parseMoney(value)
+      }
+      return null
+    }
+
+    const orderFinancialsMap = new Map<string, {
+      order_id: string
+      marketplace: string
+      import_batch_id: string
+      created_by: string
+      order_amount: number | null
+      shipped_at: string | null
+      cancelled_time: string | null
+      shipping_fee_original: number | null
+      shipping_fee_seller_discount: number | null
+      shipping_fee_platform_discount: number | null
+      shipping_fee_after_discount: number | null
+      taxes: number | null
+      small_order_fee: number | null
+      payment_platform_discount: number | null
+    }>()
+
+    const mergeNullable = <T>(existing: T | null, incoming: T | null): T | null => {
+      if (existing !== null && existing !== undefined) return existing
+      if (incoming === undefined) return existing ?? null
+      return incoming ?? null
+    }
+
+    for (const row of chunkData) {
+      const existing = orderFinancialsMap.get(row.order_id)
+      const rowPayload = {
+        order_id: row.order_id,
+        marketplace: row.marketplace,
+        import_batch_id: batchId,
+        created_by: user.id,
+        order_amount: getMetadataNumber(row.metadata, 'order_amount'),
+        shipped_at: row.shipped_at ?? null,
+        cancelled_time: row.cancelled_time ?? null,
+        shipping_fee_original: getMetadataNumber(row.metadata, 'shipping_fee_original'),
+        shipping_fee_seller_discount: getMetadataNumber(row.metadata, 'shipping_fee_seller_discount'),
+        shipping_fee_platform_discount: getMetadataNumber(row.metadata, 'shipping_fee_platform_discount'),
+        shipping_fee_after_discount: getMetadataNumber(row.metadata, 'shipping_fee_after_discount'),
+        taxes: getMetadataNumber(row.metadata, 'taxes'),
+        small_order_fee: getMetadataNumber(row.metadata, 'small_order_fee'),
+        payment_platform_discount: getMetadataNumber(row.metadata, 'payment_platform_discount'),
+      }
+
+      if (!existing) {
+        orderFinancialsMap.set(row.order_id, rowPayload)
+        continue
+      }
+
+      orderFinancialsMap.set(row.order_id, {
+        ...existing,
+        order_amount: mergeNullable(existing.order_amount, rowPayload.order_amount),
+        shipped_at: mergeNullable(existing.shipped_at, rowPayload.shipped_at),
+        cancelled_time: mergeNullable(existing.cancelled_time, rowPayload.cancelled_time),
+        shipping_fee_original: mergeNullable(existing.shipping_fee_original, rowPayload.shipping_fee_original),
+        shipping_fee_seller_discount: mergeNullable(existing.shipping_fee_seller_discount, rowPayload.shipping_fee_seller_discount),
+        shipping_fee_platform_discount: mergeNullable(existing.shipping_fee_platform_discount, rowPayload.shipping_fee_platform_discount),
+        shipping_fee_after_discount: mergeNullable(existing.shipping_fee_after_discount, rowPayload.shipping_fee_after_discount),
+        taxes: mergeNullable(existing.taxes, rowPayload.taxes),
+        small_order_fee: mergeNullable(existing.small_order_fee, rowPayload.small_order_fee),
+        payment_platform_discount: mergeNullable(existing.payment_platform_discount, rowPayload.payment_platform_discount),
+      })
+    }
+
+    const orderFinancialRows = Array.from(orderFinancialsMap.values())
+    if (orderFinancialRows.length > 0) {
+      const { error: financialError } = await supabase
+        .from('order_financials')
+        .upsert(orderFinancialRows, {
+          onConflict: 'created_by,order_id',
+          ignoreDuplicates: false,
+        })
+
+      if (financialError) {
+        console.error(`[importSalesChunk] Order financials upsert error (chunk ${chunkIndex + 1}/${totalChunks}):`, financialError)
+        await supabase
+          .from('import_batches')
+          .update({
+            status: 'failed',
+            notes: `Chunk ${chunkIndex + 1}/${totalChunks} order_financials upsert failed: ${financialError.message}. Batch: ${batchId}`
+          })
+          .eq('id', batchId)
+
+        return {
+          success: false,
+          inserted: 0,
+          error: `Order financials upsert failed: ${financialError.message}`,
+        }
+      }
     }
 
     return {
@@ -1444,16 +1623,6 @@ export async function importSalesToSystem(
         created_time: row.created_time,
         paid_time: row.paid_time,
         cancelled_time: row.cancelled_time,
-
-        // Order-level fields (TikTok OrderSKUList)
-        order_amount: row.order_amount,
-        shipping_fee_after_discount: row.shipping_fee_after_discount,
-        original_shipping_fee: row.original_shipping_fee,
-        shipping_fee_seller_discount: row.shipping_fee_seller_discount,
-        shipping_fee_platform_discount: row.shipping_fee_platform_discount,
-        payment_platform_discount: row.payment_platform_discount,
-        taxes: row.taxes,
-        small_order_fee: row.small_order_fee,
       }
     })
 
