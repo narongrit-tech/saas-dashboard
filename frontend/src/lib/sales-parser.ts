@@ -10,6 +10,7 @@ import { ParsedSalesRow, SalesImportPreview } from '@/types/sales-import'
 
 /**
  * Parse Excel date to Bangkok timezone string
+ * IMPORTANT: TikTok export dates are ALREADY in Bangkok timezone!
  */
 function parseExcelDate(value: unknown): Date | null {
   if (!value) return null
@@ -24,7 +25,7 @@ function parseExcelDate(value: unknown): Date | null {
   if (typeof value === 'string') {
     const trimmed = value.trim()
     const formats = [
-      'dd/MM/yyyy HH:mm:ss', // TikTok format
+      'dd/MM/yyyy HH:mm:ss', // TikTok format (already Bangkok time!)
       'dd/MM/yyyy',
       'yyyy-MM-dd HH:mm:ss',
       'yyyy-MM-dd',
@@ -33,6 +34,8 @@ function parseExcelDate(value: unknown): Date | null {
     ]
 
     for (const format of formats) {
+      // CRITICAL FIX: parseDate creates Date in local timezone
+      // Since TikTok exports are already Bangkok time, this is correct
       const parsed = parseDate(trimmed, format, new Date())
       if (isValid(parsed)) {
         return parsed
@@ -48,12 +51,38 @@ function parseExcelDate(value: unknown): Date | null {
 }
 
 /**
- * Convert Date to Bangkok timezone string
+ * Format Date to string for database storage
+ * CRITICAL FIX: TikTok dates are ALREADY in Bangkok timezone
+ * Do NOT convert timezone (causes +1 day shift bug)
  */
 function toBangkokDatetime(date: Date | null): string | null {
   if (!date) return null
   try {
-    return formatBangkok(date, 'yyyy-MM-dd HH:mm:ss')
+    // CRITICAL FIX: TikTok dates are ALREADY in Bangkok timezone (GMT+0700)
+    // We must tell PostgreSQL this by adding timezone indicator '+07:00'
+    // Otherwise PostgreSQL interprets as UTC and adds +7 hours again (causing +1 day shift)
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    const hours = String(date.getHours()).padStart(2, '0')
+    const minutes = String(date.getMinutes()).padStart(2, '0')
+    const seconds = String(date.getSeconds()).padStart(2, '0')
+
+    // CRITICAL: Add +07:00 timezone indicator to tell PostgreSQL this is Bangkok time
+    const result = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}+07:00`
+
+    // DEBUG: Log conversions to verify correct parsing
+    if (Math.random() < 0.002) { // Log ~1 out of 500
+      console.log('[PARSER DEBUG] toBangkokDatetime:', {
+        input: date.toString(),
+        output: result,
+        date: date.getDate(),
+        hours: date.getHours(),
+        timezone: '+07:00'
+      })
+    }
+
+    return result
   } catch {
     return null
   }
