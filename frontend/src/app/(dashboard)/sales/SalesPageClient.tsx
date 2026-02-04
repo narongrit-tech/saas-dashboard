@@ -3,14 +3,13 @@
 import { useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { SalesOrder, SalesOrderFilters, GroupedSalesOrder, SalesAggregates } from '@/types/sales'
+import { SalesOrder, SalesOrderFilters, GroupedSalesOrder } from '@/types/sales'
 import { endOfDayBangkok, formatBangkok, getBangkokNow, startOfDayBangkok } from '@/lib/bangkok-time'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SingleDateRangePicker, DateRangeResult } from '@/components/shared/SingleDateRangePicker'
-import { SalesSummaryBar } from '@/components/sales/SalesSummaryBar'
-import { SalesStoryPanel } from '@/components/sales/SalesStoryPanel'
-import { getSalesAggregates, getSalesOrdersGrouped, getSalesAggregatesTikTokLike, TikTokStyleAggregates } from '@/app/(dashboard)/sales/actions'
+import { GMVCards } from '@/components/sales/GMVCards'
+import { getSalesOrdersGrouped, getSalesGMVSummary, GMVSummary } from '@/app/(dashboard)/sales/actions'
 import { useLatestOnly } from '@/hooks/useLatestOnly'
 import {
   Select,
@@ -104,11 +103,11 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
-  const [aggregates, setAggregates] = useState<SalesAggregates | null>(null)
-  const [aggregatesLoading, setAggregatesLoading] = useState(true)
-  const [aggregatesError, setAggregatesError] = useState<string | null>(null)
-  const [tiktokAggregates, setTiktokAggregates] = useState<TikTokStyleAggregates | null>(null)
-  const [tiktokAggregatesLoading, setTiktokAggregatesLoading] = useState(true)
+
+  // GMV Summary state
+  const [gmvSummary, setGmvSummary] = useState<GMVSummary | null>(null)
+  const [gmvSummaryLoading, setGmvSummaryLoading] = useState(true)
+  const [gmvSummaryError, setGmvSummaryError] = useState<string | null>(null)
 
   // Attribution data (batch fetched)
   const [attributions, setAttributions] = useState<Map<string, OrderAttribution>>(new Map())
@@ -249,70 +248,45 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
 
   useEffect(() => {
     fetchOrders()
-    fetchAggregates()
+    fetchGMVSummary()
   }, [sourcePlatform, statusString, paymentStatus, startDate, endDate, search, page, perPage, dateBasis, view])
 
-  const fetchAggregates = async () => {
+  const fetchGMVSummary = async () => {
     await runLatest(async (signal) => {
       try {
-        setAggregatesLoading(true)
-        setTiktokAggregatesLoading(true)
-        setAggregatesError(null)
+        setGmvSummaryLoading(true)
+        setGmvSummaryError(null)
 
-        // Fetch main aggregates with TikTok semantics (respects dateBasis)
-        const result = await getSalesAggregates({
-          sourcePlatform: filters.sourcePlatform,
-          status: filters.status,
-          paymentStatus: filters.paymentStatus,
-          startDate: filters.startDate,
-          endDate: filters.endDate,
-          search: filters.search,
-          dateBasis: dateBasis,
-        })
+        // Only fetch if we have a date range
+        if (!filters.startDate || !filters.endDate) {
+          setGmvSummary(null)
+          setGmvSummaryLoading(false)
+          return
+        }
+
+        const result = await getSalesGMVSummary(filters.startDate, filters.endDate)
 
         // Guard: discard stale responses
         if (signal.isStale) return
 
         if (!result.success) {
-          setAggregatesError(result.error || 'เกิดข้อผิดพลาดในการโหลดสรุปข้อมูล')
-          setAggregates(null)
+          setGmvSummaryError(result.error || 'เกิดข้อผิดพลาดในการโหลด GMV Summary')
+          setGmvSummary(null)
           return
         }
 
-        setAggregates(result.data || null)
-
-        // Fetch TikTok-style aggregates
-        const tiktokResult = await getSalesAggregatesTikTokLike({
-          sourcePlatform: filters.sourcePlatform,
-          status: filters.status,
-          paymentStatus: filters.paymentStatus,
-          startDate: filters.startDate,
-          endDate: filters.endDate,
-          search: filters.search,
-        })
-
-        // Guard: discard stale responses
-        if (signal.isStale) return
-
-        if (tiktokResult.success) {
-          setTiktokAggregates(tiktokResult.data || null)
-        } else {
-          console.warn('TikTok aggregates failed:', tiktokResult.error)
-          setTiktokAggregates(null)
-        }
+        setGmvSummary(result.data || null)
       } catch (err) {
         // Guard: discard stale errors
         if (signal.isStale) return
 
-        console.error('Error fetching aggregates:', err)
-        setAggregatesError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการโหลดสรุปข้อมูล')
-        setAggregates(null)
-        setTiktokAggregates(null)
+        console.error('Error fetching GMV summary:', err)
+        setGmvSummaryError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการโหลด GMV Summary')
+        setGmvSummary(null)
       } finally {
         // Only clear loading if this is still the latest request
         if (!signal.isStale) {
-          setAggregatesLoading(false)
-          setTiktokAggregatesLoading(false)
+          setGmvSummaryLoading(false)
         }
       }
     })
@@ -686,19 +660,10 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
         <h1 className="text-3xl font-bold">Sales Orders</h1>
       </div>
 
-      <SalesStoryPanel
-        aggregates={aggregates}
-        loading={aggregatesLoading}
-        error={aggregatesError}
-      />
-
-      <SalesSummaryBar
-        aggregates={aggregates}
-        loading={aggregatesLoading}
-        error={aggregatesError}
-        tiktokAggregates={tiktokAggregates}
-        tiktokLoading={tiktokAggregatesLoading}
-        showOnlySecondaryRow={true}
+      <GMVCards
+        data={gmvSummary}
+        loading={gmvSummaryLoading}
+        error={gmvSummaryError}
       />
 
       {/* DEBUG CHIP (Dev Only) */}
@@ -1243,7 +1208,7 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
           onOpenChange={setShowResetDialog}
           onSuccess={() => {
             fetchOrders()
-            fetchAggregates()
+            fetchGMVSummary()
           }}
         />
       )}
