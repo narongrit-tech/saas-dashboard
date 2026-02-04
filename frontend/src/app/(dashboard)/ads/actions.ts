@@ -2,6 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { formatInTimeZone } from 'date-fns-tz';
+import { unstable_noStore as noStore } from 'next/cache';
 
 const BANGKOK_TZ = 'Asia/Bangkok';
 
@@ -12,6 +13,7 @@ export async function getAdsSummary(
   endDate: Date,
   campaignType: CampaignTypeFilter = 'all'
 ) {
+  noStore();
   try {
     const supabase = await createClient();
     const {
@@ -26,28 +28,25 @@ export async function getAdsSummary(
     const startDateStr = formatInTimeZone(startDate, BANGKOK_TZ, 'yyyy-MM-dd');
     const endDateStr = formatInTimeZone(endDate, BANGKOK_TZ, 'yyyy-MM-dd');
 
-    let query = supabase
-      .from('ad_daily_performance')
-      .select('spend, revenue, orders')
-      .eq('created_by', user.id)
-      .gte('ad_date', startDateStr)
-      .lte('ad_date', endDateStr);
-
-    // Apply campaign type filter if not 'all'
-    if (campaignType === 'product' || campaignType === 'live') {
-      query = query.eq('campaign_type', campaignType);
-    }
-
-    const { data, error } = await query;
+    // Do not compute totals from rows (pagination-safe)
+    // Use PostgreSQL aggregates via RPC for efficiency
+    const { data, error } = await supabase.rpc('get_ads_summary', {
+      p_user_id: user.id,
+      p_start_date: startDateStr,
+      p_end_date: endDateStr,
+      p_campaign_type: campaignType === 'all' ? null : campaignType,
+    });
 
     if (error) {
       console.error('Error fetching ads summary:', error);
       return { success: false, error: error.message };
     }
 
-    const totalSpend = data?.reduce((sum, row) => sum + (row.spend || 0), 0) || 0;
-    const totalRevenue = data?.reduce((sum, row) => sum + (row.revenue || 0), 0) || 0;
-    const totalOrders = data?.reduce((sum, row) => sum + (row.orders || 0), 0) || 0;
+    // RPC returns array with single row
+    const result = data?.[0] || { total_spend: 0, total_revenue: 0, total_orders: 0 };
+    const totalSpend = Number(result.total_spend) || 0;
+    const totalRevenue = Number(result.total_revenue) || 0;
+    const totalOrders = Number(result.total_orders) || 0;
     const blendedROI = totalSpend > 0 ? totalRevenue / totalSpend : 0;
 
     return {
@@ -70,6 +69,7 @@ export async function getAdsPerformance(
   endDate: Date,
   campaignType: CampaignTypeFilter = 'all'
 ) {
+  noStore();
   try {
     const supabase = await createClient();
     const {
@@ -84,30 +84,46 @@ export async function getAdsPerformance(
     const startDateStr = formatInTimeZone(startDate, BANGKOK_TZ, 'yyyy-MM-dd');
     const endDateStr = formatInTimeZone(endDate, BANGKOK_TZ, 'yyyy-MM-dd');
 
-    let query = supabase
-      .from('ad_daily_performance')
-      .select('*')
-      .eq('created_by', user.id)
-      .gte('ad_date', startDateStr)
-      .lte('ad_date', endDateStr);
+    // Fetch all data with pagination to bypass 1000 row limit
+    let allData: any[] = [];
+    let from = 0;
+    const pageSize = 1000;
+    let hasMore = true;
 
-    // Apply campaign type filter if not 'all'
-    if (campaignType === 'product' || campaignType === 'live') {
-      query = query.eq('campaign_type', campaignType);
-    }
+    while (hasMore) {
+      let query = supabase
+        .from('ad_daily_performance')
+        .select('*')
+        .eq('created_by', user.id)
+        .gte('ad_date', startDateStr)
+        .lte('ad_date', endDateStr)
+        .range(from, from + pageSize - 1)
+        .order('ad_date', { ascending: false });
 
-    query = query.order('ad_date', { ascending: false });
+      // Apply campaign type filter if not 'all'
+      if (campaignType === 'product' || campaignType === 'live') {
+        query = query.eq('campaign_type', campaignType);
+      }
 
-    const { data, error } = await query;
+      const { data, error } = await query;
 
-    if (error) {
-      console.error('Error fetching ads performance:', error);
-      return { success: false, error: error.message };
+      if (error) {
+        console.error('Error fetching ads performance:', error);
+        return { success: false, error: error.message };
+      }
+
+      if (data && data.length > 0) {
+        allData = allData.concat(data);
+        hasMore = data.length === pageSize;
+        from += pageSize;
+      } else {
+        hasMore = false;
+      }
     }
 
     return {
       success: true,
-      data: data || [],
+      data: allData,
     };
   } catch (err) {
     console.error('Error in getAdsPerformance:', err);

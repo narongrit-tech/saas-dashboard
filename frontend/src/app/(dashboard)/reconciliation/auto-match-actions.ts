@@ -61,14 +61,53 @@ export async function autoMatchBankTransactions(
     const startStr = format(startDate, 'yyyy-MM-dd');
     const endStr = format(endDate, 'yyyy-MM-dd');
 
-    // Get all bank transactions in date range
-    const { data: bankTxns } = await supabase
-      .from('bank_transactions')
-      .select('id, txn_date, deposit, withdrawal, description')
-      .eq('created_by', user.id)
-      .gte('txn_date', startStr)
-      .lte('txn_date', endStr)
-      .order('txn_date', { ascending: true });
+    // Get all bank transactions in date range (with pagination)
+    interface BankTxnRow {
+      id: string;
+      txn_date: string;
+      deposit: number | null;
+      withdrawal: number | null;
+      description: string | null;
+    }
+    let bankTxns: BankTxnRow[] = [];
+    let bankFrom = 0;
+    const pageSize = 1000;
+    let hasMoreBank = true;
+
+    while (hasMoreBank) {
+      const { data, error } = await supabase
+        .from('bank_transactions')
+        .select('id, txn_date, deposit, withdrawal, description')
+        .eq('created_by', user.id)
+        .gte('txn_date', startStr)
+        .lte('txn_date', endStr)
+        .order('txn_date', { ascending: true })
+        .range(bankFrom, bankFrom + pageSize - 1);
+
+      if (error) {
+        return {
+          success: false,
+          matched_count: 0,
+          skipped_count: 0,
+          details: {
+            no_candidate: 0,
+            multiple_candidates: 0,
+            already_matched: 0,
+            not_exact: 0,
+          },
+          matched_items: [],
+          error: error.message,
+        };
+      }
+
+      if (data && data.length > 0) {
+        bankTxns = bankTxns.concat(data);
+        hasMoreBank = data.length === pageSize;
+        bankFrom += pageSize;
+      } else {
+        hasMoreBank = false;
+      }
+    }
 
     if (!bankTxns || bankTxns.length === 0) {
       return {
@@ -99,13 +138,40 @@ export async function autoMatchBankTransactions(
       existingReconciliations?.map((r) => r.bank_transaction_id) || []
     );
 
-    // Get all expenses in date range
-    const { data: expenses } = await supabase
-      .from('expenses')
-      .select('id, expense_date, category, description, amount')
-      .eq('created_by', user.id)
-      .gte('expense_date', startStr)
-      .lte('expense_date', endStr);
+    // Get all expenses in date range (with pagination)
+    interface ExpenseRow {
+      id: string;
+      expense_date: string;
+      category: string;
+      description: string;
+      amount: number;
+    }
+    let expenses: ExpenseRow[] = [];
+    let expenseFrom = 0;
+    let hasMoreExpenses = true;
+
+    while (hasMoreExpenses) {
+      const { data, error } = await supabase
+        .from('expenses')
+        .select('id, expense_date, category, description, amount')
+        .eq('created_by', user.id)
+        .gte('expense_date', startStr)
+        .lte('expense_date', endStr)
+        .range(expenseFrom, expenseFrom + pageSize - 1);
+
+      if (error) {
+        console.error('Expenses query error:', error);
+        break;
+      }
+
+      if (data && data.length > 0) {
+        expenses = expenses.concat(data);
+        hasMoreExpenses = data.length === pageSize;
+        expenseFrom += pageSize;
+      } else {
+        hasMoreExpenses = false;
+      }
+    }
 
     // Get already reconciled expense IDs
     const { data: reconciledExpenses } = await supabase
@@ -119,13 +185,39 @@ export async function autoMatchBankTransactions(
       reconciledExpenses?.map((r) => r.matched_record_id) || []
     );
 
-    // Get all settlements in date range
-    const { data: settlements } = await supabase
-      .from('settlement_transactions')
-      .select('id, settled_time, settlement_amount, txn_id')
-      .eq('created_by', user.id)
-      .gte('settled_time', startStr)
-      .lte('settled_time', endStr);
+    // Get all settlements in date range (with pagination)
+    interface SettlementRow {
+      id: string;
+      settled_time: string;
+      settlement_amount: number;
+      txn_id: string | null;
+    }
+    let settlements: SettlementRow[] = [];
+    let settlementFrom = 0;
+    let hasMoreSettlements = true;
+
+    while (hasMoreSettlements) {
+      const { data, error } = await supabase
+        .from('settlement_transactions')
+        .select('id, settled_time, settlement_amount, txn_id')
+        .eq('created_by', user.id)
+        .gte('settled_time', startStr)
+        .lte('settled_time', endStr)
+        .range(settlementFrom, settlementFrom + pageSize - 1);
+
+      if (error) {
+        console.error('Settlements query error:', error);
+        break;
+      }
+
+      if (data && data.length > 0) {
+        settlements = settlements.concat(data);
+        hasMoreSettlements = data.length === pageSize;
+        settlementFrom += pageSize;
+      } else {
+        hasMoreSettlements = false;
+      }
+    }
 
     // Get already reconciled settlement IDs
     const { data: reconciledSettlements } = await supabase
@@ -164,7 +256,7 @@ export async function autoMatchBankTransactions(
       const txnAmount = Number(bankTxn.deposit || 0) - Number(bankTxn.withdrawal || 0);
       const bankDate = bankTxn.txn_date;
 
-      let candidates: Array<{
+      const candidates: Array<{
         entity_type: 'expense' | 'settlement';
         entity_id: string;
         amount: number;

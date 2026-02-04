@@ -601,6 +601,7 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
  * @param filters - Export filters with date range, platform, status, and dateBasis
  * @returns SalesAggregates with revenue_net/gross, orders_net/gross, cancel rates, units, AOV, completeness metrics
  */
+// Do not compute totals from rows (pagination-safe)
 export async function getSalesAggregates(filters: ExportFilters & { dateBasis?: 'order' | 'paid' }): Promise<{
   success: boolean
   data?: SalesAggregates
@@ -621,87 +622,35 @@ export async function getSalesAggregates(filters: ExportFilters & { dateBasis?: 
 
     const dateBasis = filters.dateBasis || 'order' // Default to created_time-based
 
-    // 2. Build base query with filters
-    // IMPORTANT: Select order_date for fallback (legacy data where created_time is NULL)
-    let baseQuery = supabase
-      .from('sales_orders')
-      .select('external_order_id, order_id, total_amount, quantity, created_time, paid_time, cancelled_time, order_date, source_platform, platform_status, payment_status')
-
-    // Platform filter (UX v2)
-    if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
-      baseQuery = baseQuery.eq('source_platform', filters.sourcePlatform)
-    } else if (filters.marketplace && filters.marketplace !== 'All') {
-      // Legacy fallback
-      baseQuery = baseQuery.eq('marketplace', filters.marketplace)
+    // 2. Prepare parameters for RPC call
+    const params = {
+      p_user_id: user.id,
+      p_start_date: filters.startDate || '1970-01-01',
+      p_end_date: filters.endDate || '2099-12-31',
+      p_date_basis: dateBasis,
+      p_source_platform: filters.sourcePlatform && filters.sourcePlatform !== 'all'
+        ? filters.sourcePlatform
+        : null,
+      p_status: filters.status && filters.status.length > 0
+        ? filters.status
+        : null,
+      p_payment_status: filters.paymentStatus && filters.paymentStatus !== 'all'
+        ? filters.paymentStatus
+        : null,
     }
 
-    // Status filter (multi-select, UX v2) - filters by platform_status (Thai values)
-    if (filters.status && filters.status.length > 0) {
-      baseQuery = baseQuery.in('platform_status', filters.status)
-    }
+    // 3. Call RPC function for DB-level aggregation
+    const { data: rpcData, error: rpcError } = await supabase.rpc('get_sales_aggregates', params)
 
-    // Payment status filter (UX v2)
-    if (filters.paymentStatus && filters.paymentStatus !== 'all') {
-      baseQuery = baseQuery.eq('payment_status', filters.paymentStatus)
-    }
-
-    // Date filtering based on dateBasis (TikTok timestamps)
-    // CRITICAL FIX (migration-030): Use COALESCE(created_time, order_date) logic
-    // Problem: DB filter "created_time >= startDate" excludes rows with created_time=NULL
-    // Solution: Fetch broader dataset and filter client-side with fallback
-    if (dateBasis === 'paid') {
-      // Filter by paid_time (only include paid orders)
-      baseQuery = baseQuery.not('paid_time', 'is', null)
-
-      if (filters.startDate) {
-        baseQuery = baseQuery.gte('paid_time', filters.startDate)
-      }
-      if (filters.endDate) {
-        const { toZonedTime } = await import('date-fns-tz')
-        const { endOfDay } = await import('date-fns')
-        const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
-        const endOfDayBangkok = endOfDay(bangkokDate)
-        baseQuery = baseQuery.lte('paid_time', endOfDayBangkok.toISOString())
-      }
-    } else {
-      // Filter by COALESCE(created_time, order_date) - fetch both and filter client-side
-      // IMPORTANT: Don't filter by created_time at DB level → excludes NULL rows
-      // Instead: Fetch by order_date (broader) and filter client-side with COALESCE logic
-
-      if (filters.startDate) {
-        // Fetch rows where:
-        // 1. created_time >= startDate (rows with created_time)
-        // 2. OR created_time IS NULL AND order_date >= startDate (fallback rows)
-        // Since Supabase doesn't support COALESCE in filter, fetch broader set:
-        baseQuery = baseQuery.gte('order_date', filters.startDate)
-      }
-      if (filters.endDate) {
-        const { toZonedTime } = await import('date-fns-tz')
-        const { endOfDay } = await import('date-fns')
-        const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
-        const endOfDayBangkok = endOfDay(bangkokDate)
-        baseQuery = baseQuery.lte('order_date', endOfDayBangkok.toISOString())
-      }
-
-      // Client-side filter will apply COALESCE(created_time, order_date) logic below
-    }
-
-    // Apply search filter (UX v2 includes external_order_id)
-    if (filters.search && filters.search.trim()) {
-      baseQuery = baseQuery.or(
-        `order_id.ilike.%${filters.search}%,external_order_id.ilike.%${filters.search}%`
-      )
-    }
-
-    // 3. Fetch all matching line items
-    const { data: rawLines, error: fetchError } = await baseQuery
-
-    if (fetchError) {
-      console.error('Error fetching orders for aggregates:', fetchError)
+    if (rpcError) {
+      console.error('Error calling get_sales_aggregates RPC:', rpcError)
       return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
     }
 
-    if (!rawLines || rawLines.length === 0) {
+    // 4. Extract result (RPC returns single row)
+    const result = Array.isArray(rpcData) && rpcData.length > 0 ? rpcData[0] : null
+
+    if (!result) {
       // Return zero aggregates if no data
       return {
         success: true,
@@ -725,184 +674,30 @@ export async function getSalesAggregates(filters: ExportFilters & { dateBasis?: 
       }
     }
 
-    // 3.5. CLIENT-SIDE DATE FILTERING WITH COALESCE(created_time, order_date)
-    // CRITICAL FIX: Now we fetch by order_date (broader), must filter by effective_date
-    const lines = rawLines.filter(line => {
-      if (dateBasis === 'paid') {
-        // Paid basis already filtered at DB level (paid_time NOT NULL)
-        return true
-      }
-
-      // Order basis: Use COALESCE(created_time, order_date) = effective_date
-      const effectiveDate = line.created_time || line.order_date
-
-      if (!effectiveDate) {
-        // No date at all (should never happen for valid data) - exclude
-        console.warn('getSalesAggregates: Order with no created_time or order_date:', line.order_id)
-        return false
-      }
-
-      // Convert to Bangkok date for date-only comparison (YYYY-MM-DD)
-      const { toZonedTime } = require('date-fns-tz')
-      const bangkokDate = toZonedTime(new Date(effectiveDate), 'Asia/Bangkok')
-      const bangkokDateStr = bangkokDate.toISOString().split('T')[0] // YYYY-MM-DD
-
-      // Apply date filters (startDate and endDate are YYYY-MM-DD strings)
-      if (filters.startDate) {
-        if (bangkokDateStr < filters.startDate) return false
-      }
-
-      if (filters.endDate) {
-        if (bangkokDateStr > filters.endDate) return false
-      }
-
-      return true
-    })
-
-    // Log warning if we found rows with NULL created_time (should be rare)
-    const nullCreatedTimeCount = rawLines.filter(l => !l.created_time).length
-    if (nullCreatedTimeCount > 0 && dateBasis === 'order') {
-      console.warn(`Found ${nullCreatedTimeCount} rows with NULL created_time (using order_date fallback)`)
-    }
-
-    if (lines.length === 0) {
-      // All rows filtered out after fallback logic
-      return {
-        success: true,
-        data: {
-          revenue_gross: 0,
-          revenue_net: 0,
-          cancelled_same_day_amount: 0,
-          cancel_rate_revenue_pct: 0,
-          orders_gross: 0,
-          orders_net: 0,
-          cancelled_same_day_orders: 0,
-          cancel_rate_orders_pct: 0,
-          total_units: 0,
-          aov_net: 0,
-          orders_distinct: 0,
-          lines_total: 0,
-          total_lines: 0,
-          total_orders: 0,
-          lines_per_order: 0,
-        },
-      }
-    }
-
-    // 4. CRITICAL: Group by external_order_id to prevent multi-SKU revenue inflation
-    // Build order-level aggregates first (1 row per order_id)
-    const orderMap = new Map<string, {
-      order_id: string
-      external_order_id: string | null
-      order_amount: number // MAX(total_amount) across lines (should be same, use MAX for safety)
-      total_units: number // SUM(quantity) across lines
-      created_time: string | null
-      paid_time: string | null
-      cancelled_time: string | null
-      is_cancelled_same_day: boolean // DATE(cancelled_time) = DATE(created_time)
-    }>()
-
-    // Helper to check same-day cancel (Bangkok timezone)
-    const isSameDayCancel = (createdTime: string | null, cancelledTime: string | null): boolean => {
-      if (!createdTime || !cancelledTime) return false
-
-      try {
-        const createdDate = new Date(createdTime)
-        const cancelledDate = new Date(cancelledTime)
-
-        // Compare dates in Bangkok timezone (YYYY-MM-DD)
-        const createdBkk = createdDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' })
-        const cancelledBkk = cancelledDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' })
-
-        return createdBkk === cancelledBkk
-      } catch {
-        return false
-      }
-    }
-
-    for (const line of lines) {
-      const orderId = line.external_order_id || line.order_id
-
-      // FALLBACK: Use order_date if created_time is NULL (legacy data)
-      const effectiveCreatedTime = line.created_time || line.order_date
-      const isCancelledSameDay = isSameDayCancel(effectiveCreatedTime, line.cancelled_time)
-
-      if (!orderMap.has(orderId)) {
-        orderMap.set(orderId, {
-          order_id: orderId,
-          external_order_id: line.external_order_id,
-          order_amount: line.total_amount || 0,
-          total_units: line.quantity || 0,
-          created_time: effectiveCreatedTime, // Use fallback value
-          paid_time: line.paid_time,
-          cancelled_time: line.cancelled_time,
-          is_cancelled_same_day: isCancelledSameDay,
-        })
-      } else {
-        const existing = orderMap.get(orderId)!
-        existing.total_units += line.quantity || 0
-        // Use MAX(total_amount) for safety (should be same across lines)
-        existing.order_amount = Math.max(existing.order_amount, line.total_amount || 0)
-        // Preserve cancelled_time if any line has it
-        if (!existing.cancelled_time && line.cancelled_time) {
-          existing.cancelled_time = line.cancelled_time
-          existing.is_cancelled_same_day = isSameDayCancel(existing.created_time, line.cancelled_time)
-        }
-      }
-    }
-
-    // 5. Compute aggregates from order-level data
-    let revenueGross = 0
-    let cancelledSameDayAmount = 0
-    let ordersGross = 0
-    let cancelledSameDayOrders = 0
-    let unitsNet = 0 // Only count units from net orders (exclude same-day cancelled)
-
-    for (const order of Array.from(orderMap.values())) {
-      // All orders contribute to gross
-      revenueGross += order.order_amount
-      ordersGross += 1
-
-      // Check if cancelled same day
-      if (order.is_cancelled_same_day) {
-        cancelledSameDayAmount += order.order_amount
-        cancelledSameDayOrders += 1
-      } else {
-        // Net orders (not cancelled same day)
-        unitsNet += order.total_units
-      }
-    }
-
-    // 6. Calculate derived metrics
-    const revenueNet = revenueGross - cancelledSameDayAmount
-    const ordersNet = ordersGross - cancelledSameDayOrders
-    const cancelRateRevenuePct = revenueGross > 0 ? (cancelledSameDayAmount / revenueGross) * 100 : 0
-    const cancelRateOrdersPct = ordersGross > 0 ? (cancelledSameDayOrders / ordersGross) * 100 : 0
-    const aovNet = ordersNet > 0 ? revenueNet / ordersNet : 0
-
-    // 7. Import completeness verification & Lines vs Orders ratio
-    const ordersDistinct = orderMap.size // COUNT(DISTINCT external_order_id)
-    const linesTotal = lines.length // COUNT(*) from raw table
-    const linesPerOrder = ordersDistinct > 0 ? linesTotal / ordersDistinct : 0
+    // 5. Transform result to match SalesAggregates interface
+    const linesPerOrder = result.orders_distinct > 0
+      ? result.lines_total / result.orders_distinct
+      : 0
 
     return {
       success: true,
       data: {
-        revenue_gross: Math.round(revenueGross * 100) / 100,
-        revenue_net: Math.round(revenueNet * 100) / 100,
-        cancelled_same_day_amount: Math.round(cancelledSameDayAmount * 100) / 100,
-        cancel_rate_revenue_pct: Math.round(cancelRateRevenuePct * 100) / 100,
-        orders_gross: ordersGross,
-        orders_net: ordersNet,
-        cancelled_same_day_orders: cancelledSameDayOrders,
-        cancel_rate_orders_pct: Math.round(cancelRateOrdersPct * 100) / 100,
-        total_units: unitsNet,
-        aov_net: Math.round(aovNet * 100) / 100,
-        orders_distinct: ordersDistinct,
-        lines_total: linesTotal,
-        total_lines: linesTotal, // UI-friendly alias
-        total_orders: ordersDistinct, // UI-friendly alias
-        lines_per_order: Math.round(linesPerOrder * 100) / 100, // Ratio (2 decimals)
+        revenue_gross: result.revenue_gross,
+        revenue_net: result.revenue_net,
+        cancelled_same_day_amount: result.cancelled_same_day_amount,
+        cancel_rate_revenue_pct: result.cancel_rate_revenue_pct,
+        orders_gross: result.orders_gross,
+        orders_net: result.orders_net,
+        cancelled_same_day_orders: result.cancelled_same_day_orders,
+        cancel_rate_orders_pct: result.cancel_rate_orders_pct,
+        total_units: result.total_units,
+        aov_net: result.aov_net,
+        orders_distinct: result.orders_distinct,
+        lines_total: result.lines_total,
+        // UI-friendly aliases
+        total_lines: result.lines_total,
+        total_orders: result.orders_distinct,
+        lines_per_order: Math.round(linesPerOrder * 100) / 100,
       },
     }
   } catch (error) {
@@ -930,6 +725,7 @@ export interface TikTokStyleAggregates {
   cancel_rate: number // cancelled / total (0-100%)
 }
 
+// Do not compute totals from rows (pagination-safe)
 export async function getSalesAggregatesTikTokLike(filters: ExportFilters): Promise<{
   success: boolean
   data?: TikTokStyleAggregates
@@ -948,58 +744,34 @@ export async function getSalesAggregatesTikTokLike(filters: ExportFilters): Prom
       return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
     }
 
-    // 2. Build base query with filters
-    // CRITICAL: Use created_at for date filtering (TikTok semantics)
-    let baseQuery = supabase
-      .from('sales_orders')
-      .select('*')
-
-    // Platform filter (UX v2)
-    if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
-      baseQuery = baseQuery.eq('source_platform', filters.sourcePlatform)
-    } else if (filters.marketplace && filters.marketplace !== 'All') {
-      // Legacy fallback
-      baseQuery = baseQuery.eq('marketplace', filters.marketplace)
+    // 2. Prepare parameters for RPC call
+    const params = {
+      p_user_id: user.id,
+      p_start_date: filters.startDate || '1970-01-01',
+      p_end_date: filters.endDate || '2099-12-31',
+      p_source_platform: filters.sourcePlatform && filters.sourcePlatform !== 'all'
+        ? filters.sourcePlatform
+        : null,
+      p_status: filters.status && filters.status.length > 0
+        ? filters.status
+        : null,
+      p_payment_status: filters.paymentStatus && filters.paymentStatus !== 'all'
+        ? filters.paymentStatus
+        : null,
     }
 
-    // Status filter (optional, for consistency with main view)
-    if (filters.status && filters.status.length > 0) {
-      baseQuery = baseQuery.in('platform_status', filters.status)
-    }
+    // 3. Call RPC function for DB-level aggregation
+    const { data: rpcData, error: rpcError } = await supabase.rpc('get_sales_aggregates_tiktok_like', params)
 
-    // Payment status filter (optional)
-    if (filters.paymentStatus && filters.paymentStatus !== 'all') {
-      baseQuery = baseQuery.eq('payment_status', filters.paymentStatus)
-    }
-
-    // Date filtering: ALWAYS use created_at (TikTok semantics)
-    if (filters.startDate) {
-      baseQuery = baseQuery.gte('created_at', filters.startDate)
-    }
-    if (filters.endDate) {
-      const { toZonedTime } = await import('date-fns-tz')
-      const { endOfDay } = await import('date-fns')
-      const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
-      const endOfDayBangkok = endOfDay(bangkokDate)
-      baseQuery = baseQuery.lte('created_at', endOfDayBangkok.toISOString())
-    }
-
-    // Apply search filter (optional)
-    if (filters.search && filters.search.trim()) {
-      baseQuery = baseQuery.or(
-        `order_id.ilike.%${filters.search}%,product_name.ilike.%${filters.search}%,external_order_id.ilike.%${filters.search}%`
-      )
-    }
-
-    // 3. Fetch all matching orders
-    const { data: orders, error: fetchError } = await baseQuery
-
-    if (fetchError) {
-      console.error('Error fetching orders for TikTok aggregates:', fetchError)
+    if (rpcError) {
+      console.error('Error calling get_sales_aggregates_tiktok_like RPC:', rpcError)
       return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
     }
 
-    if (!orders || orders.length === 0) {
+    // 4. Extract result (RPC returns single row)
+    const result = Array.isArray(rpcData) && rpcData.length > 0 ? rpcData[0] : null
+
+    if (!result) {
       // Return zero aggregates if no data
       return {
         success: true,
@@ -1011,52 +783,13 @@ export async function getSalesAggregatesTikTokLike(filters: ExportFilters): Prom
       }
     }
 
-    // 4. Group by order_id to get distinct orders
-    const orderMap = new Map<string, {
-      order_id: string
-      is_cancelled: boolean
-    }>()
-
-    for (const line of orders) {
-      const orderId = line.external_order_id || line.order_id
-
-      // Check if cancelled (use status_group if available, fallback to platform_status)
-      const isCancelled =
-        line.status_group?.toLowerCase().includes('ยกเลิก') ||
-        line.platform_status?.toLowerCase().includes('ยกเลิก') ||
-        false
-
-      if (!orderMap.has(orderId)) {
-        orderMap.set(orderId, {
-          order_id: orderId,
-          is_cancelled: isCancelled,
-        })
-      }
-      // If already exists, keep is_cancelled status (should be same across lines)
-    }
-
-    // 5. Compute TikTok-style aggregates
-    let totalCreatedOrders = 0
-    let cancelledCreatedOrders = 0
-
-    for (const order of Array.from(orderMap.values())) {
-      totalCreatedOrders += 1
-      if (order.is_cancelled) {
-        cancelledCreatedOrders += 1
-      }
-    }
-
-    // 6. Calculate cancel rate
-    const cancelRate = totalCreatedOrders > 0
-      ? (cancelledCreatedOrders / totalCreatedOrders) * 100
-      : 0
-
+    // 5. Return transformed result
     return {
       success: true,
       data: {
-        total_created_orders: totalCreatedOrders,
-        cancelled_created_orders: cancelledCreatedOrders,
-        cancel_rate: Math.round(cancelRate * 100) / 100, // Round to 2 decimals
+        total_created_orders: result.total_created_orders,
+        cancelled_created_orders: result.cancelled_created_orders,
+        cancel_rate: result.cancel_rate,
       },
     }
   } catch (error) {
@@ -1078,11 +811,13 @@ export async function getSalesAggregatesTikTokLike(filters: ExportFilters): Prom
  * - Fallback mode (no cancelled_at field): All cancelled orders in range
  * - Must use order-level aggregation: MAX(total_amount) per order_id
  */
+// Do not compute totals from rows (pagination-safe)
 export async function getSalesStoryAggregates(filters: ExportFilters): Promise<{
   success: boolean
   data?: SalesStoryAggregates
   error?: string
 }> {
+  noStore() // Prevent Next.js caching
   try {
     // 1. Authenticate user
     const supabase = createClient()
@@ -1095,57 +830,34 @@ export async function getSalesStoryAggregates(filters: ExportFilters): Promise<{
       return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
     }
 
-    // 2. Build base query with filters
-    // CRITICAL: Use created_at for date filtering (Story semantics)
-    let baseQuery = supabase
-      .from('sales_orders')
-      .select('*')
-
-    // Platform filter
-    if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
-      baseQuery = baseQuery.eq('source_platform', filters.sourcePlatform)
-    } else if (filters.marketplace && filters.marketplace !== 'All') {
-      baseQuery = baseQuery.eq('marketplace', filters.marketplace)
+    // 2. Prepare parameters for RPC call
+    const params = {
+      p_user_id: user.id,
+      p_start_date: filters.startDate || '1970-01-01',
+      p_end_date: filters.endDate || '2099-12-31',
+      p_source_platform: filters.sourcePlatform && filters.sourcePlatform !== 'all'
+        ? filters.sourcePlatform
+        : null,
+      p_status: filters.status && filters.status.length > 0
+        ? filters.status
+        : null,
+      p_payment_status: filters.paymentStatus && filters.paymentStatus !== 'all'
+        ? filters.paymentStatus
+        : null,
     }
 
-    // Status filter (optional - default is all created orders)
-    if (filters.status && filters.status.length > 0) {
-      baseQuery = baseQuery.in('platform_status', filters.status)
-    }
+    // 3. Call RPC function for DB-level aggregation
+    const { data: rpcData, error: rpcError } = await supabase.rpc('get_sales_story_aggregates', params)
 
-    // Payment status filter (optional - keep COD included by default)
-    if (filters.paymentStatus && filters.paymentStatus !== 'all') {
-      baseQuery = baseQuery.eq('payment_status', filters.paymentStatus)
-    }
-
-    // Date filtering: ALWAYS use created_at (Story semantics)
-    if (filters.startDate) {
-      baseQuery = baseQuery.gte('created_at', filters.startDate)
-    }
-    if (filters.endDate) {
-      const { toZonedTime } = await import('date-fns-tz')
-      const { endOfDay } = await import('date-fns')
-      const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
-      const endOfDayBangkok = endOfDay(bangkokDate)
-      baseQuery = baseQuery.lte('created_at', endOfDayBangkok.toISOString())
-    }
-
-    // Search filter (optional)
-    if (filters.search && filters.search.trim()) {
-      baseQuery = baseQuery.or(
-        `order_id.ilike.%${filters.search}%,product_name.ilike.%${filters.search}%,external_order_id.ilike.%${filters.search}%`
-      )
-    }
-
-    // 3. Fetch all matching orders
-    const { data: orders, error: fetchError } = await baseQuery
-
-    if (fetchError) {
-      console.error('Error fetching orders for Story aggregates:', fetchError)
+    if (rpcError) {
+      console.error('Error calling get_sales_story_aggregates RPC:', rpcError)
       return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
     }
 
-    if (!orders || orders.length === 0) {
+    // 4. Extract result (RPC returns single row)
+    const result = Array.isArray(rpcData) && rpcData.length > 0 ? rpcData[0] : null
+
+    if (!result) {
       // Return zero aggregates if no data
       return {
         success: true,
@@ -1157,82 +869,23 @@ export async function getSalesStoryAggregates(filters: ExportFilters): Promise<{
           net_revenue_after_same_day_cancel: 0,
           net_orders_after_same_day_cancel: 0,
           cancel_rate_same_day: 0,
-          has_cancelled_at: false, // No cancelled_at field in schema
+          has_cancelled_at: false,
         },
       }
     }
 
-    // 4. Group by order_id to get distinct orders
-    const orderMap = new Map<string, {
-      order_id: string
-      order_amount: number
-      is_cancelled: boolean
-      created_at: string
-    }>()
-
-    for (const line of orders) {
-      const orderId = line.external_order_id || line.order_id
-
-      // Check if cancelled (use status_group if available, fallback to platform_status)
-      const isCancelled =
-        line.status_group?.toLowerCase().includes('ยกเลิก') ||
-        line.platform_status?.toLowerCase().includes('ยกเลิก') ||
-        false
-
-      if (!orderMap.has(orderId)) {
-        orderMap.set(orderId, {
-          order_id: orderId,
-          order_amount: line.total_amount || 0, // First line's order amount
-          is_cancelled: isCancelled,
-          created_at: line.created_at,
-        })
-      } else {
-        const existing = orderMap.get(orderId)!
-        // Order amount should be same across lines (use MAX as safety)
-        existing.order_amount = Math.max(existing.order_amount, line.total_amount || 0)
-      }
-    }
-
-    // 5. Compute Story aggregates
-    let grossRevenueCreated = 0
-    let totalCreatedOrders = 0
-    let sameDayCancelOrders = 0
-    let sameDayCancelRevenue = 0
-
-    // FALLBACK MODE: Since no cancelled_at field exists, we treat all cancelled orders
-    // in the created date range as "same-day cancel" (cannot verify actual cancel time)
-    for (const order of Array.from(orderMap.values())) {
-      totalCreatedOrders += 1
-      grossRevenueCreated += order.order_amount
-
-      if (order.is_cancelled) {
-        // Fallback: All cancelled orders are counted as "same-day cancel"
-        // (We cannot verify if they were actually cancelled on the same day)
-        sameDayCancelOrders += 1
-        sameDayCancelRevenue += order.order_amount
-      }
-    }
-
-    // 6. Calculate net values
-    const netRevenueAfterSameDayCancel = grossRevenueCreated - sameDayCancelRevenue
-    const netOrdersAfterSameDayCancel = totalCreatedOrders - sameDayCancelOrders
-
-    // 7. Calculate cancel rate
-    const cancelRateSameDay = totalCreatedOrders > 0
-      ? (sameDayCancelOrders / totalCreatedOrders) * 100
-      : 0
-
+    // 5. Return transformed result
     return {
       success: true,
       data: {
-        gross_revenue_created: Math.round(grossRevenueCreated * 100) / 100,
-        total_created_orders: totalCreatedOrders,
-        same_day_cancel_orders: sameDayCancelOrders,
-        same_day_cancel_revenue: Math.round(sameDayCancelRevenue * 100) / 100,
-        net_revenue_after_same_day_cancel: Math.round(netRevenueAfterSameDayCancel * 100) / 100,
-        net_orders_after_same_day_cancel: netOrdersAfterSameDayCancel,
-        cancel_rate_same_day: Math.round(cancelRateSameDay * 100) / 100, // Round to 2 decimals
-        has_cancelled_at: false, // FALLBACK MODE: No cancelled_at field in schema
+        gross_revenue_created: result.gross_revenue_created,
+        total_created_orders: result.total_created_orders,
+        same_day_cancel_orders: result.same_day_cancel_orders,
+        same_day_cancel_revenue: result.same_day_cancel_revenue,
+        net_revenue_after_same_day_cancel: result.net_revenue_after_same_day_cancel,
+        net_orders_after_same_day_cancel: result.net_orders_after_same_day_cancel,
+        cancel_rate_same_day: result.cancel_rate_same_day,
+        has_cancelled_at: result.has_cancelled_at,
       },
     }
   } catch (error) {
@@ -1333,12 +986,27 @@ export async function getSalesOrdersGrouped(
       )
     }
 
-    // Fetch all matching lines
-    const { data: rawLines, error: fetchError } = await baseQuery
+    // Fetch all matching lines with pagination to bypass 1000 row limit
+    let rawLines: any[] = []
+    let from = 0
+    const pageSize = 1000
+    let hasMore = true
 
-    if (fetchError) {
-      console.error('Error fetching orders for grouping:', fetchError)
-      return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+    while (hasMore) {
+      const { data, error } = await baseQuery.range(from, from + pageSize - 1)
+
+      if (error) {
+        console.error('Error fetching orders for grouping:', error)
+        return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+      }
+
+      if (data && data.length > 0) {
+        rawLines = rawLines.concat(data)
+        hasMore = data.length === pageSize
+        from += pageSize
+      } else {
+        hasMore = false
+      }
     }
 
     if (!rawLines || rawLines.length === 0) {
@@ -1642,11 +1310,27 @@ export async function getMultiSkuOrders(filters: ExportFilters & { dateBasis?: '
       }
     }
 
-    const { data: rawLines, error: fetchError } = await baseQuery
+    // Fetch all matching lines with pagination to bypass 1000 row limit
+    let rawLines: any[] = []
+    let from = 0
+    const pageSize = 1000
+    let hasMore = true
 
-    if (fetchError) {
-      console.error('Error fetching multi-sku orders:', fetchError)
-      return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+    while (hasMore) {
+      const { data, error } = await baseQuery.range(from, from + pageSize - 1)
+
+      if (error) {
+        console.error('Error fetching multi-sku orders:', error)
+        return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+      }
+
+      if (data && data.length > 0) {
+        rawLines = rawLines.concat(data)
+        hasMore = data.length === pageSize
+        from += pageSize
+      } else {
+        hasMore = false
+      }
     }
 
     if (!rawLines || rawLines.length === 0) {
@@ -1765,11 +1449,27 @@ export async function getDuplicateLines(filters: ExportFilters & { dateBasis?: '
       // We'll filter client-side due to fallback logic complexity
     }
 
-    const { data: rawLines, error: fetchError } = await baseQuery
+    // Fetch all matching lines with pagination to bypass 1000 row limit
+    let rawLines: any[] = []
+    let from = 0
+    const pageSize = 1000
+    let hasMore = true
 
-    if (fetchError) {
-      console.error('Error fetching duplicate lines:', fetchError)
-      return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+    while (hasMore) {
+      const { data, error } = await baseQuery.range(from, from + pageSize - 1)
+
+      if (error) {
+        console.error('Error fetching duplicate lines:', error)
+        return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+      }
+
+      if (data && data.length > 0) {
+        rawLines = rawLines.concat(data)
+        hasMore = data.length === pageSize
+        from += pageSize
+      } else {
+        hasMore = false
+      }
     }
 
     if (!rawLines || rawLines.length === 0) {
@@ -1993,11 +1693,27 @@ export async function getImportCoverage(filters: ExportFilters & { dateBasis?: '
       // Simple query - no date filter for coverage stats (show all imported data)
     }
 
-    const { data: rawLines, error: fetchError } = await baseQuery
+    // Fetch all matching lines with pagination to bypass 1000 row limit
+    let rawLines: any[] = []
+    let from = 0
+    const pageSize = 1000
+    let hasMore = true
 
-    if (fetchError) {
-      console.error('Error fetching import coverage:', fetchError)
-      return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+    while (hasMore) {
+      const { data, error } = await baseQuery.range(from, from + pageSize - 1)
+
+      if (error) {
+        console.error('Error fetching import coverage:', error)
+        return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+      }
+
+      if (data && data.length > 0) {
+        rawLines = rawLines.concat(data)
+        hasMore = data.length === pageSize
+        from += pageSize
+      } else {
+        hasMore = false
+      }
     }
 
     if (!rawLines || rawLines.length === 0) {
@@ -2184,6 +1900,124 @@ export async function checkIsAdmin(): Promise<{
     return {
       success: false,
       isAdmin: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
+
+// ============================================
+// GMV SUMMARY (3-CARD METRICS: B, C, LEAKAGE)
+// ============================================
+
+export interface GMVSummary {
+  // B: GMV (Orders Created) by created_time date
+  gmv_created: number
+  orders_created: number
+
+  // C: GMV (Fulfilled) by shipped_at date
+  gmv_fulfilled: number
+  orders_fulfilled: number
+
+  // Leakage: B - C (cancellations + unfulfilled)
+  leakage_amount: number
+  leakage_pct: number
+}
+
+export interface GMVSummaryResult {
+  success: boolean
+  data?: GMVSummary
+  error?: string
+}
+
+/**
+ * Get GMV summary for date range (B, C, Leakage metrics)
+ *
+ * @param startDate - Start date (Bangkok timezone, YYYY-MM-DD)
+ * @param endDate - End date (Bangkok timezone, YYYY-MM-DD)
+ * @returns GMV summary with B (created), C (fulfilled), and leakage
+ */
+export async function getSalesGMVSummary(
+  startDate: string,
+  endDate: string
+): Promise<GMVSummaryResult> {
+  noStore() // Prevent caching for real-time GMV data
+
+  try {
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+    }
+
+    // Query sales_gmv_daily_summary view
+    const { data, error } = await supabase
+      .from('sales_gmv_daily_summary')
+      .select('*')
+      .eq('created_by', user.id)
+      .gte('date_bkk', startDate)
+      .lte('date_bkk', endDate)
+
+    if (error) {
+      console.error('Error fetching GMV summary:', error)
+      return { success: false, error: `เกิดข้อผิดพลาด: ${error.message}` }
+    }
+
+    if (!data || data.length === 0) {
+      // No data for date range - return zeros
+      return {
+        success: true,
+        data: {
+          gmv_created: 0,
+          orders_created: 0,
+          gmv_fulfilled: 0,
+          orders_fulfilled: 0,
+          leakage_amount: 0,
+          leakage_pct: 0,
+        },
+      }
+    }
+
+    // Aggregate across all days in range
+    const summary = data.reduce(
+      (acc, row) => {
+        acc.gmv_created += Number(row.gmv_created || 0)
+        acc.orders_created += Number(row.orders_created || 0)
+        acc.gmv_fulfilled += Number(row.gmv_fulfilled || 0)
+        acc.orders_fulfilled += Number(row.orders_fulfilled || 0)
+        return acc
+      },
+      {
+        gmv_created: 0,
+        orders_created: 0,
+        gmv_fulfilled: 0,
+        orders_fulfilled: 0,
+        leakage_amount: 0,
+        leakage_pct: 0,
+      }
+    )
+
+    // Calculate leakage
+    summary.leakage_amount = summary.gmv_created - summary.gmv_fulfilled
+    summary.leakage_pct =
+      summary.gmv_created > 0
+        ? (summary.leakage_amount / summary.gmv_created) * 100
+        : 0
+
+    // Round to 2 decimal places
+    summary.gmv_created = Math.round(summary.gmv_created * 100) / 100
+    summary.gmv_fulfilled = Math.round(summary.gmv_fulfilled * 100) / 100
+    summary.leakage_amount = Math.round(summary.leakage_amount * 100) / 100
+    summary.leakage_pct = Math.round(summary.leakage_pct * 100) / 100
+
+    return { success: true, data: summary }
+  } catch (error) {
+    console.error('Unexpected error in getSalesGMVSummary:', error)
+    return {
+      success: false,
       error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
     }
   }

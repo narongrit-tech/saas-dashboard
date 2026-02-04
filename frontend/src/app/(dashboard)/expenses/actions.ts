@@ -337,20 +337,34 @@ export async function exportExpenses(filters: ExportFilters): Promise<ExportResu
       )
     }
 
-    // No pagination - export all matching records
-    // Add reasonable limit to prevent memory issues
-    query = query.limit(10000)
+    // PAGINATION: Handle more than 1000 rows (Supabase limit)
+    let allExpenses: any[] = []
+    let from = 0
+    const pageSize = 1000
+    let hasMore = true
 
-    const { data: expenses, error: fetchError } = await query
+    while (hasMore) {
+      const { data, error } = await query.range(from, from + pageSize - 1)
 
-    if (fetchError) {
-      console.error('Error fetching expenses for export:', fetchError)
-      return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+      if (error) {
+        console.error('Error fetching expenses for export:', error)
+        return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+      }
+
+      if (data && data.length > 0) {
+        allExpenses = allExpenses.concat(data)
+        hasMore = data.length === pageSize
+        from += pageSize
+      } else {
+        hasMore = false
+      }
     }
 
-    if (!expenses || expenses.length === 0) {
+    if (allExpenses.length === 0) {
       return { success: false, error: 'ไม่พบข้อมูลที่จะ export' }
     }
+
+    const expenses = allExpenses
 
     // 3. Generate CSV content
     // CSV Headers (English for Excel compatibility)

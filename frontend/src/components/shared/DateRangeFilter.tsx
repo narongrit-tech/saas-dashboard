@@ -49,9 +49,10 @@ export function DateRangeFilter({
   const [preset, setPreset] = useState<DatePreset>(defaultPreset);
   const [customStartDate, setCustomStartDate] = useState<Date | undefined>();
   const [customEndDate, setCustomEndDate] = useState<Date | undefined>();
-  const [currentRange, setCurrentRange] = useState<DateRangeResult>(() =>
-    getDateRangeFromPreset(defaultPreset)
-  );
+  const [currentRange, setCurrentRange] = useState<DateRangeResult>(() => {
+    const initialRange = getDateRangeFromPreset(defaultPreset);
+    return initialRange;
+  });
 
   // Update range when preset changes
   useEffect(() => {

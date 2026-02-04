@@ -37,48 +37,142 @@ export async function getReconciliationSummary(
     const startStr = format(startDate, 'yyyy-MM-dd');
     const endStr = format(endDate, 'yyyy-MM-dd');
 
-    // Get bank summary (all active bank accounts)
-    const { data: bankTxns } = await supabase
-      .from('bank_transactions')
-      .select('deposit, withdrawal, id')
-      .eq('created_by', user.id)
-      .gte('txn_date', startStr)
-      .lte('txn_date', endStr);
+    // Get bank summary (all active bank accounts) - with pagination
+    interface BankTxnSummary {
+      deposit: number | null;
+      withdrawal: number | null;
+      id: string;
+    }
+    let bankTxns: BankTxnSummary[] = [];
+    let bankFrom = 0;
+    const pageSize = 1000;
+    let hasMoreBank = true;
+
+    while (hasMoreBank) {
+      const { data, error } = await supabase
+        .from('bank_transactions')
+        .select('deposit, withdrawal, id')
+        .eq('created_by', user.id)
+        .gte('txn_date', startStr)
+        .lte('txn_date', endStr)
+        .range(bankFrom, bankFrom + pageSize - 1);
+
+      if (error) {
+        return { success: false, error: error.message };
+      }
+
+      if (data && data.length > 0) {
+        bankTxns = bankTxns.concat(data);
+        hasMoreBank = data.length === pageSize;
+        bankFrom += pageSize;
+      } else {
+        hasMoreBank = false;
+      }
+    }
 
     const bankIn = bankTxns?.reduce((sum, txn) => sum + Number(txn.deposit || 0), 0) || 0;
     const bankOut = bankTxns?.reduce((sum, txn) => sum + Number(txn.withdrawal || 0), 0) || 0;
     const bankNet = bankIn - bankOut;
 
     // Get internal summary
-    // 1. Marketplace settlements (cash in)
-    const { data: settlements } = await supabase
-      .from('settlement_transactions')
-      .select('settlement_amount, id')
-      .eq('created_by', user.id)
-      .gte('settled_time', startStr)
-      .lte('settled_time', endStr);
+    // 1. Marketplace settlements (cash in) - with pagination
+    interface SettlementSummary {
+      settlement_amount: number;
+      id: string;
+    }
+    let settlements: SettlementSummary[] = [];
+    let settlementFrom = 0;
+    let hasMoreSettlements = true;
+
+    while (hasMoreSettlements) {
+      const { data, error } = await supabase
+        .from('settlement_transactions')
+        .select('settlement_amount, id')
+        .eq('created_by', user.id)
+        .gte('settled_time', startStr)
+        .lte('settled_time', endStr)
+        .range(settlementFrom, settlementFrom + pageSize - 1);
+
+      if (error) {
+        return { success: false, error: error.message };
+      }
+
+      if (data && data.length > 0) {
+        settlements = settlements.concat(data);
+        hasMoreSettlements = data.length === pageSize;
+        settlementFrom += pageSize;
+      } else {
+        hasMoreSettlements = false;
+      }
+    }
 
     const settlementsTotal =
       settlements?.reduce((sum, s) => sum + Number(s.settlement_amount || 0), 0) || 0;
 
-    // 2. Expenses (cash out)
-    const { data: expenses } = await supabase
-      .from('expenses')
-      .select('amount, id')
-      .eq('created_by', user.id)
-      .gte('expense_date', startStr)
-      .lte('expense_date', endStr);
+    // 2. Expenses (cash out) - with pagination
+    interface ExpenseSummary {
+      amount: number;
+      id: string;
+    }
+    let expenses: ExpenseSummary[] = [];
+    let expenseFrom = 0;
+    let hasMoreExpenses = true;
+
+    while (hasMoreExpenses) {
+      const { data, error } = await supabase
+        .from('expenses')
+        .select('amount, id')
+        .eq('created_by', user.id)
+        .gte('expense_date', startStr)
+        .lte('expense_date', endStr)
+        .range(expenseFrom, expenseFrom + pageSize - 1);
+
+      if (error) {
+        return { success: false, error: error.message };
+      }
+
+      if (data && data.length > 0) {
+        expenses = expenses.concat(data);
+        hasMoreExpenses = data.length === pageSize;
+        expenseFrom += pageSize;
+      } else {
+        hasMoreExpenses = false;
+      }
+    }
 
     const expensesTotal = expenses?.reduce((sum, e) => sum + Number(e.amount || 0), 0) || 0;
 
-    // 3. Wallet top-ups (cash out)
-    const { data: walletTopups } = await supabase
-      .from('wallet_ledger')
-      .select('amount, id')
-      .eq('created_by', user.id)
-      .eq('entry_type', 'TOP_UP')
-      .gte('date', startStr)
-      .lte('date', endStr);
+    // 3. Wallet top-ups (cash out) - with pagination
+    interface WalletTopupSummary {
+      amount: number;
+      id: string;
+    }
+    let walletTopups: WalletTopupSummary[] = [];
+    let topupFrom = 0;
+    let hasMoreTopups = true;
+
+    while (hasMoreTopups) {
+      const { data, error } = await supabase
+        .from('wallet_ledger')
+        .select('amount, id')
+        .eq('created_by', user.id)
+        .eq('entry_type', 'TOP_UP')
+        .gte('date', startStr)
+        .lte('date', endStr)
+        .range(topupFrom, topupFrom + pageSize - 1);
+
+      if (error) {
+        return { success: false, error: error.message };
+      }
+
+      if (data && data.length > 0) {
+        walletTopups = walletTopups.concat(data);
+        hasMoreTopups = data.length === pageSize;
+        topupFrom += pageSize;
+      } else {
+        hasMoreTopups = false;
+      }
+    }
 
     const walletTopupsTotal =
       walletTopups?.reduce((sum, w) => sum + Number(w.amount || 0), 0) || 0;
@@ -185,15 +279,46 @@ export async function getUnmatchedBankTransactions(
     const startStr = format(startDate, 'yyyy-MM-dd');
     const endStr = format(endDate, 'yyyy-MM-dd');
 
-    const { data: bankTxns } = await supabase
-      .from('bank_transactions')
-      .select('*')
-      .eq('created_by', user.id)
-      .gte('txn_date', startStr)
-      .lte('txn_date', endStr)
-      .order('txn_date', { ascending: false });
+    // Get bank transactions with pagination
+    interface BankTransaction {
+      id: string;
+      txn_date: string;
+      deposit: number | null;
+      withdrawal: number | null;
+      description: string | null;
+      bank_account_id: string;
+      created_by: string;
+      created_at: string;
+    }
+    let bankTxns: BankTransaction[] = [];
+    let bankFrom = 0;
+    const pageSize = 1000;
+    let hasMoreBank = true;
 
-    if (!bankTxns) {
+    while (hasMoreBank) {
+      const { data, error } = await supabase
+        .from('bank_transactions')
+        .select('*')
+        .eq('created_by', user.id)
+        .gte('txn_date', startStr)
+        .lte('txn_date', endStr)
+        .order('txn_date', { ascending: false })
+        .range(bankFrom, bankFrom + pageSize - 1);
+
+      if (error) {
+        return { success: false, error: error.message };
+      }
+
+      if (data && data.length > 0) {
+        bankTxns = bankTxns.concat(data);
+        hasMoreBank = data.length === pageSize;
+        bankFrom += pageSize;
+      } else {
+        hasMoreBank = false;
+      }
+    }
+
+    if (!bankTxns || bankTxns.length === 0) {
       return { success: true, data: [] };
     }
 
@@ -247,14 +372,41 @@ export async function getUnmatchedInternalRecords(
     const endStr = format(endDate, 'yyyy-MM-dd');
 
     let records: UnmatchedInternalRecord[] = [];
+    const pageSize = 1000;
 
     if (entityType === 'settlement') {
-      const { data: settlements } = await supabase
-        .from('settlement_transactions')
-        .select('id, settled_time, settlement_amount, txn_id')
-        .eq('created_by', user.id)
-        .gte('settled_time', startStr)
-        .lte('settled_time', endStr);
+      // Get settlements with pagination
+      interface SettlementRecord {
+        id: string;
+        settled_time: string;
+        settlement_amount: number;
+        txn_id: string | null;
+      }
+      let settlements: SettlementRecord[] = [];
+      let settlementFrom = 0;
+      let hasMoreSettlements = true;
+
+      while (hasMoreSettlements) {
+        const { data, error } = await supabase
+          .from('settlement_transactions')
+          .select('id, settled_time, settlement_amount, txn_id')
+          .eq('created_by', user.id)
+          .gte('settled_time', startStr)
+          .lte('settled_time', endStr)
+          .range(settlementFrom, settlementFrom + pageSize - 1);
+
+        if (error) {
+          return { success: false, error: error.message };
+        }
+
+        if (data && data.length > 0) {
+          settlements = settlements.concat(data);
+          hasMoreSettlements = data.length === pageSize;
+          settlementFrom += pageSize;
+        } else {
+          hasMoreSettlements = false;
+        }
+      }
 
       if (settlements) {
         const { data: matched } = await supabase
@@ -281,12 +433,39 @@ export async function getUnmatchedInternalRecords(
           }));
       }
     } else if (entityType === 'expense') {
-      const { data: expenses } = await supabase
-        .from('expenses')
-        .select('id, expense_date, amount, description, category')
-        .eq('created_by', user.id)
-        .gte('expense_date', startStr)
-        .lte('expense_date', endStr);
+      // Get expenses with pagination
+      interface ExpenseRecord {
+        id: string;
+        expense_date: string;
+        amount: number;
+        description: string;
+        category: string;
+      }
+      let expenses: ExpenseRecord[] = [];
+      let expenseFrom = 0;
+      let hasMoreExpenses = true;
+
+      while (hasMoreExpenses) {
+        const { data, error } = await supabase
+          .from('expenses')
+          .select('id, expense_date, amount, description, category')
+          .eq('created_by', user.id)
+          .gte('expense_date', startStr)
+          .lte('expense_date', endStr)
+          .range(expenseFrom, expenseFrom + pageSize - 1);
+
+        if (error) {
+          return { success: false, error: error.message };
+        }
+
+        if (data && data.length > 0) {
+          expenses = expenses.concat(data);
+          hasMoreExpenses = data.length === pageSize;
+          expenseFrom += pageSize;
+        } else {
+          hasMoreExpenses = false;
+        }
+      }
 
       if (expenses) {
         const { data: matched } = await supabase
@@ -313,13 +492,39 @@ export async function getUnmatchedInternalRecords(
           }));
       }
     } else if (entityType === 'wallet_topup') {
-      const { data: topups } = await supabase
-        .from('wallet_ledger')
-        .select('id, date, amount, note')
-        .eq('created_by', user.id)
-        .eq('entry_type', 'TOP_UP')
-        .gte('date', startStr)
-        .lte('date', endStr);
+      // Get wallet topups with pagination
+      interface WalletTopupRecord {
+        id: string;
+        date: string;
+        amount: number;
+        note: string | null;
+      }
+      let topups: WalletTopupRecord[] = [];
+      let topupFrom = 0;
+      let hasMoreTopups = true;
+
+      while (hasMoreTopups) {
+        const { data, error } = await supabase
+          .from('wallet_ledger')
+          .select('id, date, amount, note')
+          .eq('created_by', user.id)
+          .eq('entry_type', 'TOP_UP')
+          .gte('date', startStr)
+          .lte('date', endStr)
+          .range(topupFrom, topupFrom + pageSize - 1);
+
+        if (error) {
+          return { success: false, error: error.message };
+        }
+
+        if (data && data.length > 0) {
+          topups = topups.concat(data);
+          hasMoreTopups = data.length === pageSize;
+          topupFrom += pageSize;
+        } else {
+          hasMoreTopups = false;
+        }
+      }
 
       if (topups) {
         const { data: matched } = await supabase
@@ -362,8 +567,8 @@ export async function getUnmatchedInternalRecords(
 // ============================================================================
 
 export async function runAutoReconciliation(
-  startDate: Date,
-  endDate: Date
+  _startDate: Date,
+  _endDate: Date
 ): Promise<RunAutoReconciliationResponse> {
   try {
     const supabase = await createClient();
@@ -452,19 +657,46 @@ export async function getSuggestedMatches(
     const startStr = format(startDate, 'yyyy-MM-dd');
     const endStr = format(endDate, 'yyyy-MM-dd');
 
-    // 1. Search unmatched settlements (if txnAmount > 0)
+    // 1. Search unmatched settlements (if txnAmount > 0) - with pagination
     if (txnAmount > 0) {
-      const { data: settlements } = await supabase
-        .from('settlement_transactions')
-        .select('id, settled_time, settlement_amount, txn_id')
-        .eq('created_by', user.id)
-        .gte('settled_time', startStr)
-        .lte('settled_time', endStr)
-        .not(
-          'id',
-          'in',
-          `(SELECT matched_record_id FROM bank_reconciliations WHERE matched_type = 'settlement')`
-        );
+      interface SettlementMatch {
+        id: string;
+        settled_time: string;
+        settlement_amount: number;
+        txn_id: string | null;
+      }
+      let settlements: SettlementMatch[] = [];
+      let settlementFrom = 0;
+      const pageSize = 1000;
+      let hasMoreSettlements = true;
+
+      while (hasMoreSettlements) {
+        const { data, error } = await supabase
+          .from('settlement_transactions')
+          .select('id, settled_time, settlement_amount, txn_id')
+          .eq('created_by', user.id)
+          .gte('settled_time', startStr)
+          .lte('settled_time', endStr)
+          .not(
+            'id',
+            'in',
+            `(SELECT matched_record_id FROM bank_reconciliations WHERE matched_type = 'settlement')`
+          )
+          .range(settlementFrom, settlementFrom + pageSize - 1);
+
+        if (error) {
+          console.error('Settlements query error:', error);
+          break;
+        }
+
+        if (data && data.length > 0) {
+          settlements = settlements.concat(data);
+          hasMoreSettlements = data.length === pageSize;
+          settlementFrom += pageSize;
+        } else {
+          hasMoreSettlements = false;
+        }
+      }
 
       settlements?.forEach((s) => {
         const amount = Number(s.settlement_amount || 0);
@@ -527,20 +759,47 @@ export async function getSuggestedMatches(
       });
     }
 
-    // 3. Search unmatched wallet top-ups (if txnAmount < 0)
+    // 3. Search unmatched wallet top-ups (if txnAmount < 0) - with pagination
     if (txnAmount < 0) {
-      const { data: topups } = await supabase
-        .from('wallet_ledger')
-        .select('id, date, entry_type, amount, note')
-        .eq('created_by', user.id)
-        .eq('entry_type', 'TOP_UP')
-        .gte('date', startStr)
-        .lte('date', endStr)
-        .not(
-          'id',
-          'in',
-          `(SELECT matched_record_id FROM bank_reconciliations WHERE matched_type = 'wallet_topup')`
-        );
+      interface WalletTopupMatch {
+        id: string;
+        date: string;
+        entry_type: string;
+        amount: number;
+        note: string | null;
+      }
+      let topups: WalletTopupMatch[] = [];
+      let topupFrom = 0;
+      let hasMoreTopups = true;
+
+      while (hasMoreTopups) {
+        const { data, error } = await supabase
+          .from('wallet_ledger')
+          .select('id, date, entry_type, amount, note')
+          .eq('created_by', user.id)
+          .eq('entry_type', 'TOP_UP')
+          .gte('date', startStr)
+          .lte('date', endStr)
+          .not(
+            'id',
+            'in',
+            `(SELECT matched_record_id FROM bank_reconciliations WHERE matched_type = 'wallet_topup')`
+          )
+          .range(topupFrom, topupFrom + pageSize - 1);
+
+        if (error) {
+          console.error('Wallet topups query error:', error);
+          break;
+        }
+
+        if (data && data.length > 0) {
+          topups = topups.concat(data);
+          hasMoreTopups = data.length === pageSize;
+          topupFrom += pageSize;
+        } else {
+          hasMoreTopups = false;
+        }
+      }
 
       topups?.forEach((t) => {
         const amount = -Number(t.amount || 0); // Negative for cash out

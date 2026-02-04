@@ -93,17 +93,37 @@ export async function getReconciliationReport(
     // Conservative approach: Use total cash in as proxy
     const revenue_not_settled = accrual_revenue - cashflow_in
 
-    // 2. Wallet top-ups (Cash out but not expense)
-    const { data: topupData, error: topupError } = await supabase
-      .from('wallet_ledger')
-      .select('amount')
-      .eq('entry_type', 'TOP_UP')
-      .eq('direction', 'IN')
-      .gte('transaction_date', startDateStr)
-      .lte('transaction_date', endDateStr)
+    // 2. Wallet top-ups (Cash out but not expense) - with pagination
+    interface WalletTopupData {
+      amount: number;
+    }
+    let topupData: WalletTopupData[] = [];
+    let topupFrom = 0;
+    const pageSize = 1000;
+    let hasMoreTopups = true;
 
-    if (topupError) {
-      console.error('Wallet top-up query failed:', topupError)
+    while (hasMoreTopups) {
+      const { data, error } = await supabase
+        .from('wallet_ledger')
+        .select('amount')
+        .eq('entry_type', 'TOP_UP')
+        .eq('direction', 'IN')
+        .gte('transaction_date', startDateStr)
+        .lte('transaction_date', endDateStr)
+        .range(topupFrom, topupFrom + pageSize - 1);
+
+      if (error) {
+        console.error('Wallet top-up query failed:', error);
+        break;
+      }
+
+      if (data && data.length > 0) {
+        topupData = topupData.concat(data);
+        hasMoreTopups = data.length === pageSize;
+        topupFrom += pageSize;
+      } else {
+        hasMoreTopups = false;
+      }
     }
 
     const wallet_topups = topupData?.reduce((sum, r) => sum + (r.amount || 0), 0) || 0

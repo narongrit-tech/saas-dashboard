@@ -98,38 +98,85 @@ export async function getCompanyCashflow(
         },
       }
     } else {
-      // Marketplace View: Query from internal records
-      // Fetch Cash In (settlement_transactions = actual money received from marketplace)
-      const { data: cashInData, error: cashInError } = await supabase
-        .from('settlement_transactions')
-        .select('settled_time, settlement_amount')
-        .gte('settled_time', startDateStr)
-        .lte('settled_time', endDateStr)
-        .order('settled_time', { ascending: true })
+      // Marketplace View: Query from internal records with pagination
 
-      if (cashInError) throw new Error(`Cash In query failed: ${cashInError.message}`)
+      // Fetch Cash In (settlement_transactions = actual money received from marketplace)
+      let cashInData: any[] = [];
+      let from = 0;
+      const pageSize = 1000;
+      let hasMore = true;
+
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from('settlement_transactions')
+          .select('settled_time, settlement_amount')
+          .gte('settled_time', startDateStr)
+          .lte('settled_time', endDateStr)
+          .order('settled_time', { ascending: true })
+          .range(from, from + pageSize - 1);
+
+        if (error) throw new Error(`Cash In query failed: ${error.message}`);
+
+        if (data && data.length > 0) {
+          cashInData = cashInData.concat(data);
+          hasMore = data.length === pageSize;
+          from += pageSize;
+        } else {
+          hasMore = false;
+        }
+      }
 
       // Fetch Cash Out from Expenses (all categories)
-      const { data: expensesData, error: expensesError } = await supabase
-        .from('expenses')
-        .select('expense_date, amount')
-        .gte('expense_date', startDateStr)
-        .lte('expense_date', endDateStr)
-        .order('expense_date', { ascending: true })
+      let expensesData: any[] = [];
+      from = 0;
+      hasMore = true;
 
-      if (expensesError) throw new Error(`Expenses query failed: ${expensesError.message}`)
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from('expenses')
+          .select('expense_date, amount')
+          .gte('expense_date', startDateStr)
+          .lte('expense_date', endDateStr)
+          .order('expense_date', { ascending: true })
+          .range(from, from + pageSize - 1);
+
+        if (error) throw new Error(`Expenses query failed: ${error.message}`);
+
+        if (data && data.length > 0) {
+          expensesData = expensesData.concat(data);
+          hasMore = data.length === pageSize;
+          from += pageSize;
+        } else {
+          hasMore = false;
+        }
+      }
 
       // Fetch Cash Out from Wallet TOP_UP (cash transfer from company to wallet)
-      const { data: topupData, error: topupError } = await supabase
-        .from('wallet_ledger')
-        .select('date, amount')
-        .eq('entry_type', 'TOP_UP')
-        .eq('direction', 'IN') // IN to wallet = OUT from company
-        .gte('date', startDateStr)
-        .lte('date', endDateStr)
-        .order('date', { ascending: true })
+      let topupData: any[] = [];
+      from = 0;
+      hasMore = true;
 
-      if (topupError) throw new Error(`Wallet top-up query failed: ${topupError.message}`)
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from('wallet_ledger')
+          .select('date, amount')
+          .eq('entry_type', 'TOP_UP')
+          .eq('direction', 'IN') // IN to wallet = OUT from company
+          .gte('date', startDateStr)
+          .lte('date', endDateStr)
+          .order('date', { ascending: true })
+          .range(from, from + pageSize - 1);
+
+        if (error) throw new Error(`Wallet top-up query failed: ${error.message}`);
+
+        if (data && data.length > 0) {
+          topupData = topupData.concat(data);
+          hasMore = data.length === pageSize;
+          from += pageSize;
+        } else {
+          hasMore = false;
+        }
+      }
 
       // Process Cash In
       cashInData?.forEach((row) => {

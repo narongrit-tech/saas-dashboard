@@ -129,20 +129,38 @@ export async function getBankDailySummary(
     const startStr = format(startDate, 'yyyy-MM-dd');
     const endStr = format(endDate, 'yyyy-MM-dd');
 
-    // Query bank transactions for date range
-    const { data: transactions, error } = await supabase
-      .from('bank_transactions')
-      .select('txn_date, deposit, withdrawal')
-      .eq('bank_account_id', bankAccountId)
-      .eq('created_by', user.id)
-      .gte('txn_date', startStr)
-      .lte('txn_date', endStr)
-      .order('txn_date', { ascending: true });
+    // Query bank transactions for date range with pagination
+    let allTransactions: any[] = [];
+    let from = 0;
+    const pageSize = 1000;
+    let hasMore = true;
 
-    if (error) {
-      console.error('getBankDailySummary error:', error);
-      return { success: false, error: error.message };
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('bank_transactions')
+        .select('txn_date, deposit, withdrawal')
+        .eq('bank_account_id', bankAccountId)
+        .eq('created_by', user.id)
+        .gte('txn_date', startStr)
+        .lte('txn_date', endStr)
+        .order('txn_date', { ascending: true })
+        .range(from, from + pageSize - 1);
+
+      if (error) {
+        console.error('getBankDailySummary error:', error);
+        return { success: false, error: error.message };
+      }
+
+      if (data && data.length > 0) {
+        allTransactions = allTransactions.concat(data);
+        hasMore = data.length === pageSize;
+        from += pageSize;
+      } else {
+        hasMore = false;
+      }
     }
+
+    const transactions = allTransactions;
 
     // Get opening balance from bank_opening_balances table
     // Find the latest opening balance on or before the start date
@@ -320,21 +338,39 @@ export async function exportBankTransactions(
       ? `${account.bank_name}-${account.account_number}`
       : 'unknown';
 
-    // Query all transactions in date range
-    const { data: transactions, error } = await supabase
-      .from('bank_transactions')
-      .select('*')
-      .eq('bank_account_id', bankAccountId)
-      .eq('created_by', user.id)
-      .gte('txn_date', startStr)
-      .lte('txn_date', endStr)
-      .order('txn_date', { ascending: true })
-      .order('created_at', { ascending: true });
+    // Query all transactions in date range with pagination
+    let allTransactions: any[] = [];
+    let from = 0;
+    const pageSize = 1000;
+    let hasMore = true;
 
-    if (error) {
-      console.error('exportBankTransactions error:', error);
-      return { success: false, error: error.message };
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('bank_transactions')
+        .select('*')
+        .eq('bank_account_id', bankAccountId)
+        .eq('created_by', user.id)
+        .gte('txn_date', startStr)
+        .lte('txn_date', endStr)
+        .order('txn_date', { ascending: true })
+        .order('created_at', { ascending: true })
+        .range(from, from + pageSize - 1);
+
+      if (error) {
+        console.error('exportBankTransactions error:', error);
+        return { success: false, error: error.message };
+      }
+
+      if (data && data.length > 0) {
+        allTransactions = allTransactions.concat(data);
+        hasMore = data.length === pageSize;
+        from += pageSize;
+      } else {
+        hasMore = false;
+      }
     }
+
+    const transactions = allTransactions;
 
     if (!transactions || transactions.length === 0) {
       return { success: false, error: 'No transactions found for export' };
@@ -685,19 +721,37 @@ export async function getBankBalanceSummary(
       ? openingBalanceResponse.data.opening_balance
       : 0;
 
-    // Get transactions in date range
-    const { data: transactions, error } = await supabase
-      .from('bank_transactions')
-      .select('deposit, withdrawal')
-      .eq('bank_account_id', bankAccountId)
-      .eq('created_by', user.id)
-      .gte('txn_date', startDate)
-      .lte('txn_date', endDate);
+    // Get transactions in date range with pagination
+    let allTransactions: any[] = [];
+    let from = 0;
+    const pageSize = 1000;
+    let hasMore = true;
 
-    if (error) {
-      console.error('getBankBalanceSummary error:', error);
-      return { success: false, error: error.message };
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('bank_transactions')
+        .select('deposit, withdrawal')
+        .eq('bank_account_id', bankAccountId)
+        .eq('created_by', user.id)
+        .gte('txn_date', startDate)
+        .lte('txn_date', endDate)
+        .range(from, from + pageSize - 1);
+
+      if (error) {
+        console.error('getBankBalanceSummary error:', error);
+        return { success: false, error: error.message };
+      }
+
+      if (data && data.length > 0) {
+        allTransactions = allTransactions.concat(data);
+        hasMore = data.length === pageSize;
+        from += pageSize;
+      } else {
+        hasMore = false;
+      }
     }
+
+    const transactions = allTransactions;
 
     // Calculate net movement
     let totalDeposits = 0;
