@@ -17,6 +17,8 @@ import {
   GitCompare,
   Landmark,
   Scale,
+  Users,
+  FileBarChart,
 } from 'lucide-react'
 
 const menuItems = [
@@ -79,6 +81,16 @@ const menuItems = [
     title: 'Payables',
     href: '/payables',
     icon: CreditCard,
+  },
+  {
+    title: 'Affiliates',
+    href: '/affiliates',
+    icon: Users,
+  },
+  {
+    title: 'Affiliate Report',
+    href: '/reports/affiliate',
+    icon: FileBarChart,
   },
   {
     title: 'Settings',
