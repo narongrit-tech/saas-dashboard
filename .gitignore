@@ -19,3 +19,31 @@ pnpm-debug.log*
 
 nul
 
+
+# Debug & Analysis Scripts (temporary)
+frontend/analyze_*.js
+frontend/debug-*.js
+frontend/test-*.js
+
+# Temporary SQL Scripts
+database-scripts/delete-*.sql
+database-scripts/debug-*.sql
+database-scripts/quick-check-*.sql
+database-scripts/find-missing-*.sql
+
+# Screenshots & Media
+Screenshot/
+screenshots/
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# Raw Data & Exports
+raw.data/
+exports/
+*.xlsx
+*.csv
+
+# Local Settings
+.claude/settings.local.json
