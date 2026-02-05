@@ -1114,6 +1114,9 @@ export async function importSalesChunk(
       payment_platform_discount: number | null
     }>()
 
+    // CRITICAL FIX: Track line totals for each order_id to fallback when order_amount is null
+    const orderLineTotalsMap = new Map<string, number>()
+
     const mergeNullable = <T>(existing: T | null, incoming: T | null): T | null => {
       if (existing !== null && existing !== undefined) return existing
       if (incoming === undefined) return existing ?? null
@@ -1121,6 +1124,10 @@ export async function importSalesChunk(
     }
 
     for (const row of chunkData) {
+      // Accumulate line totals for fallback calculation
+      const currentLineTotal = orderLineTotalsMap.get(row.order_id) || 0
+      orderLineTotalsMap.set(row.order_id, currentLineTotal + (row.total_amount || 0))
+
       const existing = orderFinancialsMap.get(row.order_id)
       const rowPayload = {
         order_id: row.order_id,
@@ -1159,7 +1166,24 @@ export async function importSalesChunk(
       })
     }
 
-    const orderFinancialRows = Array.from(orderFinancialsMap.values())
+    // CRITICAL FIX: Fallback order_amount to line totals if null
+    // This ensures order_financials always has valid order_amount for GMV calculations
+    let nullOrderAmountCount = 0
+    const orderFinancialRows = Array.from(orderFinancialsMap.values()).map(row => {
+      if (row.order_amount === null || row.order_amount === 0) {
+        const lineTotal = orderLineTotalsMap.get(row.order_id) || 0
+        if (lineTotal > 0) {
+          nullOrderAmountCount++
+          console.log(`[importSalesChunk] Order ${row.order_id}: order_amount is null/0, using line total ฿${lineTotal.toFixed(2)}`)
+          return { ...row, order_amount: lineTotal }
+        }
+      }
+      return row
+    })
+
+    if (nullOrderAmountCount > 0) {
+      console.log(`[importSalesChunk] ⚠️  Fixed ${nullOrderAmountCount} orders with null/0 order_amount by calculating from line totals`)
+    }
     if (orderFinancialRows.length > 0) {
       const { error: financialError } = await supabase
         .from('order_financials')
@@ -1364,34 +1388,23 @@ export async function finalizeImportBatch(
     // Calculate date range and determine date basis
     let dateMin: string | null = null
     let dateMax: string | null = null
-    let dateBasisUsed: 'order_date' | 'paid_at' = 'order_date'
 
-    // Check if most rows have paid_at
-    const paidAtCount = parsedData.filter(r => r.paid_at).length
-    const paidAtRatio = paidAtCount / parsedData.length
+    // CRITICAL FIX: ALWAYS use order_date (created_time) as basis for Sales Orders
+    // Rationale:
+    // 1. GMV cards use created_time, not paid_time
+    // 2. P&L bucketing uses order_date (created_time) as standard
+    // 3. Import summary should align with actual usage in dashboard
+    // 4. For TikTok, all orders have paid_at → old logic always chose paid_at incorrectly
+    const dateBasisUsed: 'order_date' | 'paid_at' = 'order_date'
 
-    // Use paid_at as basis if >50% of rows have it
-    if (paidAtRatio > 0.5) {
-      dateBasisUsed = 'paid_at'
-      const paidDates = parsedData
-        .filter(r => r.paid_at)
-        .map(r => r.paid_at!.split(' ')[0]) // Extract date part
-        .sort()
-      if (paidDates.length > 0) {
-        dateMin = paidDates[0]
-        dateMax = paidDates[paidDates.length - 1]
-      }
-    } else {
-      // Use order_date as basis
-      dateBasisUsed = 'order_date'
-      const orderDates = parsedData
-        .filter(r => r.order_date)
-        .map(r => r.order_date.split(' ')[0]) // Extract date part
-        .sort()
-      if (orderDates.length > 0) {
-        dateMin = orderDates[0]
-        dateMax = orderDates[orderDates.length - 1]
-      }
+    const orderDates = parsedData
+      .filter(r => r.order_date)
+      .map(r => r.order_date.split(' ')[0]) // Extract date part
+      .sort()
+
+    if (orderDates.length > 0) {
+      dateMin = orderDates[0]
+      dateMax = orderDates[orderDates.length - 1]
     }
 
     // Calculate insert vs skip counts

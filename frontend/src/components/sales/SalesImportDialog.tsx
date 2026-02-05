@@ -99,6 +99,7 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
   const [parsedData, setParsedData] = useState<ParsedSalesRow[]>([])
   const [result, setResult] = useState<SalesImportResult | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
+  const [forceReimport, setForceReimport] = useState(false)
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null)
   const [duplicateInfo, setDuplicateInfo] = useState<{
     fileName: string;
@@ -458,6 +459,7 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
     setParsedData([])
     setResult(null)
     setIsProcessing(false)
+    setForceReimport(false)
     setImportProgress(null)
     setDuplicateInfo(null)
     setProcessingInfo(null)
@@ -631,16 +633,28 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
         {/* Step 2: Preview */}
         {step === 'preview' && preview && (
           <div className="space-y-4">
-            {/* Summary */}
-            <div className="grid grid-cols-2 gap-4">
+            {/* Summary - REAL NUMBERS */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="border rounded-lg p-4">
-                <div className="text-sm text-muted-foreground">Total Rows</div>
-                <div className="text-2xl font-bold">{preview.totalRows}</div>
+                <div className="text-sm text-muted-foreground">Total Lines (SKU)</div>
+                <div className="text-2xl font-bold">{preview.totalRows.toLocaleString()}</div>
               </div>
               <div className="border rounded-lg p-4">
-                <div className="text-sm text-muted-foreground">Total Revenue</div>
+                <div className="text-sm text-muted-foreground">Unique Orders</div>
                 <div className="text-2xl font-bold">
-                  ฿{preview.summary.totalRevenue.toLocaleString()}
+                  {preview.summary.uniqueOrderIds?.toLocaleString() || preview.summary.totalOrders?.toLocaleString() || 'N/A'}
+                </div>
+              </div>
+              <div className="border rounded-lg p-4">
+                <div className="text-sm text-muted-foreground">GMV (Completed)</div>
+                <div className="text-2xl font-bold">
+                  ฿{preview.summary.totalRevenue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+              </div>
+              <div className="border rounded-lg p-4">
+                <div className="text-sm text-muted-foreground">Date Range</div>
+                <div className="text-lg font-bold">
+                  {preview.dateRange ? `${preview.dateRange.start} to ${preview.dateRange.end}` : 'N/A'}
                 </div>
               </div>
             </div>
@@ -712,13 +726,30 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
               </div>
             )}
 
+            {/* Force Re-import Option */}
+            <div className="flex items-center space-x-2 p-4 border rounded-lg bg-muted/50">
+              <input
+                type="checkbox"
+                id="forceReimport"
+                checked={forceReimport}
+                onChange={(e) => setForceReimport(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+              />
+              <label
+                htmlFor="forceReimport"
+                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+              >
+                Force Re-import (อนุญาตให้นำเข้าไฟล์ซ้ำ - ใช้สำหรับ update ข้อมูล)
+              </label>
+            </div>
+
             {/* Actions */}
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={handleClose}>
                 Cancel
               </Button>
               <Button
-                onClick={() => handleConfirmImport(false)}
+                onClick={() => handleConfirmImport(forceReimport)}
                 disabled={!preview.success || isProcessing}
               >
                 {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
