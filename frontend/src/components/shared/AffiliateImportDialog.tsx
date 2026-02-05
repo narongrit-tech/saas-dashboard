@@ -183,19 +183,38 @@ export function AffiliateImportDialog({ open, onOpenChange, onSuccess }: Affilia
       // - Convert undefined to null (Server Actions don't support undefined)
       const mappingJson = JSON.stringify(mapping)
 
+      // DEFENSIVE: Ensure normalizedPayload is serializable
       // Pass normalized payload from Preview to Import
-      const normalizedPayloadJson = preview.normalizedPayload
-        ? JSON.stringify(preview.normalizedPayload)
-        : null // Use null instead of undefined for Server Actions
+      let normalizedPayloadJson: string | null = null
+      if (preview.normalizedPayload) {
+        try {
+          // Deep clone to remove any non-serializable objects
+          const cloned = JSON.parse(JSON.stringify(preview.normalizedPayload))
+          normalizedPayloadJson = JSON.stringify(cloned)
+        } catch (serializeError) {
+          console.error('[AffiliateImport] Failed to serialize normalizedPayload:', serializeError)
+          // Fallback: pass null (server will re-compute)
+          normalizedPayloadJson = null
+        }
+      }
+
+      // CRITICAL FIX: Ensure all string parameters are plain strings (not String objects)
+      const fileHashPlain = String(fileHash)
+      const fileNamePlain = String(file.name)
+      const parsedDataJsonPlain = String(parsedDataJson)
+      const mappingJsonPlain = String(mappingJson)
+      const mappingTypePlain = String(mappingType)
+      const normalizedPayloadJsonPlain = normalizedPayloadJson ? String(normalizedPayloadJson) : null
+      const allowReimportPlain = Boolean(allowReimport)
 
       const importResult = await importAffiliateAttributions(
-        fileHash,
-        file.name,
-        parsedDataJson,
-        mappingJson,
-        mappingType,
-        normalizedPayloadJson,
-        allowReimport
+        fileHashPlain,
+        fileNamePlain,
+        parsedDataJsonPlain,
+        mappingJsonPlain,
+        mappingTypePlain,
+        normalizedPayloadJsonPlain,
+        allowReimportPlain
       )
 
       if (importResult.success) {
