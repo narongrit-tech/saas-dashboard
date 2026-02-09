@@ -6,10 +6,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { DateRangeFilter } from '@/components/shared/DateRangeFilter';
+import { DateRangePicker } from '@/components/shared/DateRangePicker';
 import { ImportAdsDialog } from '@/components/ads/ImportAdsDialog';
 import { TrendingUp, DollarSign, ShoppingCart, AlertCircle, Upload } from 'lucide-react';
-import { type DateRangeResult, toDateQuery } from '@/lib/date-range';
+import { type DateRangeResult as LibDateRangeResult, toDateQuery } from '@/lib/date-range';
+import { type DateRangeResult } from '@/components/shared/DateRangePicker';
+import { getBangkokNow, startOfDayBangkok, formatBangkok } from '@/lib/bangkok-time';
 import { getAdsSummary, getAdsPerformance, type CampaignTypeFilter } from './actions';
 
 function formatCurrency(amount: number): string {
@@ -48,7 +50,10 @@ interface AdsPerformance {
 export default function AdsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [dateRange, setDateRange] = useState<DateRangeResult | null>(null);
+  const [dateRange, setDateRange] = useState<DateRangeResult>({
+    startDate: (() => { const d = new Date(); d.setDate(d.getDate() - 6); return startOfDayBangkok(d); })(),
+    endDate: getBangkokNow(),
+  });
   const [summary, setSummary] = useState<AdsSummary | null>(null);
   const [performance, setPerformance] = useState<AdsPerformance[]>([]);
   const [loading, setLoading] = useState(false);
@@ -89,9 +94,11 @@ export default function AdsPage() {
       setLoading(true);
       setError(null);
 
-      // Convert calendar strings to Date objects with timestamps for server query
-      const queryStartDate = toDateQuery(dateRange.startDate, false); // Start of day
-      const queryEndDate = toDateQuery(dateRange.endDate, true); // End of day
+      // Convert Date objects to calendar strings, then to Date objects with timestamps for server query
+      const startDateString = formatBangkok(dateRange.startDate, 'yyyy-MM-dd');
+      const endDateString = formatBangkok(dateRange.endDate, 'yyyy-MM-dd');
+      const queryStartDate = toDateQuery(startDateString, false); // Start of day
+      const queryEndDate = toDateQuery(endDateString, true); // End of day
 
       const [summaryResult, perfResult] = await Promise.all([
         getAdsSummary(queryStartDate, queryEndDate, campaignTypeState),
@@ -193,7 +200,7 @@ export default function AdsPage() {
         </Tabs>
 
         {/* Date Range Filter */}
-        <DateRangeFilter defaultPreset="last7days" onChange={setDateRange} />
+        <DateRangePicker value={dateRange} onChange={setDateRange} />
       </div>
 
       {/* Error State */}

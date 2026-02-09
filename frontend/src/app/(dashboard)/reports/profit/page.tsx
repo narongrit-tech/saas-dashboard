@@ -15,7 +15,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { SingleDateRangePicker, DateRangeResult } from '@/components/shared/SingleDateRangePicker'
+import { DateRangePicker, DateRangeResult } from '@/components/shared/DateRangePicker'
 import {
   Select,
   SelectContent,
@@ -310,10 +310,12 @@ export default function ProfitReportsPage() {
             {/* Date Range Picker */}
             <div className="flex-1">
               <label className="text-sm font-medium mb-2 block">Date Range</label>
-              <SingleDateRangePicker
-                defaultRange={dateRange || undefined}
-                onChange={setDateRange}
-              />
+              {dateRange && (
+                <DateRangePicker
+                  value={dateRange}
+                  onChange={setDateRange}
+                />
+              )}
             </div>
 
             {/* Platform Filter */}

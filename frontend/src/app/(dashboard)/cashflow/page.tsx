@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { SingleDateRangePicker, type DateRangeResult } from '@/components/shared/SingleDateRangePicker';
+import { DateRangePicker, type DateRangeResult } from '@/components/shared/DateRangePicker';
 import { ImportOnholdDialog } from '@/components/cashflow/ImportOnholdDialog';
 import { ImportIncomeDialog } from '@/components/cashflow/ImportIncomeDialog';
 import {
@@ -278,7 +278,7 @@ export default function CashflowPageV3() {
       </div>
 
       {/* Single Date Range Picker */}
-      <SingleDateRangePicker onChange={setDateRange} />
+      <DateRangePicker value={dateRange} onChange={setDateRange} />
 
       {/* Marketplace Filter (Placeholder for future multi-marketplace support) */}
       <div className="flex items-center gap-3">

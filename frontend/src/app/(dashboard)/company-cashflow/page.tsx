@@ -20,7 +20,7 @@ import {
   AlertCircle,
   Info,
 } from 'lucide-react'
-import { SingleDateRangePicker, DateRangeResult } from '@/components/shared/SingleDateRangePicker'
+import { DateRangePicker, DateRangeResult } from '@/components/shared/DateRangePicker'
 import { getBangkokNow, formatBangkok, startOfDayBangkok } from '@/lib/bangkok-time'
 import { getCompanyCashflow, exportCompanyCashflow, CompanyCashflowSummary } from './actions'
 
@@ -173,8 +173,8 @@ export default function CompanyCashflowPage() {
       {/* Date Range Filter */}
       <div className="flex items-center gap-4">
         <div className="flex-1">
-          <SingleDateRangePicker
-            defaultRange={dateRange}
+          <DateRangePicker
+            value={dateRange}
             onChange={setDateRange}
           />
         </div>

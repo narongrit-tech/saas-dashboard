@@ -8,7 +8,7 @@ import {
 } from '@/app/(dashboard)/reconciliation/bank-reconciliation-actions'
 import { autoMatchBankTransactions } from '@/app/(dashboard)/reconciliation/auto-match-actions'
 import { ReconciliationSummary } from '@/types/bank'
-import { SingleDateRangePicker } from '@/components/shared/SingleDateRangePicker'
+import { DateRangePicker } from '@/components/shared/DateRangePicker'
 import ReconciliationSummaryCards from './ReconciliationSummaryCards'
 import UnmatchedBankTransactionsTable from './UnmatchedBankTransactionsTable'
 import UnmatchedInternalRecordsTabs from './UnmatchedInternalRecordsTabs'
@@ -88,8 +88,8 @@ export default function BankReconciliationClient() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <SingleDateRangePicker
-            defaultRange={dateRange}
+          <DateRangePicker
+            value={dateRange}
             onChange={setDateRange}
           />
 

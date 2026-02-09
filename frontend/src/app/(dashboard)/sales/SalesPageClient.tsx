@@ -7,7 +7,7 @@ import { SalesOrder, SalesOrderFilters, GroupedSalesOrder } from '@/types/sales'
 import { endOfDayBangkok, formatBangkok, getBangkokNow, startOfDayBangkok } from '@/lib/bangkok-time'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { SingleDateRangePicker, DateRangeResult } from '@/components/shared/SingleDateRangePicker'
+import { DateRangePicker, DateRangeResult } from '@/components/shared/DateRangePicker'
 import { GMVCards } from '@/components/sales/GMVCards'
 import { getSalesOrdersGrouped, getSalesGMVSummary, GMVSummary } from '@/app/(dashboard)/sales/actions'
 import { useLatestOnly } from '@/hooks/useLatestOnly'
@@ -823,15 +823,11 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
         <div className="flex flex-col gap-4 md:flex-row md:items-end">
           <div className="flex-1 space-y-2">
             <label className="text-sm font-medium">ช่วงวันที่</label>
-            <SingleDateRangePicker
-              defaultRange={
-                filters.startDate && filters.endDate
-                  ? {
-                      startDate: new Date(filters.startDate),
-                      endDate: new Date(filters.endDate)
-                    }
-                  : undefined
-              }
+            <DateRangePicker
+              value={{
+                startDate: filters.startDate ? new Date(filters.startDate) : startOfDayBangkok(),
+                endDate: filters.endDate ? new Date(filters.endDate) : endOfDayBangkok(),
+              }}
               onChange={handleDateRangeChange}
             />
           </div>

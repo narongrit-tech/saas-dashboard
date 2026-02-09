@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Search, ChevronDown, ChevronUp } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 import { subDays } from 'date-fns'
-import { SingleDateRangePicker } from '@/components/shared/SingleDateRangePicker'
+import { DateRangePicker } from '@/components/shared/DateRangePicker'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 
 interface BankTransactionsTableProps {
@@ -87,8 +87,8 @@ export default function BankTransactionsTable({ bankAccountId }: BankTransaction
               className="pl-9"
             />
           </div>
-          <SingleDateRangePicker
-            defaultRange={dateRange}
+          <DateRangePicker
+            value={dateRange}
             onChange={(range) => {
               setDateRange(range)
               setPage(1)

@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Download } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 import { subDays } from 'date-fns'
-import { SingleDateRangePicker } from '@/components/shared/SingleDateRangePicker'
+import { DateRangePicker } from '@/components/shared/DateRangePicker'
 import OpeningBalanceCard from './OpeningBalanceCard'
 import SetOpeningBalanceDialog from './SetOpeningBalanceDialog'
 import BankBalanceSummaryCard from './BankBalanceSummaryCard'
@@ -89,8 +89,8 @@ export default function BankDailySummaryTable({ bankAccountId }: BankDailySummar
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold">Daily Summary</h2>
         <div className="flex items-center gap-2">
-          <SingleDateRangePicker
-            defaultRange={dateRange}
+          <DateRangePicker
+            value={dateRange}
             onChange={setDateRange}
           />
           <Button

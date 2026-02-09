@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { SingleDateRangePicker, DateRangeResult } from '@/components/shared/SingleDateRangePicker'
+import { DateRangePicker, DateRangeResult } from '@/components/shared/DateRangePicker'
 import { Label } from '@/components/ui/label'
 import {
   Table,
@@ -128,8 +128,8 @@ export default function AffiliateReportPage() {
           <div className="flex flex-col gap-4 md:flex-row md:items-end">
             <div className="flex-1 space-y-2">
               <Label>ช่วงวันที่</Label>
-              <SingleDateRangePicker
-                defaultRange={dateRange}
+              <DateRangePicker
+                value={dateRange}
                 onChange={setDateRange}
               />
             </div>

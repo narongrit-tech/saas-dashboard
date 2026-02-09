@@ -6,7 +6,7 @@ import { Expense, ExpenseFilters, ExpenseCategory } from '@/types/expenses'
 import { endOfDayBangkok, formatBangkok } from '@/lib/bangkok-time'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { SingleDateRangePicker, DateRangeResult } from '@/components/shared/SingleDateRangePicker'
+import { DateRangePicker, DateRangeResult } from '@/components/shared/DateRangePicker'
 import {
   Select,
   SelectContent,
@@ -354,8 +354,8 @@ export default function ExpensesPage() {
 
         <div className="flex-1 space-y-2">
           <label className="text-sm font-medium">ช่วงวันที่</label>
-          <SingleDateRangePicker
-            defaultRange={
+          <DateRangePicker
+            value={
               filters.startDate && filters.endDate
                 ? {
                     startDate: new Date(filters.startDate),

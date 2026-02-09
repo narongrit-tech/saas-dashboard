@@ -13,7 +13,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { SingleDateRangePicker, DateRangeResult } from '@/components/shared/SingleDateRangePicker'
+import { DateRangePicker, DateRangeResult } from '@/components/shared/DateRangePicker'
 import { formatBangkok, getBangkokNow, startOfDayBangkok } from '@/lib/bangkok-time'
 import {
   getMultiSkuOrders,
@@ -199,8 +199,8 @@ export default function SalesAuditPage() {
 
           <div className="flex-1 space-y-2">
             <label className="text-sm font-medium">ช่วงวันที่</label>
-            <SingleDateRangePicker
-              defaultRange={
+            <DateRangePicker
+              value={
                 startDate && endDate
                   ? {
                       startDate: parseBangkokDateStringToLocalDate(startDate),
