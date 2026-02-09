@@ -915,6 +915,26 @@ export async function getSalesOrdersGrouped(
   error?: string
 }> {
   noStore() // Prevent Next.js caching
+  const startedAt = Date.now()
+  const dateBasisForLog = filters.dateBasis || 'order'
+  let pageFetches = 0
+  let rawLineCount = 0
+  let filteredLineCount = 0
+  let groupedCount = 0
+  let requestError: string | null = null
+
+  console.log('[Sales][getSalesOrdersGrouped] start', {
+    dateBasis: dateBasisForLog,
+    page: filters.page,
+    perPage: filters.perPage,
+    sourcePlatform: filters.sourcePlatform || 'all',
+    statusCount: filters.status?.length || 0,
+    paymentStatus: filters.paymentStatus || 'all',
+    startDate: filters.startDate || null,
+    endDate: filters.endDate || null,
+    hasSearch: Boolean(filters.search && filters.search.trim()),
+  })
+
   try {
     // 1. Authenticate user
     const supabase = createClient()
@@ -924,6 +944,7 @@ export async function getSalesOrdersGrouped(
     } = await supabase.auth.getUser()
 
     if (authError || !user) {
+      requestError = authError?.message || 'unauthenticated'
       return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
     }
 
@@ -994,9 +1015,11 @@ export async function getSalesOrdersGrouped(
 
     while (hasMore) {
       const { data, error } = await baseQuery.range(from, from + pageSize - 1)
+      pageFetches += 1
 
       if (error) {
         console.error('Error fetching orders for grouping:', error)
+        requestError = error.message
         return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
       }
 
@@ -1009,6 +1032,7 @@ export async function getSalesOrdersGrouped(
       }
     }
 
+    rawLineCount = rawLines.length
     if (!rawLines || rawLines.length === 0) {
       return { success: true, data: [], count: 0 }
     }
@@ -1044,6 +1068,7 @@ export async function getSalesOrdersGrouped(
       return true
     })
 
+    filteredLineCount = lines.length
     if (lines.length === 0) {
       return { success: true, data: [], count: 0 }
     }
@@ -1161,6 +1186,7 @@ export async function getSalesOrdersGrouped(
 
     // 5. Pagination (slice after sorting)
     const totalCount = groupedOrders.length
+    groupedCount = totalCount
     const offset = (filters.page - 1) * filters.perPage
     const paginatedOrders = groupedOrders.slice(offset, offset + filters.perPage)
 
@@ -1171,10 +1197,21 @@ export async function getSalesOrdersGrouped(
     }
   } catch (error) {
     console.error('Unexpected error in getSalesOrdersGrouped:', error)
+    requestError = error instanceof Error ? error.message : 'unknown error'
     return {
       success: false,
       error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
     }
+  } finally {
+    console.log('[Sales][getSalesOrdersGrouped] end', {
+      durationMs: Date.now() - startedAt,
+      dateBasis: dateBasisForLog,
+      pageFetches,
+      rawLineCount,
+      filteredLineCount,
+      groupedCount,
+      error: requestError,
+    })
   }
 }
 
@@ -1941,6 +1978,14 @@ export async function getSalesGMVSummary(
   endDate: string
 ): Promise<GMVSummaryResult> {
   noStore() // Prevent caching for real-time GMV data
+  const startedAt = Date.now()
+  let rowCount = 0
+  let requestError: string | null = null
+
+  console.log('[Sales][getSalesGMVSummary] start', {
+    startDate,
+    endDate,
+  })
 
   try {
     const supabase = createClient()
@@ -1950,6 +1995,7 @@ export async function getSalesGMVSummary(
     } = await supabase.auth.getUser()
 
     if (authError || !user) {
+      requestError = authError?.message || 'unauthenticated'
       return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
     }
 
@@ -1963,8 +2009,11 @@ export async function getSalesGMVSummary(
 
     if (error) {
       console.error('Error fetching GMV summary:', error)
+      requestError = error.message
       return { success: false, error: `เกิดข้อผิดพลาด: ${error.message}` }
     }
+
+    rowCount = data?.length || 0
 
     if (!data || data.length === 0) {
       // No data for date range - return zeros
@@ -2016,9 +2065,18 @@ export async function getSalesGMVSummary(
     return { success: true, data: summary }
   } catch (error) {
     console.error('Unexpected error in getSalesGMVSummary:', error)
+    requestError = error instanceof Error ? error.message : 'unknown error'
     return {
       success: false,
       error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
     }
+  } finally {
+    console.log('[Sales][getSalesGMVSummary] end', {
+      durationMs: Date.now() - startedAt,
+      startDate,
+      endDate,
+      rowCount,
+      error: requestError,
+    })
   }
 }

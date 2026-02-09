@@ -83,8 +83,10 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
   const router = useRouter()
   const searchParams = useSearchParams()
 
-  // Race condition guard for async operations
-  const { runLatest } = useLatestOnly()
+  // Race condition guards (must be separate per data flow)
+  // to avoid cross-cancelling orders vs GMV requests.
+  const { runLatest: runLatestOrders } = useLatestOnly()
+  const { runLatest: runLatestGmv } = useLatestOnly()
 
   const [orders, setOrders] = useState<SalesOrder[]>([])
   const [groupedOrders, setGroupedOrders] = useState<GroupedSalesOrder[]>([])
@@ -252,7 +254,7 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
   }, [sourcePlatform, statusString, paymentStatus, startDate, endDate, search, page, perPage, dateBasis, view])
 
   const fetchGMVSummary = async () => {
-    await runLatest(async (signal) => {
+    await runLatestGmv(async (signal) => {
       try {
         setGmvSummaryLoading(true)
         setGmvSummaryError(null)
@@ -293,7 +295,7 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
   }
 
   const fetchOrders = async () => {
-    await runLatest(async (signal) => {
+    await runLatestOrders(async (signal) => {
       try {
         setLoading(true)
         setError(null)
@@ -899,7 +901,7 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
 
       {/* Error Message */}
       {error && (
-        <div className="rounded-md bg-red-50 p-4 text-sm text-red-600">
+        <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           {error}
         </div>
       )}
