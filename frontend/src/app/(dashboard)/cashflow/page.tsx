@@ -296,7 +296,7 @@ export default function CashflowPageV3() {
       </div>
 
       {/* Single Date Range Picker */}
-      <DateRangePicker value={dateRange} onChange={setDateRange} />
+      <DateRangePicker value={dateRange} onChange={setDateRange} allowFutureDates={true} />
 
       {/* Marketplace Filter (Placeholder for future multi-marketplace support) */}
       <div className="flex items-center gap-3">

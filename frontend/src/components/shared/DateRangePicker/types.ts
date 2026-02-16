@@ -27,6 +27,13 @@ export interface DateRangePickerProps {
   maxDate?: Date;
 
   /**
+   * Allow selecting future dates
+   * When true, maxDate will not default to today
+   * @default false
+   */
+  allowFutureDates?: boolean;
+
+  /**
    * Timezone display text
    * @default "เวลามาตรฐานไทย (UTC+07:00)"
    */

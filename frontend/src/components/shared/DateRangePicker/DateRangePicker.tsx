@@ -167,6 +167,7 @@ export function DateRangePicker({
   onChange,
   minDate,
   maxDate,
+  allowFutureDates = false,
   timezone = 'เวลามาตรฐานไทย (UTC+07:00)',
   presets = DEFAULT_PRESETS,
   placeholder = 'เลือกช่วงเวลา',
@@ -415,7 +416,7 @@ export function DateRangePicker({
             value={draft}
             onChange={handleDateSelect}
             disabled={{
-              after: maxDate || getBangkokNow(),
+              after: allowFutureDates ? maxDate : (maxDate || getBangkokNow()),
               before: minDate,
             }}
           />
