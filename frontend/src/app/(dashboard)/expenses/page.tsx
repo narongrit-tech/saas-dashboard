@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Expense, ExpenseFilters, ExpenseCategory } from '@/types/expenses'
 import { endOfDayBangkok, formatBangkok } from '@/lib/bangkok-time'
+import { toZonedTime } from 'date-fns-tz'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { DateRangePicker, DateRangeResult } from '@/components/shared/DateRangePicker'
@@ -32,6 +33,24 @@ import { deleteExpense, exportExpenses } from '@/app/(dashboard)/expenses/action
 import { downloadExpenseTemplate } from '@/app/(dashboard)/expenses/template-actions'
 
 const PER_PAGE = 20
+
+/**
+ * Get default date range (today in Bangkok timezone)
+ */
+function getDefaultRange(): DateRangeResult {
+  // Get current date/time in Bangkok timezone
+  const now = toZonedTime(new Date(), 'Asia/Bangkok')
+
+  // Start of today (Bangkok)
+  const startOfDay = new Date(now)
+  startOfDay.setHours(0, 0, 0, 0)
+
+  return {
+    startDate: startOfDay,
+    endDate: now,
+    preset: 'today',
+  }
+}
 
 export default function ExpensesPage() {
   const [expenses, setExpenses] = useState<Expense[]>([])
@@ -359,9 +378,9 @@ export default function ExpensesPage() {
               filters.startDate && filters.endDate
                 ? {
                     startDate: new Date(filters.startDate),
-                    endDate: new Date(filters.endDate)
+                    endDate: new Date(filters.endDate),
                   }
-                : undefined
+                : getDefaultRange()
             }
             onChange={handleDateRangeChange}
           />
