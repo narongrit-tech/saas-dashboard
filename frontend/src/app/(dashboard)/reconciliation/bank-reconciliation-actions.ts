@@ -334,10 +334,10 @@ export async function getUnmatchedBankTransactions(
     const matchedIds = new Set(matched?.map((r) => r.bank_transaction_id) || []);
     const unmatched = bankTxns.filter((t) => !matchedIds.has(t.id));
 
-    const result: UnmatchedBankTransaction[] = unmatched.map((txn) => ({
+    const result = unmatched.map((txn) => ({
       ...txn,
       suggested_match: null,
-    }));
+    })) as UnmatchedBankTransaction[];
 
     return { success: true, data: result };
   } catch (error) {
@@ -770,6 +770,7 @@ export async function getSuggestedMatches(
       }
       let topups: WalletTopupMatch[] = [];
       let topupFrom = 0;
+      const pageSize = 1000;
       let hasMoreTopups = true;
 
       while (hasMoreTopups) {
