@@ -87,7 +87,7 @@ export async function getAffiliatePerformanceReport(
     }
 
     // Step 3: Get sales_orders data (for GMV calculation)
-    const orderIds = [...new Set(attributions.map(a => a.order_id))]
+    const orderIds = Array.from(new Set(attributions.map(a => a.order_id)))
 
     // Fetch in batches (max 200 per query to avoid PostgREST limits)
     const batchSize = 200
