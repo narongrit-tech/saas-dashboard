@@ -44,7 +44,7 @@ import {
   recordOpeningBalance,
   getReceiptLayers,
   updateOpeningBalanceLayer,
-  voidOpeningBalanceLayer,
+  voidOpeningBalanceWithReversal,
 } from '@/app/(dashboard)/inventory/actions'
 
 interface InventoryItem {
@@ -207,7 +207,10 @@ export function OpeningBalanceTab() {
     if (!deletingLayer) return
 
     setDeleteSaving(true)
-    const result = await voidOpeningBalanceLayer(deletingLayer.id)
+    const result = await voidOpeningBalanceWithReversal(
+      deletingLayer.id,
+      'Manual void from Opening Balance tab'
+    )
 
     if (result.success) {
       alert('ลบ Opening Balance สำเร็จ')
