@@ -434,7 +434,7 @@ export function AffiliateImportDialog({ open, onOpenChange, onSuccess }: Affilia
                 Back
               </Button>
               <Button
-                onClick={handleConfirmImport}
+                onClick={() => handleConfirmImport()}
                 disabled={!preview.success || preview.matchedCount === 0}
               >
                 {preview.matchedCount === 0
