@@ -15,9 +15,28 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { DateRangePicker, DateRangeResult } from '@/components/shared/DateRangePicker'
 import { formatBangkok, getBangkokNow, startOfDayBangkok } from '@/lib/bangkok-time'
+import { toZonedTime } from 'date-fns-tz'
 import { ArrowLeft, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { getSalesReconciliation } from '@/app/(dashboard)/sales/actions'
 import { parseBangkokDateStringToLocalDate } from '@/lib/bangkok-date-range'
+
+/**
+ * Get default date range (today in Bangkok timezone)
+ */
+function getDefaultRange(): DateRangeResult {
+  // Get current date/time in Bangkok timezone
+  const now = toZonedTime(new Date(), 'Asia/Bangkok')
+
+  // Start of today (Bangkok)
+  const startOfDay = new Date(now)
+  startOfDay.setHours(0, 0, 0, 0)
+
+  return {
+    startDate: startOfDay,
+    endDate: now,
+    preset: 'today',
+  }
+}
 
 export default function SalesReconciliationPage() {
   const router = useRouter()
@@ -125,9 +144,9 @@ export default function SalesReconciliationPage() {
                 startDate && endDate
                   ? {
                       startDate: parseBangkokDateStringToLocalDate(startDate),
-                      endDate: parseBangkokDateStringToLocalDate(endDate)
+                      endDate: parseBangkokDateStringToLocalDate(endDate),
                     }
-                  : undefined
+                  : getDefaultRange()
               }
               onChange={handleDateRangeChange}
             />
