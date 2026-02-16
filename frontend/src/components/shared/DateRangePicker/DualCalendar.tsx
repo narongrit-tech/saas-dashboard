@@ -11,8 +11,8 @@ export interface DualCalendarProps {
   value: DateRange | undefined;
   onChange: (range: DateRange | undefined) => void;
   disabled?: {
-    before?: Date;
-    after?: Date;
+    before?: Date | undefined;
+    after?: Date | undefined;
   };
   className?: string;
 }
@@ -26,6 +26,15 @@ export function DualCalendar({
   disabled,
   className,
 }: DualCalendarProps) {
+  // Filter out undefined values from disabled prop for react-day-picker
+  const disabledMatcher =
+    disabled && (disabled.before || disabled.after)
+      ? ({
+          ...(disabled.before && { before: disabled.before }),
+          ...(disabled.after && { after: disabled.after }),
+        } as { before?: Date; after?: Date })
+      : undefined;
+
   // Current month for left calendar
   const [leftMonth, setLeftMonth] = useState(() => {
     if (value?.from) {
@@ -145,7 +154,7 @@ export function DualCalendar({
         numberOfMonths={2}
         month={leftMonth}
         onMonthChange={setLeftMonth}
-        disabled={disabled}
+        disabled={disabledMatcher as any}
         className="rounded-md border"
       />
 
