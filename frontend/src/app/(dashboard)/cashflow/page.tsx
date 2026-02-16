@@ -74,9 +74,27 @@ function formatDateTime(dateStr: string | null): string {
   });
 }
 
+/**
+ * Get default date range (today in Bangkok timezone)
+ */
+function getDefaultRange(): DateRangeResult {
+  // Get current date/time in Bangkok timezone
+  const now = toZonedTime(new Date(), 'Asia/Bangkok');
+
+  // Start of today (Bangkok)
+  const startOfDay = new Date(now);
+  startOfDay.setHours(0, 0, 0, 0);
+
+  return {
+    startDate: startOfDay,
+    endDate: now,
+    preset: 'today',
+  };
+}
+
 export default function CashflowPageV3() {
   // Date range
-  const [dateRange, setDateRange] = useState<DateRangeResult | null>(null);
+  const [dateRange, setDateRange] = useState<DateRangeResult>(getDefaultRange());
 
   // Summary cards (fast)
   const [summary, setSummary] = useState<CashflowSummary | null>(null);
