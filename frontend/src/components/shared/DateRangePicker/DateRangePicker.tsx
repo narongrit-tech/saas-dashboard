@@ -178,7 +178,7 @@ export function DateRangePicker({
   }));
 
   // Draft state (temporary selection in popover)
-  const [draft, setDraft] = useState<DateRange>(() => ({
+  const [draft, setDraft] = useState<DateRange | undefined>(() => ({
     from: value?.startDate || getBangkokNow(),
     to: value?.endDate || getBangkokNow(),
   }));
