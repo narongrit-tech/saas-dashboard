@@ -224,7 +224,7 @@ export default function AffiliateReportPage() {
                     <Cell key={`cell-${index}`} fill={DONUT_COLORS[index % DONUT_COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip formatter={(value: number) => `฿${formatCurrency(value)}`} />
+                <Tooltip formatter={(value: number | undefined) => value != null ? `฿${formatCurrency(value)}` : '฿0.00'} />
                 <Legend />
               </PieChart>
             </ResponsiveContainer>
@@ -245,7 +245,7 @@ export default function AffiliateReportPage() {
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis type="number" />
                 <YAxis dataKey="name" type="category" width={150} />
-                <Tooltip formatter={(value: number) => `฿${formatCurrency(value)}`} />
+                <Tooltip formatter={(value: number | undefined) => value != null ? `฿${formatCurrency(value)}` : '฿0.00'} />
                 <Legend />
                 <Bar dataKey="organic" stackId="a" fill="#3b82f6" name="Organic" />
                 <Bar dataKey="ads" stackId="a" fill="#10b981" name="Ads" />
