@@ -12,10 +12,14 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Package } from 'lucide-react'
 import { formatBangkok } from '@/lib/bangkok-time'
+import { getTodayBangkokString, getFirstDayOfMonthBangkokString } from '@/lib/bangkok-date-range'
 import { getReceiptLayers, getCOGSAllocations, checkIsInventoryAdmin } from '@/app/(dashboard)/inventory/actions'
 import { ApplyCOGSMTDModal } from '@/components/inventory/ApplyCOGSMTDModal'
+import { COGSCoveragePanel } from '@/components/inventory/COGSCoveragePanel'
 
 interface ReceiptLayer {
   id: string
@@ -45,6 +49,10 @@ export function MovementsTab() {
   const [loading, setLoading] = useState(true)
   const [isAdmin, setIsAdmin] = useState(false)
   const [showCOGSMTDModal, setShowCOGSMTDModal] = useState(false)
+
+  // Date filter for Coverage Panel (default to MTD)
+  const [startDate, setStartDate] = useState(getFirstDayOfMonthBangkokString())
+  const [endDate, setEndDate] = useState(getTodayBangkokString())
 
   useEffect(() => {
     loadData()
@@ -80,11 +88,39 @@ export function MovementsTab() {
         ดูรายการ Receipt Layers (FIFO) และ COGS Allocations (Audit View)
       </p>
 
-      <Tabs defaultValue="layers" className="space-y-4">
+      <Tabs defaultValue="coverage" className="space-y-4">
         <TabsList>
+          <TabsTrigger value="coverage">Coverage Check</TabsTrigger>
           <TabsTrigger value="layers">Receipt Layers</TabsTrigger>
           <TabsTrigger value="allocations">COGS Allocations</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="coverage" className="space-y-4">
+          {/* Date Range Filter */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 border rounded-md bg-muted/30">
+            <div>
+              <Label htmlFor="startDate">Start Date (shipped_at)</Label>
+              <Input
+                id="startDate"
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <Label htmlFor="endDate">End Date (shipped_at)</Label>
+              <Input
+                id="endDate"
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Coverage Panel */}
+          <COGSCoveragePanel startDate={startDate} endDate={endDate} />
+        </TabsContent>
 
         <TabsContent value="layers">
           {loading ? (

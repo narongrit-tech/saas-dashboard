@@ -1412,3 +1412,299 @@ export async function createStockInForSku(params: {
     }
   }
 }
+
+// ============================================
+// COGS Coverage Checker (Allocation Audit)
+// ============================================
+
+export interface COGSCoverageStats {
+  expected_lines: number
+  expected_qty: number
+  allocated_lines: number
+  allocated_qty: number
+  missing_lines: number
+  coverage_percent: number
+  duplicate_count: number
+}
+
+export interface MissingAllocation {
+  order_id: string
+  seller_sku: string
+  quantity: number
+  shipped_at: string
+  status_group: string | null
+}
+
+/**
+ * Get COGS coverage statistics for a date range
+ * Compares expected allocations (from sales_orders) vs actual allocations
+ *
+ * @param startDate - Start date (YYYY-MM-DD)
+ * @param endDate - End date (YYYY-MM-DD)
+ * @returns Coverage statistics
+ */
+export async function getCOGSCoverageStats(
+  startDate: string,
+  endDate: string
+): Promise<{ success: boolean; error?: string; data: COGSCoverageStats | null }> {
+  try {
+    const supabase = createClient()
+
+    // Verify authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้', data: null }
+    }
+
+    // ============================================
+    // 1. Get expected lines (from sales_orders)
+    // ============================================
+    const { data: expectedOrders, error: expectedError } = await supabase
+      .from('sales_orders')
+      .select('order_id, seller_sku, quantity')
+      .not('shipped_at', 'is', null)
+      .neq('status_group', 'ยกเลิกแล้ว')
+      .gte('shipped_at', `${startDate}T00:00:00+07:00`)
+      .lte('shipped_at', `${endDate}T23:59:59+07:00`)
+
+    if (expectedError) {
+      console.error('Error fetching expected orders:', expectedError)
+      return { success: false, error: expectedError.message, data: null }
+    }
+
+    const expected_lines = expectedOrders?.length || 0
+    const expected_qty = expectedOrders?.reduce((sum, o) => sum + (o.quantity || 0), 0) || 0
+
+    // ============================================
+    // 2. Get allocated lines (from inventory_cogs_allocations)
+    // ============================================
+    const { data: allocations, error: allocationsError } = await supabase
+      .from('inventory_cogs_allocations')
+      .select('order_id, sku_internal, qty')
+      .eq('is_reversal', false)
+      .gte('shipped_at', `${startDate}T00:00:00+07:00`)
+      .lte('shipped_at', `${endDate}T23:59:59+07:00`)
+
+    if (allocationsError) {
+      console.error('Error fetching allocations:', allocationsError)
+      return { success: false, error: allocationsError.message, data: null }
+    }
+
+    // Count unique (order_id, sku) pairs
+    const allocatedPairs = new Set<string>()
+    let allocated_qty = 0
+
+    if (allocations && allocations.length > 0) {
+      for (const alloc of allocations) {
+        const pairKey = `${alloc.order_id}|${alloc.sku_internal}`
+        allocatedPairs.add(pairKey)
+        allocated_qty += alloc.qty || 0
+      }
+    }
+
+    const allocated_lines = allocatedPairs.size
+
+    // ============================================
+    // 3. Calculate missing lines
+    // ============================================
+    const missing_lines = expected_lines - allocated_lines
+
+    // ============================================
+    // 4. Calculate coverage percentage
+    // ============================================
+    const coverage_percent = expected_lines > 0 ? (allocated_lines / expected_lines) * 100 : 100
+
+    // ============================================
+    // 5. Count duplicates (order_id, sku pairs with > 1 allocation)
+    // ============================================
+    const pairCounts = new Map<string, number>()
+
+    if (allocations && allocations.length > 0) {
+      for (const alloc of allocations) {
+        const pairKey = `${alloc.order_id}|${alloc.sku_internal}`
+        pairCounts.set(pairKey, (pairCounts.get(pairKey) || 0) + 1)
+      }
+    }
+
+    let duplicate_count = 0
+    for (const count of Array.from(pairCounts.values())) {
+      if (count > 1) {
+        duplicate_count++
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        expected_lines,
+        expected_qty,
+        allocated_lines,
+        allocated_qty,
+        missing_lines,
+        coverage_percent,
+        duplicate_count,
+      },
+    }
+  } catch (error) {
+    console.error('Unexpected error in getCOGSCoverageStats:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+      data: null,
+    }
+  }
+}
+
+/**
+ * Get list of missing COGS allocations
+ * Returns orders that should have allocations but don't
+ *
+ * @param startDate - Start date (YYYY-MM-DD)
+ * @param endDate - End date (YYYY-MM-DD)
+ * @returns List of missing allocation records
+ */
+export async function getMissingAllocations(
+  startDate: string,
+  endDate: string
+): Promise<{ success: boolean; error?: string; data: MissingAllocation[] }> {
+  try {
+    const supabase = createClient()
+
+    // Verify authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้', data: [] }
+    }
+
+    // ============================================
+    // 1. Get expected orders
+    // ============================================
+    const { data: expectedOrders, error: expectedError } = await supabase
+      .from('sales_orders')
+      .select('order_id, seller_sku, quantity, shipped_at, status_group')
+      .not('shipped_at', 'is', null)
+      .neq('status_group', 'ยกเลิกแล้ว')
+      .gte('shipped_at', `${startDate}T00:00:00+07:00`)
+      .lte('shipped_at', `${endDate}T23:59:59+07:00`)
+      .order('shipped_at', { ascending: false })
+
+    if (expectedError) {
+      console.error('Error fetching expected orders:', expectedError)
+      return { success: false, error: expectedError.message, data: [] }
+    }
+
+    if (!expectedOrders || expectedOrders.length === 0) {
+      return { success: true, data: [] }
+    }
+
+    // ============================================
+    // 2. Get allocated pairs
+    // ============================================
+    const { data: allocations, error: allocationsError } = await supabase
+      .from('inventory_cogs_allocations')
+      .select('order_id, sku_internal')
+      .eq('is_reversal', false)
+      .gte('shipped_at', `${startDate}T00:00:00+07:00`)
+      .lte('shipped_at', `${endDate}T23:59:59+07:00`)
+
+    if (allocationsError) {
+      console.error('Error fetching allocations:', allocationsError)
+      return { success: false, error: allocationsError.message, data: [] }
+    }
+
+    const allocatedPairs = new Set<string>()
+
+    if (allocations && allocations.length > 0) {
+      for (const alloc of allocations) {
+        const pairKey = `${alloc.order_id}|${alloc.sku_internal}`
+        allocatedPairs.add(pairKey)
+      }
+    }
+
+    // ============================================
+    // 3. Find missing allocations
+    // ============================================
+    const missingAllocations: MissingAllocation[] = []
+
+    for (const order of expectedOrders) {
+      const pairKey = `${order.order_id}|${order.seller_sku}`
+
+      if (!allocatedPairs.has(pairKey)) {
+        missingAllocations.push({
+          order_id: order.order_id,
+          seller_sku: order.seller_sku,
+          quantity: order.quantity,
+          shipped_at: order.shipped_at,
+          status_group: order.status_group,
+        })
+      }
+    }
+
+    return { success: true, data: missingAllocations }
+  } catch (error) {
+    console.error('Unexpected error in getMissingAllocations:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+      data: [],
+    }
+  }
+}
+
+/**
+ * Export missing allocations to CSV (server-side)
+ *
+ * @param startDate - Start date (YYYY-MM-DD)
+ * @param endDate - End date (YYYY-MM-DD)
+ * @returns CSV file content
+ */
+export async function exportMissingAllocationsCSV(
+  startDate: string,
+  endDate: string
+): Promise<{ success: boolean; error?: string; csv?: string; filename?: string }> {
+  try {
+    // Get missing allocations
+    const result = await getMissingAllocations(startDate, endDate)
+
+    if (!result.success) {
+      return { success: false, error: result.error }
+    }
+
+    const data = result.data
+
+    // Build CSV
+    const headers = ['order_id', 'sku', 'qty', 'shipped_at', 'order_status']
+    const rows = data.map((row) => [
+      row.order_id,
+      row.seller_sku,
+      row.quantity.toString(),
+      row.shipped_at,
+      row.status_group || '',
+    ])
+
+    // Format CSV
+    const csvLines = [
+      headers.join(','),
+      ...rows.map((row) => row.map((cell) => `"${cell}"`).join(',')),
+    ]
+
+    const csv = csvLines.join('\n')
+    const filename = `missing-cogs-allocations-${startDate}-to-${endDate}.csv`
+
+    return { success: true, csv, filename }
+  } catch (error) {
+    console.error('Unexpected error in exportMissingAllocationsCSV:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
