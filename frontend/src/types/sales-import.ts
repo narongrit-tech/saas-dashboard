@@ -193,6 +193,9 @@ export interface ParsedSalesRow {
   paid_time?: string | null // When payment confirmed (Paid Time)
   cancelled_time?: string | null // When order cancelled (Cancelled Time)
 
+  // Returns support
+  tracking_number?: string | null // Shipping tracking number (for barcode search in Returns)
+
   // Order-level fields (TikTok OrderSKUList - duplicated across SKU rows)
   order_amount?: number | null // Order Amount (order-level total, use for GMV)
   shipping_fee_after_discount?: number | null // Shipping Fee After Discount

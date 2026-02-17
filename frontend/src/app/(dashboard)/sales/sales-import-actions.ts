@@ -509,6 +509,9 @@ async function parseTikTokFormat(
         created_time: createdTime ? toBangkokDatetime(createdTime) : null,
         paid_time: paidTime ? toBangkokDatetime(paidTime) : null,
         cancelled_time: cancelledTime ? toBangkokDatetime(cancelledTime) : null,
+
+        // Tracking number (for Returns search)
+        tracking_number: getCellValue(row, 'Tracking ID') ? String(getCellValue(row, 'Tracking ID')).trim() : null,
       })
 
       uniqueOrderIds.add(String(orderId).trim())
@@ -1032,6 +1035,9 @@ export async function importSalesChunk(
         created_time: row.created_time,
         paid_time: row.paid_time,
         cancelled_time: row.cancelled_time,
+
+        // Tracking number (for Returns search)
+        tracking_number: row.tracking_number,
       }
     })
 

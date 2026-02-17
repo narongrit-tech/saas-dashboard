@@ -350,6 +350,9 @@ export async function parseTikTokFile(
           created_time: createdTime ? toBangkokDatetime(createdTime) || undefined : undefined,
           paid_time: paidTime ? toBangkokDatetime(paidTime) || undefined : undefined,
           cancelled_time: cancelledTime ? toBangkokDatetime(cancelledTime) || undefined : undefined,
+
+          // Tracking number (for Returns search)
+          tracking_number: row['Tracking ID'] ? String(row['Tracking ID']).trim() : undefined,
         })
 
         uniqueOrderIds.add(String(orderId).trim())
