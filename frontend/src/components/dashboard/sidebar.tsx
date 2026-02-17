@@ -22,6 +22,7 @@ import {
   FileBarChart,
   ChevronDown,
   ChevronRight,
+  ArrowLeftCircle,
 } from 'lucide-react'
 
 interface MenuItem {
@@ -113,6 +114,11 @@ const menuGroups: MenuGroup[] = [
         title: 'Expenses',
         href: '/expenses',
         icon: Receipt,
+      },
+      {
+        title: 'Returns',
+        href: '/returns',
+        icon: ArrowLeftCircle,
       },
       {
         title: 'Inventory',
