@@ -1,5 +1,6 @@
 'use client'
 
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
@@ -19,88 +20,150 @@ import {
   Scale,
   Users,
   FileBarChart,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react'
 
-const menuItems = [
+interface MenuItem {
+  title: string
+  href: string
+  icon: any
+}
+
+interface MenuGroup {
+  title: string
+  items: MenuItem[]
+  defaultExpanded: boolean
+}
+
+const menuGroups: MenuGroup[] = [
   {
-    title: 'Dashboard',
-    href: '/',
-    icon: LayoutDashboard,
+    title: 'Overview',
+    defaultExpanded: true,
+    items: [
+      {
+        title: 'Dashboard',
+        href: '/',
+        icon: LayoutDashboard,
+      },
+      {
+        title: 'Daily P&L',
+        href: '/daily-pl',
+        icon: BarChart3,
+      },
+    ],
   },
   {
-    title: 'Sales Orders',
-    href: '/sales',
-    icon: ShoppingCart,
+    title: 'Sales',
+    defaultExpanded: true,
+    items: [
+      {
+        title: 'Sales Orders',
+        href: '/sales',
+        icon: ShoppingCart,
+      },
+      {
+        title: 'Affiliates',
+        href: '/affiliates',
+        icon: Users,
+      },
+      {
+        title: 'Affiliate Report',
+        href: '/reports/affiliate',
+        icon: FileBarChart,
+      },
+    ],
   },
   {
-    title: 'Expenses',
-    href: '/expenses',
-    icon: Receipt,
+    title: 'Money',
+    defaultExpanded: true,
+    items: [
+      {
+        title: 'Marketplace Wallets',
+        href: '/cashflow',
+        icon: Wallet,
+      },
+      {
+        title: 'Company Cashflow',
+        href: '/company-cashflow',
+        icon: Coins,
+      },
+      {
+        title: 'Bank',
+        href: '/bank',
+        icon: Landmark,
+      },
+      {
+        title: 'Bank Reconciliation',
+        href: '/bank-reconciliation',
+        icon: Scale,
+      },
+      {
+        title: 'P&L Reconciliation',
+        href: '/reconciliation',
+        icon: GitCompare,
+      },
+    ],
   },
   {
-    title: 'Daily P&L',
-    href: '/daily-pl',
-    icon: BarChart3,
-  },
-  {
-    title: 'Company Cashflow',
-    href: '/company-cashflow',
-    icon: Coins,
-  },
-  {
-    title: 'Bank',
-    href: '/bank',
-    icon: Landmark,
-  },
-  {
-    title: 'Bank Reconciliation',
-    href: '/bank-reconciliation',
-    icon: Scale,
-  },
-  {
-    title: 'P&L Reconciliation',
-    href: '/reconciliation',
-    icon: GitCompare,
-  },
-  {
-    title: 'Marketplace Wallets',
-    href: '/cashflow',
-    icon: Wallet,
-  },
-  {
-    title: 'Ads',
-    href: '/ads',
-    icon: TrendingUp,
-  },
-  {
-    title: 'Inventory',
-    href: '/inventory',
-    icon: Package,
-  },
-  {
-    title: 'Payables',
-    href: '/payables',
-    icon: CreditCard,
-  },
-  {
-    title: 'Affiliates',
-    href: '/affiliates',
-    icon: Users,
-  },
-  {
-    title: 'Affiliate Report',
-    href: '/reports/affiliate',
-    icon: FileBarChart,
+    title: 'Operations',
+    defaultExpanded: false,
+    items: [
+      {
+        title: 'Expenses',
+        href: '/expenses',
+        icon: Receipt,
+      },
+      {
+        title: 'Inventory',
+        href: '/inventory',
+        icon: Package,
+      },
+      {
+        title: 'Payables',
+        href: '/payables',
+        icon: CreditCard,
+      },
+    ],
   },
   {
     title: 'Settings',
-    href: '/settings',
-    icon: Settings,
+    defaultExpanded: false,
+    items: [
+      {
+        title: 'Settings',
+        href: '/settings',
+        icon: Settings,
+      },
+    ],
   },
 ]
 
 export function Sidebar() {
   const pathname = usePathname()
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
+
+  // Initialize expanded state and auto-expand group with active route
+  useEffect(() => {
+    const initialExpanded: Record<string, boolean> = {}
+
+    menuGroups.forEach((group) => {
+      // Check if this group contains the active route
+      const hasActiveRoute = group.items.some((item) => pathname === item.href)
+
+      // Expand if: default expanded OR contains active route
+      initialExpanded[group.title] = group.defaultExpanded || hasActiveRoute
+    })
+
+    setExpandedGroups(initialExpanded)
+  }, [pathname])
+
+  function toggleGroup(groupTitle: string) {
+    setExpandedGroups((prev) => ({
+      ...prev,
+      [groupTitle]: !prev[groupTitle],
+    }))
+  }
 
   return (
     <div className="flex h-full w-64 flex-col border-r bg-white">
@@ -125,25 +188,57 @@ export function Sidebar() {
         </div>
       </div>
 
-      <nav className="flex-1 space-y-1 p-4">
-        {menuItems.map((item) => {
-          const isActive = pathname === item.href
-          const Icon = item.icon
+      <nav className="flex-1 space-y-1 p-4 overflow-y-auto">
+        {menuGroups.map((group) => {
+          const isExpanded = expandedGroups[group.title]
+          const hasActiveRoute = group.items.some((item) => pathname === item.href)
 
           return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                isActive
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+            <div key={group.title} className="space-y-1">
+              {/* Group Header */}
+              <button
+                onClick={() => toggleGroup(group.title)}
+                className={cn(
+                  'flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                  hasActiveRoute
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                )}
+              >
+                <span>{group.title}</span>
+                {isExpanded ? (
+                  <ChevronDown className="h-4 w-4" />
+                ) : (
+                  <ChevronRight className="h-4 w-4" />
+                )}
+              </button>
+
+              {/* Group Items */}
+              {isExpanded && (
+                <div className="ml-2 space-y-1">
+                  {group.items.map((item) => {
+                    const isActive = pathname === item.href
+                    const Icon = item.icon
+
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        className={cn(
+                          'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                          isActive
+                            ? 'bg-primary text-primary-foreground'
+                            : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                        )}
+                      >
+                        <Icon className="h-4 w-4" />
+                        {item.title}
+                      </Link>
+                    )
+                  })}
+                </div>
               )}
-            >
-              <Icon className="h-5 w-5" />
-              {item.title}
-            </Link>
+            </div>
           )
         })}
       </nav>
