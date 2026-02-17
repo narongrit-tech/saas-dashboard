@@ -3,7 +3,7 @@
  * For Multi-Wallet Foundation (Phase 3)
  */
 
-export type WalletType = 'ADS' | 'SUBSCRIPTION' | 'OTHER'
+export type WalletType = 'ADS' | 'SUBSCRIPTION' | 'OTHER' | 'DIRECTOR_LOAN'
 
 export type LedgerEntryType = 'TOP_UP' | 'SPEND' | 'REFUND' | 'ADJUSTMENT'
 

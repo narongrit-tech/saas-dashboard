@@ -85,6 +85,16 @@ const menuGroups: MenuGroup[] = [
         icon: Wallet,
       },
       {
+        title: 'Wallets',
+        href: '/wallets',
+        icon: CreditCard,
+      },
+      {
+        title: 'CEO Commission',
+        href: '/ceo-commission',
+        icon: TrendingUp,
+      },
+      {
         title: 'Company Cashflow',
         href: '/company-cashflow',
         icon: Coins,

@@ -151,7 +151,9 @@ export async function getCompanyCashflow(
         }
       }
 
-      // Fetch Cash Out from Wallet TOP_UP (cash transfer from company to wallet)
+      // Fetch Wallet TOP_UP entries (with wallet type to determine cash flow direction)
+      // - DIRECTOR_LOAN TOP_UP = Cash IN (CEO transfers money to company)
+      // - Other wallet TOP_UP = Cash OUT (company funds wallets)
       let topupData: any[] = [];
       from = 0;
       hasMore = true;
@@ -159,9 +161,9 @@ export async function getCompanyCashflow(
       while (hasMore) {
         const { data, error } = await supabase
           .from('wallet_ledger')
-          .select('date, amount')
+          .select('date, amount, wallets!inner(wallet_type)')
           .eq('entry_type', 'TOP_UP')
-          .eq('direction', 'IN') // IN to wallet = OUT from company
+          .eq('direction', 'IN')
           .gte('date', startDateStr)
           .lte('date', endDateStr)
           .order('date', { ascending: true })
@@ -198,14 +200,25 @@ export async function getCompanyCashflow(
         })
       })
 
-      // Process Cash Out - Wallet Top-ups
+      // Process Wallet Top-ups (context-aware based on wallet type)
       topupData?.forEach((row) => {
         const date = formatBangkok(row.date, 'yyyy-MM-dd')
         const existing = dailyMap.get(date) || { cash_in: 0, cash_out: 0 }
-        dailyMap.set(date, {
-          ...existing,
-          cash_out: existing.cash_out + (row.amount || 0),
-        })
+        const walletType = row.wallets?.wallet_type
+
+        // Director Loan TOP_UP = Cash IN to company (CEO transfers money)
+        // Other wallets TOP_UP = Cash OUT from company (company funds wallets)
+        if (walletType === 'DIRECTOR_LOAN') {
+          dailyMap.set(date, {
+            ...existing,
+            cash_in: existing.cash_in + (row.amount || 0),
+          })
+        } else {
+          dailyMap.set(date, {
+            ...existing,
+            cash_out: existing.cash_out + (row.amount || 0),
+          })
+        }
       })
     }
 
