@@ -287,6 +287,268 @@ interface ExportResult {
   filename?: string
 }
 
+// Bulk selection types
+export type SelectionMode = 'ids' | 'filtered'
+
+export interface BulkSelectionFilters {
+  category?: string
+  startDate?: string
+  endDate?: string
+  search?: string
+}
+
+export interface SelectionSummary {
+  success: boolean
+  error?: string
+  count?: number
+  sumAmount?: number
+  deletableCount?: number
+  blockedCount?: number
+  blockedReason?: string
+}
+
+export interface BulkDeleteResult {
+  success: boolean
+  error?: string
+  deletedCount?: number
+  blockedCount?: number
+}
+
+/**
+ * Get summary of selected expenses
+ * Mode 'ids': counts specific expense IDs
+ * Mode 'filtered': counts all matching filter criteria
+ * Returns count, sum, and deletable/blocked counts
+ */
+export async function getExpensesSelectionSummary(
+  mode: SelectionMode,
+  filters?: BulkSelectionFilters,
+  ids?: string[]
+): Promise<SelectionSummary> {
+  try {
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+    }
+
+    let query = supabase.from('expenses').select('id, amount, source, created_by')
+
+    // Mode: specific IDs
+    if (mode === 'ids') {
+      if (!ids || ids.length === 0) {
+        return {
+          success: true,
+          count: 0,
+          sumAmount: 0,
+          deletableCount: 0,
+          blockedCount: 0,
+        }
+      }
+      query = query.in('id', ids)
+    }
+
+    // Mode: filtered
+    if (mode === 'filtered' && filters) {
+      if (filters.category && filters.category !== 'All') {
+        query = query.eq('category', filters.category)
+      }
+
+      if (filters.startDate) {
+        query = query.gte('expense_date', filters.startDate)
+      }
+
+      if (filters.endDate) {
+        const { toZonedTime } = await import('date-fns-tz')
+        const { endOfDay } = await import('date-fns')
+        const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
+        const endOfDayBangkok = endOfDay(bangkokDate)
+        query = query.lte('expense_date', endOfDayBangkok.toISOString())
+      }
+
+      if (filters.search && filters.search.trim()) {
+        query = query.or(
+          `description.ilike.%${filters.search}%,notes.ilike.%${filters.search}%`
+        )
+      }
+    }
+
+    const { data, error } = await query
+
+    if (error) {
+      console.error('Error fetching selection summary:', error)
+      return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+    }
+
+    if (!data || data.length === 0) {
+      return {
+        success: true,
+        count: 0,
+        sumAmount: 0,
+        deletableCount: 0,
+        blockedCount: 0,
+      }
+    }
+
+    // Filter: user can only delete their own expenses (RLS enforcement)
+    const ownExpenses = data.filter((e) => e.created_by === user.id)
+
+    // Calculate summary
+    const count = ownExpenses.length
+    const sumAmount = ownExpenses.reduce((sum, e) => sum + e.amount, 0)
+    const blockedCount = data.length - ownExpenses.length
+
+    return {
+      success: true,
+      count,
+      sumAmount: Math.round(sumAmount * 100) / 100, // Round to 2 decimals
+      deletableCount: count,
+      blockedCount,
+      blockedReason: blockedCount > 0
+        ? 'บางรายการไม่สามารถลบได้เนื่องจากไม่ใช่รายการของคุณ'
+        : undefined,
+    }
+  } catch (error) {
+    console.error('Unexpected error in getExpensesSelectionSummary:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
+
+/**
+ * Delete selected expenses in bulk
+ * Mode 'ids': deletes specific expense IDs
+ * Mode 'filtered': deletes all matching filter criteria
+ * Creates audit logs for all deleted expenses
+ * Respects RLS: only deletes user's own expenses
+ */
+export async function deleteExpensesSelected(
+  mode: SelectionMode,
+  filters?: BulkSelectionFilters,
+  ids?: string[]
+): Promise<BulkDeleteResult> {
+  try {
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+    }
+
+    // Step 1: Fetch expenses to delete (with full data for audit logs)
+    let query = supabase
+      .from('expenses')
+      .select('*')
+      .eq('created_by', user.id) // RLS: Only user's own expenses
+
+    // Mode: specific IDs
+    if (mode === 'ids') {
+      if (!ids || ids.length === 0) {
+        return {
+          success: true,
+          deletedCount: 0,
+          blockedCount: 0,
+        }
+      }
+      query = query.in('id', ids)
+    }
+
+    // Mode: filtered
+    if (mode === 'filtered' && filters) {
+      if (filters.category && filters.category !== 'All') {
+        query = query.eq('category', filters.category)
+      }
+
+      if (filters.startDate) {
+        query = query.gte('expense_date', filters.startDate)
+      }
+
+      if (filters.endDate) {
+        const { toZonedTime } = await import('date-fns-tz')
+        const { endOfDay } = await import('date-fns')
+        const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
+        const endOfDayBangkok = endOfDay(bangkokDate)
+        query = query.lte('expense_date', endOfDayBangkok.toISOString())
+      }
+
+      if (filters.search && filters.search.trim()) {
+        query = query.or(
+          `description.ilike.%${filters.search}%,notes.ilike.%${filters.search}%`
+        )
+      }
+    }
+
+    const { data: expensesToDelete, error: fetchError } = await query
+
+    if (fetchError) {
+      console.error('Error fetching expenses to delete:', fetchError)
+      return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+    }
+
+    if (!expensesToDelete || expensesToDelete.length === 0) {
+      return {
+        success: true,
+        deletedCount: 0,
+        blockedCount: 0,
+      }
+    }
+
+    // Step 2: Create audit logs for all expenses (BEFORE deletion)
+    const auditPromises = expensesToDelete.map((expense) =>
+      supabase.rpc('create_expense_audit_log', {
+        p_expense_id: expense.id,
+        p_action: 'DELETE',
+        p_performed_by: user.id,
+        p_changes: {
+          deleted: {
+            category: expense.category,
+            subcategory: expense.subcategory || null,
+            amount: expense.amount,
+            expense_date: expense.expense_date,
+            description: expense.description,
+          },
+        },
+      })
+    )
+
+    await Promise.all(auditPromises)
+
+    // Step 3: Bulk delete expenses (single query)
+    const expenseIds = expensesToDelete.map((e) => e.id)
+    const { error: deleteError } = await supabase
+      .from('expenses')
+      .delete()
+      .in('id', expenseIds)
+      .eq('created_by', user.id) // Double-check RLS
+
+    if (deleteError) {
+      console.error('Error deleting expenses:', deleteError)
+      return { success: false, error: `เกิดข้อผิดพลาด: ${deleteError.message}` }
+    }
+
+    return {
+      success: true,
+      deletedCount: expensesToDelete.length,
+      blockedCount: 0,
+    }
+  } catch (error) {
+    console.error('Unexpected error in deleteExpensesSelected:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
+
 /**
  * Export Expenses to CSV
  * Respects all filters (category, date range, search)

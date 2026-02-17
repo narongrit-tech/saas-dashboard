@@ -7,6 +7,7 @@ import { endOfDayBangkok, formatBangkok } from '@/lib/bangkok-time'
 import { toZonedTime } from 'date-fns-tz'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Checkbox } from '@/components/ui/checkbox'
 import { DateRangePicker, DateRangeResult } from '@/components/shared/DateRangePicker'
 import {
   Select,
@@ -24,12 +25,19 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Download, FileUp, FileDown } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Download, FileUp, FileDown, X } from 'lucide-react'
 import { AddExpenseDialog } from '@/components/expenses/AddExpenseDialog'
 import { EditExpenseDialog } from '@/components/expenses/EditExpenseDialog'
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
+import { BulkDeleteConfirmDialog } from '@/components/expenses/BulkDeleteConfirmDialog'
 import { ExpensesImportDialog } from '@/components/expenses/ExpensesImportDialog'
-import { deleteExpense, exportExpenses } from '@/app/(dashboard)/expenses/actions'
+import {
+  deleteExpense,
+  exportExpenses,
+  getExpensesSelectionSummary,
+  deleteExpensesSelected,
+  SelectionMode,
+} from '@/app/(dashboard)/expenses/actions'
 import { downloadExpenseTemplate } from '@/app/(dashboard)/expenses/template-actions'
 
 const PER_PAGE = 20
@@ -65,6 +73,19 @@ export default function ExpensesPage() {
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
   const [downloadTemplateLoading, setDownloadTemplateLoading] = useState(false)
+
+  // Bulk selection state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [selectionMode, setSelectionMode] = useState<SelectionMode>('ids')
+  const [showSelectAllBanner, setShowSelectAllBanner] = useState(false)
+  const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false)
+  const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false)
+  const [selectionSummary, setSelectionSummary] = useState<{
+    count: number
+    amount: number
+    blockedCount: number
+    blockedReason?: string
+  } | null>(null)
 
   const [filters, setFilters] = useState<ExpenseFilters>({
     category: undefined,
@@ -320,6 +341,123 @@ export default function ExpensesPage() {
     }
   }
 
+  // Bulk selection handlers
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      const newSelectedIds = new Set(displayedExpenses.map((e) => e.id))
+      setSelectedIds(newSelectedIds)
+      setShowSelectAllBanner(displayedExpenses.length < totalCount)
+      setSelectionMode('ids')
+    } else {
+      setSelectedIds(new Set())
+      setShowSelectAllBanner(false)
+      setSelectionMode('ids')
+    }
+  }
+
+  const handleSelectRow = (expenseId: string, checked: boolean) => {
+    const newSelectedIds = new Set(selectedIds)
+    if (checked) {
+      newSelectedIds.add(expenseId)
+    } else {
+      newSelectedIds.delete(expenseId)
+    }
+    setSelectedIds(newSelectedIds)
+
+    // Hide banner if user manually unchecks
+    if (!checked && selectionMode === 'filtered') {
+      setShowSelectAllBanner(true)
+      setSelectionMode('ids')
+    }
+  }
+
+  const handleSelectAllMatching = () => {
+    setSelectionMode('filtered')
+    setShowSelectAllBanner(false)
+  }
+
+  const handleClearSelection = () => {
+    setSelectedIds(new Set())
+    setSelectionMode('ids')
+    setShowSelectAllBanner(false)
+    setSelectionSummary(null)
+  }
+
+  const handleBulkDeleteClick = async () => {
+    setError(null)
+
+    // Get summary before showing dialog
+    const result = await getExpensesSelectionSummary(
+      selectionMode,
+      selectionMode === 'filtered'
+        ? {
+            category: filters.category,
+            startDate: filters.startDate,
+            endDate: filters.endDate,
+            search: filters.search,
+          }
+        : undefined,
+      selectionMode === 'ids' ? Array.from(selectedIds) : undefined
+    )
+
+    if (!result.success) {
+      setError(result.error || 'เกิดข้อผิดพลาดในการดึงข้อมูล')
+      return
+    }
+
+    setSelectionSummary({
+      count: result.deletableCount || 0,
+      amount: result.sumAmount || 0,
+      blockedCount: result.blockedCount || 0,
+      blockedReason: result.blockedReason,
+    })
+
+    setShowBulkDeleteDialog(true)
+  }
+
+  const handleBulkDeleteConfirm = async () => {
+    setBulkDeleteLoading(true)
+    setError(null)
+
+    try {
+      const result = await deleteExpensesSelected(
+        selectionMode,
+        selectionMode === 'filtered'
+          ? {
+              category: filters.category,
+              startDate: filters.startDate,
+              endDate: filters.endDate,
+              search: filters.search,
+            }
+          : undefined,
+        selectionMode === 'ids' ? Array.from(selectedIds) : undefined
+      )
+
+      if (!result.success) {
+        setError(result.error || 'เกิดข้อผิดพลาดในการลบข้อมูล')
+        setShowBulkDeleteDialog(false)
+        return
+      }
+
+      // Success - close dialog, clear selection, refresh
+      setShowBulkDeleteDialog(false)
+      handleClearSelection()
+      fetchExpenses()
+    } catch (err) {
+      console.error('Error bulk deleting expenses:', err)
+      setError('เกิดข้อผิดพลาดในการลบข้อมูล')
+      setShowBulkDeleteDialog(false)
+    } finally {
+      setBulkDeleteLoading(false)
+    }
+  }
+
+  const isAllPageSelected =
+    displayedExpenses.length > 0 &&
+    displayedExpenses.every((e) => selectedIds.has(e.id))
+
+  const hasSelection = selectedIds.size > 0 || selectionMode === 'filtered'
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -431,11 +569,76 @@ export default function ExpensesPage() {
         </div>
       )}
 
+      {/* Selection Banner */}
+      {showSelectAllBanner && (
+        <div className="rounded-md bg-blue-50 border border-blue-200 p-4 flex items-center justify-between">
+          <div>
+            <span className="text-sm text-blue-900">
+              เลือกแล้ว {selectedIds.size} รายการในหน้านี้.{' '}
+              <button
+                onClick={handleSelectAllMatching}
+                className="font-medium text-blue-600 hover:text-blue-700 underline"
+              >
+                เลือกทั้งหมด {totalCount} รายการที่ตรงกับเงื่อนไขปัจจุบัน
+              </button>
+            </span>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleClearSelection}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
+
+      {/* Bulk Actions Bar */}
+      {hasSelection && (
+        <div className="rounded-md bg-slate-100 border border-slate-200 p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <span className="text-sm font-medium">
+                {selectionMode === 'filtered' ? (
+                  <>เลือกทั้งหมด {totalCount} รายการที่ตรงกับเงื่อนไข</>
+                ) : (
+                  <>เลือกแล้ว {selectedIds.size} รายการ</>
+                )}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleClearSelection}
+              >
+                ยกเลิกการเลือก
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleBulkDeleteClick}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                ลบที่เลือก
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Table */}
       <div className="rounded-md border bg-white">
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-[50px]">
+                <Checkbox
+                  checked={isAllPageSelected}
+                  onCheckedChange={handleSelectAll}
+                  disabled={loading || displayedExpenses.length === 0}
+                />
+              </TableHead>
               <TableHead>วันที่</TableHead>
               <TableHead>ประเภท</TableHead>
               <TableHead>หมวดหมู่ย่อย</TableHead>
@@ -450,6 +653,9 @@ export default function ExpensesPage() {
               // Loading skeleton
               Array.from({ length: 5 }).map((_, index) => (
                 <TableRow key={index}>
+                  <TableCell>
+                    <div className="h-4 w-4 animate-pulse rounded bg-gray-200" />
+                  </TableCell>
                   <TableCell>
                     <div className="h-4 w-24 animate-pulse rounded bg-gray-200" />
                   </TableCell>
@@ -476,7 +682,7 @@ export default function ExpensesPage() {
             ) : displayedExpenses.length === 0 ? (
               // Empty state
               <TableRow>
-                <TableCell colSpan={7} className="h-32 text-center">
+                <TableCell colSpan={8} className="h-32 text-center">
                   <div className="flex flex-col items-center justify-center text-muted-foreground">
                     <p className="text-lg font-medium">ไม่พบข้อมูล</p>
                     <p className="text-sm">
@@ -491,6 +697,14 @@ export default function ExpensesPage() {
               // Data rows
               displayedExpenses.map((expense) => (
                 <TableRow key={expense.id}>
+                  <TableCell>
+                    <Checkbox
+                      checked={selectedIds.has(expense.id)}
+                      onCheckedChange={(checked) =>
+                        handleSelectRow(expense.id, checked as boolean)
+                      }
+                    />
+                  </TableCell>
                   <TableCell className="font-medium">
                     {formatDate(expense.expense_date)}
                   </TableCell>
@@ -600,6 +814,20 @@ export default function ExpensesPage() {
         onOpenChange={setShowImportDialog}
         onSuccess={fetchExpenses}
       />
+
+      {/* Bulk Delete Confirmation Dialog */}
+      {selectionSummary && (
+        <BulkDeleteConfirmDialog
+          open={showBulkDeleteDialog}
+          onOpenChange={setShowBulkDeleteDialog}
+          onConfirm={handleBulkDeleteConfirm}
+          loading={bulkDeleteLoading}
+          count={selectionSummary.count}
+          amount={selectionSummary.amount}
+          blockedCount={selectionSummary.blockedCount}
+          blockedReason={selectionSummary.blockedReason}
+        />
+      )}
     </div>
   )
 }
