@@ -153,6 +153,8 @@ export default function CompanyCashflowPage() {
             <strong>Cash Out:</strong> Withdrawals จากบัญชีธนาคาร
             <br />
             <strong>หมายเหตุ:</strong> ต้องนำเข้า Bank Statement ก่อนจึงจะมีข้อมูล
+            <br />
+            <strong>Cash In Classification:</strong> ดูรายละเอียดประเภทเงินเข้าได้ที่ Bank &gt; Cash In Classification tab
           </AlertDescription>
         </Alert>
       ) : (

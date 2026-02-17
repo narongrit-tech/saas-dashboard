@@ -27,6 +27,65 @@ export interface BankTransaction {
   raw: Record<string, any> | null;
   created_by: string;
   created_at: string;
+  // Cash In Classification
+  cash_in_type: CashInType | null;
+  cash_in_ref_type: string | null;
+  cash_in_ref_id: string | null;
+  classified_at: string | null;
+  classified_by: string | null;
+}
+
+// ============================================================================
+// Cash In Classification Types
+// ============================================================================
+
+export const CASH_IN_TYPES = {
+  SALES_SETTLEMENT: 'SALES_SETTLEMENT',
+  SALES_PAYOUT_ADJUSTMENT: 'SALES_PAYOUT_ADJUSTMENT',
+  DIRECTOR_LOAN: 'DIRECTOR_LOAN',
+  CAPITAL_INJECTION: 'CAPITAL_INJECTION',
+  LOAN_PROCEEDS: 'LOAN_PROCEEDS',
+  REFUND_IN: 'REFUND_IN',
+  VENDOR_REFUND: 'VENDOR_REFUND',
+  TAX_REFUND: 'TAX_REFUND',
+  INTERNAL_TRANSFER_IN: 'INTERNAL_TRANSFER_IN',
+  WALLET_WITHDRAWAL: 'WALLET_WITHDRAWAL',
+  REBATE_CASHBACK: 'REBATE_CASHBACK',
+  OTHER_INCOME: 'OTHER_INCOME',
+  REVERSAL_CORRECTION_IN: 'REVERSAL_CORRECTION_IN',
+  OTHER: 'OTHER',
+} as const;
+
+export type CashInType = keyof typeof CASH_IN_TYPES;
+
+export const CASH_IN_TYPE_LABELS: Record<CashInType, string> = {
+  SALES_SETTLEMENT: 'เงินจากการขาย (Settlement)',
+  SALES_PAYOUT_ADJUSTMENT: 'ปรับยอด Settlement',
+  DIRECTOR_LOAN: 'เงินกู้จากผู้ถือหุ้น/กรรมการ',
+  CAPITAL_INJECTION: 'เงินลงทุนเพิ่ม',
+  LOAN_PROCEEDS: 'เงินกู้จากสถาบันการเงิน',
+  REFUND_IN: 'เงินคืนจากลูกค้า',
+  VENDOR_REFUND: 'เงินคืนจากซัพพลายเออร์',
+  TAX_REFUND: 'เงินคืนภาษี',
+  INTERNAL_TRANSFER_IN: 'โอนเงินภายในบริษัท (เข้า)',
+  WALLET_WITHDRAWAL: 'ถอนเงินจาก Wallet',
+  REBATE_CASHBACK: 'Rebate/Cashback',
+  OTHER_INCOME: 'รายได้อื่นๆ',
+  REVERSAL_CORRECTION_IN: 'ปรับปรุง/ยกเลิกรายการ (เข้า)',
+  OTHER: 'อื่นๆ (ระบุ)',
+};
+
+export interface CashInClassificationPayload {
+  cash_in_type: CashInType;
+  cash_in_ref_type?: string | null;
+  cash_in_ref_id?: string | null;
+  note?: string | null;
+}
+
+export interface CashInSelectionSummary {
+  count: number;
+  sum_amount: number;
+  total_matching: number;
 }
 
 export interface BankStatementImportBatch {
@@ -330,5 +389,31 @@ export interface RollbackBankImportResponse {
   success: boolean;
   deleted_count?: number;
   message?: string;
+  error?: string;
+}
+
+// ============================================================================
+// Cash In Classification Response Types
+// ============================================================================
+
+export interface GetCashInSelectionSummaryResponse {
+  success: boolean;
+  data?: CashInSelectionSummary;
+  error?: string;
+}
+
+export interface ApplyCashInTypeResponse {
+  success: boolean;
+  affected_rows?: number;
+  message?: string;
+  error?: string;
+}
+
+export interface GetCashInTransactionsResponse {
+  success: boolean;
+  data?: {
+    transactions: BankTransaction[];
+    total: number;
+  };
   error?: string;
 }

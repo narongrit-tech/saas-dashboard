@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { BankAccount } from '@/types/bank'
 import { getBankAccounts } from '@/app/(dashboard)/bank/actions'
 import BankAccountSelector from './BankAccountSelector'
@@ -8,16 +9,22 @@ import AddBankAccountDialog from './AddBankAccountDialog'
 import ImportBankStatementDialog from './ImportBankStatementDialog'
 import BankDailySummaryTable from './BankDailySummaryTable'
 import BankTransactionsTable from './BankTransactionsTable'
+import CashInClassification from './CashInClassification'
 import { Button } from '@/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Plus, Upload } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 
 export default function BankModuleClient() {
+  const searchParams = useSearchParams()
+  const tabParam = searchParams.get('tab') || 'overview'
+
   const [accounts, setAccounts] = useState<BankAccount[]>([])
   const [selectedAccountId, setSelectedAccountId] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [showAddAccount, setShowAddAccount] = useState(false)
   const [showImport, setShowImport] = useState(false)
+  const [activeTab, setActiveTab] = useState<string>(tabParam)
   const { toast } = useToast()
 
   useEffect(() => {
@@ -86,12 +93,27 @@ export default function BankModuleClient() {
         </div>
       </div>
 
-      {/* Daily Summary */}
+      {/* Tabs */}
       {selectedAccountId && (
-        <>
-          <BankDailySummaryTable bankAccountId={selectedAccountId} />
-          <BankTransactionsTable bankAccountId={selectedAccountId} />
-        </>
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList>
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="transactions">Transactions</TabsTrigger>
+            <TabsTrigger value="cash-in-classification">Cash In Classification</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="overview" className="space-y-6">
+            <BankDailySummaryTable bankAccountId={selectedAccountId} />
+          </TabsContent>
+
+          <TabsContent value="transactions">
+            <BankTransactionsTable bankAccountId={selectedAccountId} />
+          </TabsContent>
+
+          <TabsContent value="cash-in-classification">
+            <CashInClassification bankAccountId={selectedAccountId} accounts={accounts} />
+          </TabsContent>
+        </Tabs>
       )}
 
       {/* Dialogs */}
