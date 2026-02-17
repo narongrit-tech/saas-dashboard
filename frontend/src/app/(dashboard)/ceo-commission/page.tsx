@@ -20,8 +20,10 @@ import {
 } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Download, Plus, TrendingUp, Wallet, UserCircle, Building2 } from 'lucide-react'
+import { Download, Plus, TrendingUp, Wallet, UserCircle, Building2, Landmark } from 'lucide-react'
 import { AddCommissionDialog } from '@/components/ceo-commission/AddCommissionDialog'
+import { ImportFromBankDialog } from '@/components/ceo-commission/ImportFromBankDialog'
+import { CommissionSourceSettings } from '@/components/ceo-commission/CommissionSourceSettings'
 import {
   getCommissionReceipts,
   getCommissionPlatforms,
@@ -44,6 +46,7 @@ export default function CeoCommissionPage() {
   const [loading, setLoading] = useState(true)
   const [exporting, setExporting] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
 
   // Filters
   const [startDate, setStartDate] = useState('')
@@ -167,6 +170,16 @@ export default function CeoCommissionPage() {
     })
   }
 
+  // Handle import dialog success
+  const handleImportDialogSuccess = () => {
+    setImportDialogOpen(false)
+    loadData()
+    toast({
+      title: 'สำเร็จ',
+      description: 'Declare Commission สำเร็จ',
+    })
+  }
+
   // Format number
   const formatNumber = (num: number) => {
     return num.toLocaleString('th-TH', {
@@ -202,12 +215,19 @@ export default function CeoCommissionPage() {
             <Download className="mr-2 h-4 w-4" />
             {exporting ? 'กำลังส่งออก...' : 'ส่งออก CSV'}
           </Button>
+          <Button variant="outline" onClick={() => setImportDialogOpen(true)}>
+            <Landmark className="mr-2 h-4 w-4" />
+            ดึงจากธนาคาร
+          </Button>
           <Button onClick={() => setDialogOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
-            เพิ่ม Commission
+            เพิ่มด้วยตัวเอง
           </Button>
         </div>
       </div>
+
+      {/* Settings: Bank Source Selection */}
+      <CommissionSourceSettings />
 
       {/* Summary Cards */}
       <div className="grid gap-4 md:grid-cols-4">
@@ -408,6 +428,13 @@ export default function CeoCommissionPage() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         onSuccess={handleDialogSuccess}
+      />
+
+      {/* Import from Bank Dialog */}
+      <ImportFromBankDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        onSuccess={handleImportDialogSuccess}
       />
     </div>
   )

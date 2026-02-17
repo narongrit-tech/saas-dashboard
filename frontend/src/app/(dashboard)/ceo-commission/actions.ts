@@ -221,10 +221,23 @@ export async function getCommissionReceipts(filters: CommissionFilters): Promise
   try {
     const supabase = await createClient()
 
-    // Build query
+    // Build query (with bank info for display)
     let query = supabase
       .from('ceo_commission_receipts')
-      .select('*', { count: 'exact' })
+      .select(
+        `
+        *,
+        bank_transactions(
+          id,
+          description,
+          bank_accounts(
+            bank_name,
+            account_number
+          )
+        )
+      `,
+        { count: 'exact' }
+      )
       .order('commission_date', { ascending: false })
       .order('created_at', { ascending: false })
 
@@ -426,10 +439,22 @@ export async function exportCommissionReceipts(filters?: {
   try {
     const supabase = await createClient()
 
-    // Build query (no pagination for export)
+    // Build query (no pagination for export, with bank info)
     let query = supabase
       .from('ceo_commission_receipts')
-      .select('*')
+      .select(
+        `
+        *,
+        bank_transactions(
+          id,
+          description,
+          bank_accounts(
+            bank_name,
+            account_number
+          )
+        )
+      `
+      )
       .order('commission_date', { ascending: false })
 
     // Apply filters
@@ -453,28 +478,41 @@ export async function exportCommissionReceipts(filters?: {
       return { success: false, error: 'ไม่มีข้อมูลสำหรับ export' }
     }
 
-    // Generate CSV
+    // Generate CSV with bank info
     const headers = [
       'วันที่รับ Commission',
       'Platform',
       'ยอดรวม (Gross)',
       'ใช้ส่วนตัว',
       'โอนให้บริษัท',
+      'บัญชีธนาคาร',
+      'Bank Txn Ref',
       'หมายเหตุ',
       'Reference',
       'สร้างเมื่อ',
     ]
 
-    const rows = data.map((receipt) => [
-      receipt.commission_date,
-      receipt.platform,
-      receipt.gross_amount.toFixed(2),
-      receipt.personal_used_amount.toFixed(2),
-      receipt.transferred_to_company_amount.toFixed(2),
-      receipt.note || '',
-      receipt.reference || '',
-      formatInTimeZone(new Date(receipt.created_at), BANGKOK_TZ, 'yyyy-MM-dd HH:mm:ss'),
-    ])
+    const rows = data.map((receipt: any) => {
+      const bankTxn = receipt.bank_transactions
+      const bankAccount = bankTxn?.bank_accounts
+      const bankInfo = bankAccount
+        ? `${bankAccount.bank_name} - ${bankAccount.account_number}`
+        : 'Manual Entry'
+      const bankTxnRef = bankTxn?.description || '-'
+
+      return [
+        receipt.commission_date,
+        receipt.platform,
+        receipt.gross_amount.toFixed(2),
+        receipt.personal_used_amount.toFixed(2),
+        receipt.transferred_to_company_amount.toFixed(2),
+        bankInfo,
+        bankTxnRef,
+        receipt.note || '',
+        receipt.reference || '',
+        formatInTimeZone(new Date(receipt.created_at), BANGKOK_TZ, 'yyyy-MM-dd HH:mm:ss'),
+      ]
+    })
 
     // Build CSV string
     const csv = [
