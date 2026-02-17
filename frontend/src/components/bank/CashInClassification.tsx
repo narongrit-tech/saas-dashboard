@@ -32,8 +32,10 @@ import {
 } from '@/app/(dashboard)/bank/cash-in-actions'
 import { BankTransaction, BankAccount, CASH_IN_TYPES, CASH_IN_TYPE_LABELS, CashInType } from '@/types/bank'
 import { useToast } from '@/hooks/use-toast'
-import { Search, AlertCircle, Info, CheckCircle2, Tag } from 'lucide-react'
+import { Search, AlertCircle, Info, CheckCircle2, Tag, Download, Upload } from 'lucide-react'
 import CashInTypeDialog from './CashInTypeDialog'
+import ImportCashInDialog from './ImportCashInDialog'
+import { downloadCashInTemplate } from '@/app/(dashboard)/bank/cash-in-actions'
 
 interface CashInClassificationProps {
   bankAccountId: string | null
@@ -100,6 +102,7 @@ export default function CashInClassification({ bankAccountId, accounts }: CashIn
 
   // Dialog
   const [showTypeDialog, setShowTypeDialog] = useState(false)
+  const [showImportDialog, setShowImportDialog] = useState(false)
 
   useEffect(() => {
     fetchTransactions()
@@ -334,6 +337,42 @@ export default function CashInClassification({ bankAccountId, accounts }: CashIn
 
   const hasSelection = selectedCount > 0
 
+  // Handle template download
+  async function handleDownloadTemplate() {
+    try {
+      const result = await downloadCashInTemplate()
+
+      if (!result.success || !result.base64 || !result.filename) {
+        toast({
+          title: 'ข้อผิดพลาด',
+          description: result.error || 'ไม่สามารถดาวน์โหลด template ได้',
+          variant: 'destructive',
+        })
+        return
+      }
+
+      // Create download link
+      const link = document.createElement('a')
+      link.href = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${result.base64}`
+      link.download = result.filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+
+      toast({
+        title: 'สำเร็จ',
+        description: 'ดาวน์โหลด template สำเร็จ',
+      })
+    } catch (error) {
+      console.error('Download template error:', error)
+      toast({
+        title: 'ข้อผิดพลาด',
+        description: 'เกิดข้อผิดพลาดในการดาวน์โหลด template',
+        variant: 'destructive',
+      })
+    }
+  }
+
   return (
     <div className="space-y-4">
       {/* Info Alert */}
@@ -346,6 +385,18 @@ export default function CashInClassification({ bankAccountId, accounts }: CashIn
           <strong>หมายเหตุ:</strong> ระบบแสดงเฉพาะรายการเงินเข้า (Deposit &gt; 0) เท่านั้น
         </AlertDescription>
       </Alert>
+
+      {/* Import Actions */}
+      <div className="flex gap-2">
+        <Button variant="outline" onClick={handleDownloadTemplate}>
+          <Download className="mr-2 h-4 w-4" />
+          Download Template
+        </Button>
+        <Button variant="outline" onClick={() => setShowImportDialog(true)}>
+          <Upload className="mr-2 h-4 w-4" />
+          Import Classification
+        </Button>
+      </div>
 
       {/* Filters */}
       <Card>
@@ -548,6 +599,13 @@ export default function CashInClassification({ bankAccountId, accounts }: CashIn
         selectedCount={selectedCount}
         selectedAmount={selectedAmount}
         onConfirm={handleApplyType}
+      />
+
+      {/* Import Classification Dialog */}
+      <ImportCashInDialog
+        open={showImportDialog}
+        onOpenChange={setShowImportDialog}
+        onSuccess={fetchTransactions}
       />
     </div>
   )

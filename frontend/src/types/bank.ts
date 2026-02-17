@@ -417,3 +417,59 @@ export interface GetCashInTransactionsResponse {
   };
   error?: string;
 }
+
+// ============================================================================
+// Cash In Import Template Types
+// ============================================================================
+
+export interface CashInImportRow {
+  bank_account: string;
+  txn_datetime: string; // YYYY-MM-DD HH:mm:ss
+  amount: number;
+  description: string;
+  cash_in_type: string;
+  bank_txn_id?: string;
+  note?: string;
+}
+
+export interface CashInImportPreviewRow {
+  row_index: number;
+  status: 'MATCHED' | 'UNMATCHED' | 'INVALID' | 'CONFLICT';
+  reason?: string;
+  matched_txn_id?: string;
+  input_data: CashInImportRow;
+  current_cash_in_type?: string | null;
+  conflict_details?: {
+    current_type: string;
+    new_type: string;
+  };
+}
+
+export interface CashInImportPreview {
+  total_rows: number;
+  matched: number;
+  unmatched: number;
+  invalid: number;
+  conflicts: number;
+  rows: CashInImportPreviewRow[];
+}
+
+export interface DownloadCashInTemplateResponse {
+  success: boolean;
+  base64?: string;
+  filename?: string;
+  error?: string;
+}
+
+export interface ParseCashInImportResponse {
+  success: boolean;
+  data?: CashInImportPreview;
+  error?: string;
+}
+
+export interface ApplyCashInImportResponse {
+  success: boolean;
+  updated_count?: number;
+  message?: string;
+  error?: string;
+}
