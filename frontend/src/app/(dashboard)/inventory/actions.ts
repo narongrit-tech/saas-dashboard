@@ -689,6 +689,8 @@ export async function applyCOGSMTD(params: {
   endDate?: string
 } = {}) {
   const method = params.method || 'FIFO'
+  let run_id: string | null = null // Track run ID for logging
+
   try {
     const supabase = createClient()
 
@@ -760,6 +762,33 @@ export async function applyCOGSMTD(params: {
     }
 
     console.log(`Apply COGS Range: ${startDateISO} to ${endDateISO}`)
+
+    // ============================================
+    // CREATE RUN RECORD (for logging)
+    // ============================================
+    const { data: runData, error: runError } = await supabase
+      .from('inventory_cogs_apply_runs')
+      .insert({
+        start_date: startDateISO,
+        end_date: endDateISO,
+        method,
+        total: 0,
+        eligible: 0,
+        successful: 0,
+        skipped: 0,
+        failed: 0,
+        created_by: user.id,
+      })
+      .select('id')
+      .single()
+
+    if (runError || !runData) {
+      console.error('Failed to create run record:', runError)
+      // Non-fatal: continue without logging
+    } else {
+      run_id = runData.id
+      console.log(`Created run record: ${run_id}`)
+    }
 
     // Fetch all orders in date range using pagination
     // CRITICAL: Use pagination to avoid query limits truncating results
@@ -886,7 +915,50 @@ export async function applyCOGSMTD(params: {
       console.log(`Found ${allocatedOrderIds.size} orders already allocated (total)`)
     }
 
-    // Prepare result summary
+    // Prepare result summary with detailed skip reasons
+    interface SkipReason {
+      code: string
+      label: string
+      count: number
+      samples: Array<{ order_id: string; sku?: string; detail?: string }>
+    }
+
+    const skipReasons = new Map<string, SkipReason>()
+
+    function addSkipReason(
+      code: string,
+      label: string,
+      order_id: string,
+      sku?: string,
+      detail?: string
+    ) {
+      if (!skipReasons.has(code)) {
+        skipReasons.set(code, {
+          code,
+          label,
+          count: 0,
+          samples: [],
+        })
+      }
+
+      const reason = skipReasons.get(code)!
+      reason.count++
+
+      // Keep only first 5 samples per reason
+      if (reason.samples.length < 5) {
+        reason.samples.push({ order_id, sku, detail })
+      }
+    }
+
+    // Collect run items for logging
+    const runItems: Array<{
+      order_id: string
+      sku: string | null
+      qty: number | null
+      status: 'successful' | 'skipped' | 'failed'
+      reason: string | null
+    }> = []
+
     const summary = {
       total: orders.length,
       eligible: 0,
@@ -910,6 +982,19 @@ export async function applyCOGSMTD(params: {
           order_id,
           reason: 'already_allocated',
         })
+        addSkipReason(
+          'ALREADY_ALLOCATED',
+          'เคย allocate แล้ว (idempotent skip)',
+          order_id,
+          sku
+        )
+        runItems.push({
+          order_id,
+          sku: sku || null,
+          qty: qty || null,
+          status: 'skipped',
+          reason: 'ALREADY_ALLOCATED',
+        })
         continue
       }
 
@@ -919,6 +1004,14 @@ export async function applyCOGSMTD(params: {
         summary.errors.push({
           order_id,
           reason: 'missing_seller_sku',
+        })
+        addSkipReason('MISSING_SKU', 'ไม่มี seller_sku ใน order', order_id)
+        runItems.push({
+          order_id,
+          sku: null,
+          qty: qty || null,
+          status: 'skipped',
+          reason: 'MISSING_SKU',
         })
         continue
       }
@@ -930,6 +1023,20 @@ export async function applyCOGSMTD(params: {
           order_id,
           reason: `invalid_quantity_${qty}`,
         })
+        addSkipReason(
+          'INVALID_QUANTITY',
+          'quantity ไม่ถูกต้อง (null/zero/negative)',
+          order_id,
+          sku,
+          `qty=${qty}`
+        )
+        runItems.push({
+          order_id,
+          sku: sku || null,
+          qty: qty || null,
+          status: 'skipped',
+          reason: 'INVALID_QUANTITY',
+        })
         continue
       }
 
@@ -939,6 +1046,14 @@ export async function applyCOGSMTD(params: {
         summary.errors.push({
           order_id,
           reason: 'missing_shipped_at',
+        })
+        addSkipReason('NOT_SHIPPED', 'ยังไม่ได้ shipped (ไม่มี shipped_at)', order_id, sku)
+        runItems.push({
+          order_id,
+          sku: sku || null,
+          qty: qty || null,
+          status: 'skipped',
+          reason: 'NOT_SHIPPED',
         })
         continue
       }
@@ -958,6 +1073,13 @@ export async function applyCOGSMTD(params: {
 
         if (success) {
           summary.successful++
+          runItems.push({
+            order_id,
+            sku: sku || null,
+            qty: qty || null,
+            status: 'successful',
+            reason: null,
+          })
           console.log(`✓ Order ${order_id}: COGS applied (SKU: ${sku}, Qty: ${qty})`)
         } else {
           summary.failed++
@@ -965,19 +1087,96 @@ export async function applyCOGSMTD(params: {
             order_id,
             reason: 'applyCOGS_returned_false',
           })
+          addSkipReason(
+            'ALLOCATION_FAILED',
+            'ไม่สามารถ allocate ได้ (SKU ไม่มี/stock ไม่พอ/bundle ไม่มี recipe)',
+            order_id,
+            sku
+          )
+          runItems.push({
+            order_id,
+            sku: sku || null,
+            qty: qty || null,
+            status: 'failed',
+            reason: 'ALLOCATION_FAILED',
+          })
           console.error(`✗ Order ${order_id}: Failed to apply COGS`)
         }
       } catch (error) {
         summary.failed++
+        const errorMsg = error instanceof Error ? error.message : 'unknown_error'
         summary.errors.push({
           order_id,
-          reason: error instanceof Error ? error.message : 'unknown_error',
+          reason: errorMsg,
+        })
+        addSkipReason('EXCEPTION', 'เกิด exception ระหว่าง allocate', order_id, sku, errorMsg)
+        runItems.push({
+          order_id,
+          sku: sku || null,
+          qty: qty || null,
+          status: 'failed',
+          reason: 'EXCEPTION',
         })
         console.error(`✗ Order ${order_id}: Exception:`, error)
       }
     }
 
+    // Convert skipReasons map to array
+    const skipReasonsArray = Array.from(skipReasons.values()).sort((a, b) => b.count - a.count)
+
     console.log('Apply COGS MTD Summary:', summary)
+    console.log('Skip Reasons Breakdown:', skipReasonsArray)
+
+    // ============================================
+    // SAVE RUN LOG TO DATABASE
+    // ============================================
+    if (run_id && runItems.length > 0) {
+      console.log(`Saving ${runItems.length} run items...`)
+
+      // Batch insert run items (max 1000 per batch to avoid limits)
+      const BATCH_SIZE = 1000
+      for (let i = 0; i < runItems.length; i += BATCH_SIZE) {
+        const batch = runItems.slice(i, i + BATCH_SIZE)
+        const itemsToInsert = batch.map((item) => ({
+          run_id,
+          order_id: item.order_id,
+          sku: item.sku,
+          qty: item.qty,
+          status: item.status,
+          reason: item.reason,
+        }))
+
+        const { error: insertError } = await supabase
+          .from('inventory_cogs_apply_run_items')
+          .insert(itemsToInsert)
+
+        if (insertError) {
+          console.error(`Failed to insert run items batch ${i / BATCH_SIZE + 1}:`, insertError)
+          // Non-fatal: continue
+        } else {
+          console.log(`Inserted batch ${i / BATCH_SIZE + 1} (${batch.length} items)`)
+        }
+      }
+
+      // Update run with final counts
+      const { error: updateError } = await supabase
+        .from('inventory_cogs_apply_runs')
+        .update({
+          total: summary.total,
+          eligible: summary.eligible,
+          successful: summary.successful,
+          skipped: summary.skipped,
+          failed: summary.failed,
+        })
+        .eq('id', run_id)
+
+      if (updateError) {
+        console.error('Failed to update run counts:', updateError)
+        // Non-fatal
+      } else {
+        console.log(`Updated run ${run_id} with final counts`)
+      }
+    }
 
     revalidatePath('/inventory')
     revalidatePath('/sales')
@@ -985,7 +1184,11 @@ export async function applyCOGSMTD(params: {
 
     return {
       success: true,
-      data: summary,
+      data: {
+        ...summary,
+        skip_reasons: skipReasonsArray,
+        run_id, // Include run_id in response
+      },
     }
   } catch (error) {
     console.error('Unexpected error in applyCOGSMTD:', error)
@@ -998,8 +1201,418 @@ export async function applyCOGSMTD(params: {
 }
 
 // ============================================
+// COGS Apply Run Log (History & Export)
+// ============================================
+
+/**
+ * Get COGS apply run history
+ *
+ * @param limit - Number of runs to fetch (default: 20)
+ * @returns List of recent runs
+ */
+export async function getCogsApplyRuns(
+  limit = 20
+): Promise<{
+  success: boolean
+  error?: string
+  data: Array<{
+    id: string
+    start_date: string
+    end_date: string
+    method: string
+    total: number
+    eligible: number
+    successful: number
+    skipped: number
+    failed: number
+    created_at: string
+  }>
+}> {
+  try {
+    const supabase = createClient()
+
+    // Verify authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้', data: [] }
+    }
+
+    // Fetch runs (RLS will filter to user's runs)
+    const { data: runs, error: runsError } = await supabase
+      .from('inventory_cogs_apply_runs')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit)
+
+    if (runsError) {
+      console.error('Error fetching runs:', runsError)
+      return { success: false, error: runsError.message, data: [] }
+    }
+
+    return { success: true, data: runs || [] }
+  } catch (error) {
+    console.error('Unexpected error in getCogsApplyRuns:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+      data: [],
+    }
+  }
+}
+
+/**
+ * Get COGS apply run details (items)
+ *
+ * @param run_id - Run ID
+ * @param filters - Optional filters (status, order_id search)
+ * @returns Run items
+ */
+export async function getCogsApplyRunDetails(
+  run_id: string,
+  filters?: {
+    status?: 'successful' | 'skipped' | 'failed'
+    orderIdSearch?: string
+  }
+): Promise<{
+  success: boolean
+  error?: string
+  data: Array<{
+    id: string
+    order_id: string
+    sku: string | null
+    qty: number | null
+    status: string
+    reason: string | null
+    created_at: string
+  }>
+}> {
+  try {
+    const supabase = createClient()
+
+    // Verify authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้', data: [] }
+    }
+
+    // Build query
+    let query = supabase
+      .from('inventory_cogs_apply_run_items')
+      .select('*')
+      .eq('run_id', run_id)
+
+    // Apply filters
+    if (filters?.status) {
+      query = query.eq('status', filters.status)
+    }
+
+    if (filters?.orderIdSearch) {
+      query = query.ilike('order_id', `%${filters.orderIdSearch}%`)
+    }
+
+    // Order by status, then order_id
+    query = query.order('status').order('order_id')
+
+    const { data: items, error: itemsError } = await query
+
+    if (itemsError) {
+      console.error('Error fetching run items:', itemsError)
+      return { success: false, error: itemsError.message, data: [] }
+    }
+
+    return { success: true, data: items || [] }
+  } catch (error) {
+    console.error('Unexpected error in getCogsApplyRunDetails:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+      data: [],
+    }
+  }
+}
+
+/**
+ * Export COGS apply run items as CSV
+ *
+ * @param run_id - Run ID
+ * @param filters - Optional filters (status, order_id search)
+ * @returns CSV content and filename
+ */
+export async function exportCogsApplyRunCSV(
+  run_id: string,
+  filters?: {
+    status?: 'successful' | 'skipped' | 'failed'
+    orderIdSearch?: string
+  }
+): Promise<{
+  success: boolean
+  error?: string
+  csv?: string
+  filename?: string
+}> {
+  try {
+    // Get run details
+    const runResult = await getCogsApplyRunDetails(run_id, filters)
+
+    if (!runResult.success) {
+      return { success: false, error: runResult.error }
+    }
+
+    const items = runResult.data
+
+    if (items.length === 0) {
+      return { success: false, error: 'ไม่มีข้อมูลสำหรับ export' }
+    }
+
+    // Build CSV with UTF-8 BOM for Excel Thai support
+    const BOM = '\uFEFF'
+    const headers = ['order_id', 'sku', 'qty', 'status', 'reason', 'created_at']
+    const rows = items.map((item) => [
+      item.order_id,
+      item.sku || '',
+      item.qty?.toString() || '',
+      item.status,
+      item.reason || '',
+      item.created_at,
+    ])
+
+    // Format CSV
+    const csvLines = [
+      headers.join(','),
+      ...rows.map((row) =>
+        row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')
+      ),
+    ]
+
+    const csv = BOM + csvLines.join('\n')
+
+    // Generate filename with timestamp
+    const now = new Date()
+    const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const statusSuffix = filters?.status ? `-${filters.status}` : ''
+    const filename = `cogs-run-${run_id.slice(0, 8)}${statusSuffix}-${timestamp}.csv`
+
+    return { success: true, csv, filename }
+  } catch (error) {
+    console.error('Unexpected error in exportCogsApplyRunCSV:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
+
+// ============================================
 // On Hand Inventory
 // ============================================
+
+/**
+ * Get inventory availability maps (on_hand, reserved, available)
+ *
+ * BUSINESS RULES:
+ * - On Hand: Sum(qty_remaining) from inventory_receipt_layers (physical stock)
+ * - Reserved: Sum(qty) from sales_orders WHERE shipped_at IS NULL AND status_group != 'ยกเลิกแล้ว'
+ *   - Bundles are exploded into component SKUs
+ * - Available: On Hand - Reserved
+ *
+ * @returns Object with on_hand_map, reserved_map, available_map
+ */
+export async function getInventoryAvailabilityMaps(): Promise<{
+  success: boolean
+  error?: string
+  data: {
+    on_hand_map: Record<string, number>
+    reserved_map: Record<string, number>
+    available_map: Record<string, number>
+  }
+}> {
+  try {
+    const supabase = createClient()
+
+    // Verify authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return {
+        success: false,
+        error: 'ไม่พบข้อมูลผู้ใช้',
+        data: { on_hand_map: {}, reserved_map: {}, available_map: {} },
+      }
+    }
+
+    // ============================================
+    // 1. GET ON HAND (existing logic)
+    // ============================================
+    const onHandResult = await getInventoryOnHand()
+    if (!onHandResult.success) {
+      return {
+        success: false,
+        error: onHandResult.error,
+        data: { on_hand_map: {}, reserved_map: {}, available_map: {} },
+      }
+    }
+
+    const on_hand_map = onHandResult.data
+
+    // ============================================
+    // 2. GET RESERVED (from sales_orders)
+    // ============================================
+    // Query: unshipped, non-cancelled orders
+    const { data: orders, error: ordersError } = await supabase
+      .from('sales_orders')
+      .select('seller_sku, quantity')
+      .is('shipped_at', null) // Only unshipped (reserved)
+      .neq('status_group', 'ยกเลิกแล้ว') // Exclude cancelled
+
+    if (ordersError) {
+      console.error('Error fetching reserved orders:', ordersError)
+      return {
+        success: false,
+        error: ordersError.message,
+        data: { on_hand_map, reserved_map: {}, available_map: {} },
+      }
+    }
+
+    // Get all inventory items (to check if bundle)
+    const { data: items, error: itemsError } = await supabase
+      .from('inventory_items')
+      .select('sku_internal, is_bundle')
+
+    if (itemsError) {
+      console.error('Error fetching inventory items:', itemsError)
+      return {
+        success: false,
+        error: itemsError.message,
+        data: { on_hand_map, reserved_map: {}, available_map: {} },
+      }
+    }
+
+    // Create lookup map for bundle detection
+    const itemsMap = new Map<string, { is_bundle: boolean }>()
+    for (const item of items || []) {
+      itemsMap.set(item.sku_internal, { is_bundle: item.is_bundle })
+    }
+
+    // Get all bundle components
+    const { data: bundleComponents, error: bundleError } = await supabase
+      .from('inventory_bundle_components')
+      .select('bundle_sku, component_sku, quantity')
+
+    if (bundleError) {
+      console.error('Error fetching bundle components:', bundleError)
+      return {
+        success: false,
+        error: bundleError.message,
+        data: { on_hand_map, reserved_map: {}, available_map: {} },
+      }
+    }
+
+    // Create bundle lookup map
+    const bundleMap = new Map<string, Array<{ component_sku: string; quantity: number }>>()
+    for (const bc of bundleComponents || []) {
+      if (!bundleMap.has(bc.bundle_sku)) {
+        bundleMap.set(bc.bundle_sku, [])
+      }
+      bundleMap.get(bc.bundle_sku)!.push({
+        component_sku: bc.component_sku,
+        quantity: bc.quantity,
+      })
+    }
+
+    // Aggregate reserved quantities
+    const reserved_map: Record<string, number> = {}
+
+    for (const order of orders || []) {
+      const sku = order.seller_sku
+      const qty = order.quantity || 0
+
+      if (!sku || sku.trim() === '' || qty <= 0) {
+        continue // Skip invalid orders
+      }
+
+      // Check if SKU is a bundle
+      const item = itemsMap.get(sku)
+      if (!item) {
+        // SKU not in master list, treat as regular SKU
+        reserved_map[sku] = (reserved_map[sku] || 0) + qty
+        continue
+      }
+
+      if (item.is_bundle) {
+        // Explode bundle into components
+        const components = bundleMap.get(sku) || []
+        for (const component of components) {
+          const component_qty = component.quantity * qty
+          reserved_map[component.component_sku] =
+            (reserved_map[component.component_sku] || 0) + component_qty
+        }
+      } else {
+        // Regular SKU
+        reserved_map[sku] = (reserved_map[sku] || 0) + qty
+      }
+    }
+
+    // ============================================
+    // VERIFICATION LOG
+    // ============================================
+    const unshippedCount = orders?.length || 0
+    const bundleOrdersCount = orders?.filter(o => {
+      const item = itemsMap.get(o.seller_sku || '')
+      return item?.is_bundle
+    }).length || 0
+
+    console.log(`[Inventory Availability] Reservation Verification:`, {
+      total_unshipped_orders: unshippedCount,
+      bundle_orders: bundleOrdersCount,
+      reserved_skus: Object.keys(reserved_map).length,
+      top_reserved: Object.entries(reserved_map)
+        .sort(([, a], [, b]) => b - a)
+        .slice(0, 5)
+        .map(([sku, qty]) => ({ sku, reserved_qty: qty })),
+    })
+
+    // ============================================
+    // 3. CALCULATE AVAILABLE = ON HAND - RESERVED
+    // ============================================
+    const available_map: Record<string, number> = {}
+
+    // Get all unique SKUs from both maps
+    const allSkus = new Set([...Object.keys(on_hand_map), ...Object.keys(reserved_map)])
+
+    for (const sku of allSkus) {
+      const onHand = on_hand_map[sku] || 0
+      const reserved = reserved_map[sku] || 0
+      available_map[sku] = onHand - reserved
+    }
+
+    return {
+      success: true,
+      data: {
+        on_hand_map,
+        reserved_map,
+        available_map,
+      },
+    }
+  } catch (error) {
+    console.error('Unexpected error in getInventoryAvailabilityMaps:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+      data: { on_hand_map: {}, reserved_map: {}, available_map: {} },
+    }
+  }
+}
 
 /**
  * Get on hand quantities for all SKUs or a specific SKU
@@ -1406,6 +2019,388 @@ export async function createStockInForSku(params: {
     }
   } catch (error) {
     console.error('Unexpected error in createStockInForSku:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}
+
+// ============================================
+// Safe SKU Rename
+// ============================================
+
+/**
+ * Check if SKU can be safely renamed
+ *
+ * A SKU can be renamed ONLY if it has NOT been used in any inventory operations:
+ * - No receipt layers (stock in)
+ * - No COGS allocations (sales)
+ * - No bundle component usage (if component)
+ * - No sales orders (source data)
+ *
+ * @param sku_internal - SKU to check
+ * @returns Eligibility result with reasons
+ */
+export async function checkSkuRenameEligibility(
+  sku_internal: string
+): Promise<{
+  success: boolean
+  error?: string
+  data: {
+    eligible: boolean
+    reasons: string[]
+    blockers: Array<{
+      category: string
+      count: number
+      message: string
+    }>
+  }
+}> {
+  try {
+    const supabase = createClient()
+
+    // Verify authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return {
+        success: false,
+        error: 'ไม่พบข้อมูลผู้ใช้',
+        data: { eligible: false, reasons: ['ไม่ได้ล็อกอิน'], blockers: [] },
+      }
+    }
+
+    // Check if SKU exists
+    const { data: item, error: itemError } = await supabase
+      .from('inventory_items')
+      .select('sku_internal, product_name, is_bundle')
+      .eq('sku_internal', sku_internal)
+      .single()
+
+    if (itemError || !item) {
+      return {
+        success: false,
+        error: 'SKU not found',
+        data: { eligible: false, reasons: ['SKU ไม่มีในระบบ'], blockers: [] },
+      }
+    }
+
+    const blockers: Array<{ category: string; count: number; message: string }> = []
+
+    // ============================================
+    // CHECK 1: Receipt Layers
+    // ============================================
+    const { data: layers, error: layersError } = await supabase
+      .from('inventory_receipt_layers')
+      .select('id')
+      .eq('sku_internal', sku_internal)
+      .limit(1)
+
+    if (layersError) {
+      console.error('Error checking receipt layers:', layersError)
+    } else if (layers && layers.length > 0) {
+      const { count } = await supabase
+        .from('inventory_receipt_layers')
+        .select('*', { count: 'exact', head: true })
+        .eq('sku_internal', sku_internal)
+
+      blockers.push({
+        category: 'receipt_layers',
+        count: count || 0,
+        message: `มี Receipt Layers (Stock In) จำนวน ${count} รายการ`,
+      })
+    }
+
+    // ============================================
+    // CHECK 2: COGS Allocations
+    // ============================================
+    const { data: allocations, error: allocError } = await supabase
+      .from('inventory_cogs_allocations')
+      .select('id')
+      .eq('sku_internal', sku_internal)
+      .limit(1)
+
+    if (allocError) {
+      console.error('Error checking COGS allocations:', allocError)
+    } else if (allocations && allocations.length > 0) {
+      const { count } = await supabase
+        .from('inventory_cogs_allocations')
+        .select('*', { count: 'exact', head: true })
+        .eq('sku_internal', sku_internal)
+
+      blockers.push({
+        category: 'cogs_allocations',
+        count: count || 0,
+        message: `มี COGS Allocations จำนวน ${count} รายการ`,
+      })
+    }
+
+    // ============================================
+    // CHECK 3: Bundle Components (as bundle_sku)
+    // ============================================
+    if (item.is_bundle) {
+      const { data: bundleComps, error: bundleError } = await supabase
+        .from('inventory_bundle_components')
+        .select('id')
+        .eq('bundle_sku', sku_internal)
+        .limit(1)
+
+      if (bundleError) {
+        console.error('Error checking bundle components:', bundleError)
+      } else if (bundleComps && bundleComps.length > 0) {
+        const { count } = await supabase
+          .from('inventory_bundle_components')
+          .select('*', { count: 'exact', head: true })
+          .eq('bundle_sku', sku_internal)
+
+        blockers.push({
+          category: 'bundle_recipe',
+          count: count || 0,
+          message: `มี Bundle Recipe จำนวน ${count} components (ลบ recipe ก่อนถ้าต้องการ rename)`,
+        })
+      }
+    }
+
+    // ============================================
+    // CHECK 4: Bundle Components (as component_sku)
+    // ============================================
+    const { data: asComponent, error: compError } = await supabase
+      .from('inventory_bundle_components')
+      .select('bundle_sku')
+      .eq('component_sku', sku_internal)
+
+    if (compError) {
+      console.error('Error checking as component:', compError)
+    } else if (asComponent && asComponent.length > 0) {
+      const bundleSkus = asComponent.map((c) => c.bundle_sku).join(', ')
+      blockers.push({
+        category: 'used_as_component',
+        count: asComponent.length,
+        message: `ถูกใช้เป็น component ใน bundles: ${bundleSkus}`,
+      })
+    }
+
+    // ============================================
+    // CHECK 5: Sales Orders
+    // ============================================
+    const { data: orders, error: ordersError } = await supabase
+      .from('sales_orders')
+      .select('order_id')
+      .eq('seller_sku', sku_internal)
+      .limit(1)
+
+    if (ordersError) {
+      console.error('Error checking sales orders:', ordersError)
+    } else if (orders && orders.length > 0) {
+      const { count } = await supabase
+        .from('sales_orders')
+        .select('*', { count: 'exact', head: true })
+        .eq('seller_sku', sku_internal)
+
+      blockers.push({
+        category: 'sales_orders',
+        count: count || 0,
+        message: `มี Sales Orders จำนวน ${count} รายการที่ใช้ SKU นี้`,
+      })
+    }
+
+    // ============================================
+    // DECISION
+    // ============================================
+    const eligible = blockers.length === 0
+
+    const reasons: string[] = []
+    if (eligible) {
+      reasons.push('✓ ไม่มี Receipt Layers')
+      reasons.push('✓ ไม่มี COGS Allocations')
+      reasons.push('✓ ไม่มี Bundle Recipe (หรือไม่ถูกใช้เป็น component)')
+      reasons.push('✓ ไม่มี Sales Orders')
+      reasons.push('SKU นี้ปลอดภัยที่จะ rename')
+    } else {
+      reasons.push('❌ SKU นี้เคยถูกใช้งานแล้ว ไม่สามารถ rename ได้:')
+      for (const blocker of blockers) {
+        reasons.push(`  - ${blocker.message}`)
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        eligible,
+        reasons,
+        blockers,
+      },
+    }
+  } catch (error) {
+    console.error('Unexpected error in checkSkuRenameEligibility:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+      data: { eligible: false, reasons: ['เกิดข้อผิดพลาดในระบบ'], blockers: [] },
+    }
+  }
+}
+
+/**
+ * Safely rename a SKU (main or bundle)
+ *
+ * SAFETY: Only renames if SKU has NOT been used (checked via checkSkuRenameEligibility)
+ *
+ * @param old_sku - Current SKU
+ * @param new_sku - New SKU name
+ * @returns Success result with details
+ */
+export async function renameInventorySku(
+  old_sku: string,
+  new_sku: string
+): Promise<{
+  success: boolean
+  error?: string
+  data?: {
+    updated_tables: string[]
+    row_counts: Record<string, number>
+  }
+}> {
+  try {
+    const supabase = createClient()
+
+    // Verify authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้' }
+    }
+
+    // ============================================
+    // VALIDATION
+    // ============================================
+
+    // Trim and validate
+    const oldSkuTrimmed = old_sku.trim().toUpperCase()
+    const newSkuTrimmed = new_sku.trim().toUpperCase()
+
+    if (!oldSkuTrimmed || !newSkuTrimmed) {
+      return { success: false, error: 'SKU ต้องไม่เป็นค่าว่าง' }
+    }
+
+    if (oldSkuTrimmed === newSkuTrimmed) {
+      return { success: false, error: 'SKU เดิมและใหม่ต้องไม่เหมือนกัน' }
+    }
+
+    // Check if old SKU exists
+    const { data: oldItem, error: oldError } = await supabase
+      .from('inventory_items')
+      .select('sku_internal, is_bundle')
+      .eq('sku_internal', oldSkuTrimmed)
+      .single()
+
+    if (oldError || !oldItem) {
+      return { success: false, error: `SKU เดิม "${oldSkuTrimmed}" ไม่พบในระบบ` }
+    }
+
+    // Check if new SKU already exists
+    const { data: existingNew, error: newError } = await supabase
+      .from('inventory_items')
+      .select('sku_internal')
+      .eq('sku_internal', newSkuTrimmed)
+      .single()
+
+    if (existingNew) {
+      return { success: false, error: `SKU ใหม่ "${newSkuTrimmed}" มีอยู่ในระบบแล้ว` }
+    }
+
+    // ============================================
+    // ELIGIBILITY CHECK
+    // ============================================
+    const eligibilityResult = await checkSkuRenameEligibility(oldSkuTrimmed)
+
+    if (!eligibilityResult.success) {
+      return {
+        success: false,
+        error: 'ไม่สามารถตรวจสอบสิทธิ์ในการ rename ได้: ' + eligibilityResult.error,
+      }
+    }
+
+    if (!eligibilityResult.data.eligible) {
+      const reasons = eligibilityResult.data.reasons.join('\n')
+      return {
+        success: false,
+        error: `ไม่สามารถ rename SKU นี้ได้เพราะเคยถูกใช้งานแล้ว:\n\n${reasons}`,
+      }
+    }
+
+    // ============================================
+    // RENAME (Transaction)
+    // ============================================
+    const row_counts: Record<string, number> = {}
+    const updated_tables: string[] = []
+
+    // 1. Update inventory_items.sku_internal
+    const { error: updateItemError } = await supabase
+      .from('inventory_items')
+      .update({ sku_internal: newSkuTrimmed, updated_at: new Date().toISOString() })
+      .eq('sku_internal', oldSkuTrimmed)
+
+    if (updateItemError) {
+      console.error('Error updating inventory_items:', updateItemError)
+      return { success: false, error: 'ไม่สามารถอัปเดต inventory_items: ' + updateItemError.message }
+    }
+
+    updated_tables.push('inventory_items')
+    row_counts['inventory_items'] = 1
+
+    // 2. Update inventory_bundle_components (bundle_sku)
+    if (oldItem.is_bundle) {
+      const { error: updateBundleError, count: bundleCount } = await supabase
+        .from('inventory_bundle_components')
+        .update({ bundle_sku: newSkuTrimmed, updated_at: new Date().toISOString() })
+        .eq('bundle_sku', oldSkuTrimmed)
+
+      if (updateBundleError) {
+        console.error('Error updating bundle_sku:', updateBundleError)
+        // Non-fatal: continue
+      } else if (bundleCount && bundleCount > 0) {
+        updated_tables.push('inventory_bundle_components (bundle_sku)')
+        row_counts['bundle_components_bundle'] = bundleCount
+      }
+    }
+
+    // 3. Update inventory_bundle_components (component_sku)
+    const { error: updateCompError, count: compCount } = await supabase
+      .from('inventory_bundle_components')
+      .update({ component_sku: newSkuTrimmed, updated_at: new Date().toISOString() })
+      .eq('component_sku', oldSkuTrimmed)
+
+    if (updateCompError) {
+      console.error('Error updating component_sku:', updateCompError)
+      // Non-fatal: continue
+    } else if (compCount && compCount > 0) {
+      updated_tables.push('inventory_bundle_components (component_sku)')
+      row_counts['bundle_components_component'] = compCount
+    }
+
+    console.log(`✓ SKU renamed: ${oldSkuTrimmed} -> ${newSkuTrimmed}`)
+    console.log('  Updated tables:', updated_tables)
+    console.log('  Row counts:', row_counts)
+
+    revalidatePath('/inventory')
+
+    return {
+      success: true,
+      data: {
+        updated_tables,
+        row_counts,
+      },
+    }
+  } catch (error) {
+    console.error('Unexpected error in renameInventorySku:', error)
     return {
       success: false,
       error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',

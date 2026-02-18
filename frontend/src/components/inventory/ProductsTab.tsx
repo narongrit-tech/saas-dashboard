@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Checkbox } from '@/components/ui/checkbox'
 import {
   Table,
   TableBody,
@@ -20,9 +19,10 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { Plus, Pencil, Trash2, Package } from 'lucide-react'
-import { getInventoryItems, upsertInventoryItem, deleteInventoryItem, getInventoryOnHand, checkIsInventoryAdmin } from '@/app/(dashboard)/inventory/actions'
+import { Plus, Pencil, Trash2, Package, FileEdit } from 'lucide-react'
+import { getInventoryItems, upsertInventoryItem, deleteInventoryItem, getInventoryAvailabilityMaps, checkIsInventoryAdmin } from '@/app/(dashboard)/inventory/actions'
 import { StockInModal } from '@/components/inventory/StockInModal'
+import { RenameSkuModal } from '@/components/inventory/RenameSkuModal'
 
 interface InventoryItem {
   id: string
@@ -44,13 +44,15 @@ export function ProductsTab() {
   const [sku, setSku] = useState('')
   const [productName, setProductName] = useState('')
   const [cost, setCost] = useState('')
-  const [isBundle, setIsBundle] = useState(false)
   const [saving, setSaving] = useState(false)
 
   // Admin and Stock In state
   const [isAdmin, setIsAdmin] = useState(false)
   const [onHandMap, setOnHandMap] = useState<Record<string, number>>({})
+  const [reservedMap, setReservedMap] = useState<Record<string, number>>({})
+  const [availableMap, setAvailableMap] = useState<Record<string, number>>({})
   const [showStockInModal, setShowStockInModal] = useState(false)
+  const [showRenameModal, setShowRenameModal] = useState(false)
   const [selectedSku, setSelectedSku] = useState('')
 
   useEffect(() => {
@@ -62,11 +64,13 @@ export function ProductsTab() {
     setLoading(true)
     const result = await getInventoryItems()
     if (result.success) {
-      setItems(result.data)
+      // Filter to show only main SKUs (not bundles)
+      const mainProducts = result.data.filter(item => !item.is_bundle)
+      setItems(mainProducts)
     }
     setLoading(false)
-    // Load on hand after items loaded
-    loadOnHand()
+    // Load availability maps (on hand, reserved, available)
+    loadAvailabilityMaps()
   }
 
   async function checkAdmin() {
@@ -76,10 +80,19 @@ export function ProductsTab() {
     }
   }
 
-  async function loadOnHand() {
-    const result = await getInventoryOnHand()
+  async function loadAvailabilityMaps() {
+    const result = await getInventoryAvailabilityMaps()
     if (result.success) {
-      setOnHandMap(result.data)
+      setOnHandMap(result.data.on_hand_map)
+      setReservedMap(result.data.reserved_map)
+      setAvailableMap(result.data.available_map)
+
+      // Log verification for debugging
+      console.log('[ProductsTab] Availability loaded:', {
+        on_hand_count: Object.keys(result.data.on_hand_map).length,
+        reserved_count: Object.keys(result.data.reserved_map).length,
+        sample_reserved: Object.entries(result.data.reserved_map).slice(0, 3),
+      })
     }
   }
 
@@ -88,7 +101,6 @@ export function ProductsTab() {
     setSku('')
     setProductName('')
     setCost('')
-    setIsBundle(false)
     setShowDialog(true)
   }
 
@@ -97,7 +109,6 @@ export function ProductsTab() {
     setSku(item.sku_internal)
     setProductName(item.product_name)
     setCost(item.base_cost_per_unit.toString())
-    setIsBundle(item.is_bundle)
     setShowDialog(true)
   }
 
@@ -112,7 +123,7 @@ export function ProductsTab() {
       sku_internal: sku,
       product_name: productName,
       base_cost_per_unit: parseFloat(cost),
-      is_bundle: isBundle,
+      is_bundle: false, // Products tab only creates main products, not bundles
     })
 
     if (result.success) {
@@ -140,10 +151,21 @@ export function ProductsTab() {
     setShowStockInModal(true)
   }
 
+  function openRenameModal(sku: string) {
+    setSelectedSku(sku)
+    setShowRenameModal(true)
+  }
+
   function handleStockInSuccess() {
-    // Refresh items and on hand
+    // Refresh items and availability maps
     loadItems()
-    loadOnHand()
+    loadAvailabilityMaps()
+  }
+
+  function handleRenameSuccess() {
+    // Refresh items and availability maps
+    loadItems()
+    loadAvailabilityMaps()
   }
 
   return (
@@ -196,14 +218,6 @@ export function ProductsTab() {
                   placeholder="0.00"
                 />
               </div>
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="bundle"
-                  checked={isBundle}
-                  onCheckedChange={(checked) => setIsBundle(checked as boolean)}
-                />
-                <Label htmlFor="bundle">Is Bundle (เป็น bundle SKU)</Label>
-              </div>
               <div className="flex justify-end gap-2">
                 <Button
                   variant="outline"
@@ -234,15 +248,16 @@ export function ProductsTab() {
               <TableHead>SKU Internal</TableHead>
               <TableHead>Product Name</TableHead>
               <TableHead className="text-right">Base Cost</TableHead>
-              <TableHead className="text-center">Is Bundle</TableHead>
-              <TableHead className="text-right">On Hand</TableHead>
+              <TableHead className="text-right">On Hand (คงเหลือ)</TableHead>
+              <TableHead className="text-right">Available (พร้อมขาย)</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {items.map((item) => {
               const onHand = onHandMap[item.sku_internal] || 0
-              const canStockIn = !item.is_bundle
+              const reserved = reservedMap[item.sku_internal] || 0
+              const available = availableMap[item.sku_internal] || 0
 
               return (
                 <TableRow key={item.id}>
@@ -251,15 +266,20 @@ export function ProductsTab() {
                   <TableCell className="text-right">
                     {item.base_cost_per_unit.toFixed(2)}
                   </TableCell>
-                  <TableCell className="text-center">
-                    {item.is_bundle ? '✓' : '-'}
-                  </TableCell>
                   <TableCell className="text-right font-semibold">
                     {onHand.toFixed(4)}
+                    {reserved > 0 && (
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        (-{reserved.toFixed(4)} reserved)
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell className={`text-right font-semibold ${available < 0 ? 'text-red-600' : available === 0 ? 'text-yellow-600' : 'text-green-600'}`}>
+                    {available.toFixed(4)}
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
-                      {isAdmin && canStockIn && (
+                      {isAdmin && (
                         <Button
                           variant="ghost"
                           size="sm"
@@ -273,13 +293,23 @@ export function ProductsTab() {
                         variant="ghost"
                         size="sm"
                         onClick={() => openEditDialog(item)}
+                        title="Edit Product"
                       >
                         <Pencil className="w-4 h-4" />
                       </Button>
                       <Button
                         variant="ghost"
                         size="sm"
+                        onClick={() => openRenameModal(item.sku_internal)}
+                        title="Rename SKU"
+                      >
+                        <FileEdit className="w-4 h-4 text-orange-600" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         onClick={() => handleDelete(item.sku_internal)}
+                        title="Delete"
                       >
                         <Trash2 className="w-4 h-4 text-destructive" />
                       </Button>
@@ -298,6 +328,15 @@ export function ProductsTab() {
         onOpenChange={setShowStockInModal}
         sku_internal={selectedSku}
         onSuccess={handleStockInSuccess}
+      />
+
+      {/* Rename SKU Modal */}
+      <RenameSkuModal
+        open={showRenameModal}
+        onOpenChange={setShowRenameModal}
+        currentSku={selectedSku}
+        skuType="product"
+        onSuccess={handleRenameSuccess}
       />
     </div>
   )

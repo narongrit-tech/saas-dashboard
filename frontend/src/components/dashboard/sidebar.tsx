@@ -204,7 +204,7 @@ export function Sidebar() {
         </div>
       </div>
 
-      <nav className="flex-1 space-y-1 p-4 overflow-y-auto">
+      <nav className="flex-1 space-y-1 p-4 overflow-y-auto scrollbar-hide">
         {menuGroups.map((group) => {
           const isExpanded = expandedGroups[group.title]
           const hasActiveRoute = group.items.some((item) => pathname === item.href)

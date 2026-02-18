@@ -20,13 +20,15 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2, Pencil, FileEdit } from 'lucide-react'
 import {
   getInventoryItems,
   getBundles,
   getBundleComponents,
   upsertBundleRecipe,
 } from '@/app/(dashboard)/inventory/actions'
+import { RenameSkuModal } from '@/components/inventory/RenameSkuModal'
+import { CreateBundleModal } from '@/components/inventory/CreateBundleModal'
 
 interface InventoryItem {
   sku_internal: string
@@ -49,15 +51,26 @@ interface ComponentRow extends BundleComponent {
   product_name?: string
 }
 
+interface BundleWithComponents extends Bundle {
+  components_summary?: string
+}
+
 export function BundlesTab() {
   const [items, setItems] = useState<InventoryItem[]>([])
-  const [bundles, setBundles] = useState<Bundle[]>([])
+  const [bundles, setBundles] = useState<BundleWithComponents[]>([])
   const [loading, setLoading] = useState(true)
 
   // Form state
   const [selectedBundle, setSelectedBundle] = useState('')
   const [components, setComponents] = useState<ComponentRow[]>([])
   const [saving, setSaving] = useState(false)
+
+  // Rename modal state
+  const [showRenameModal, setShowRenameModal] = useState(false)
+  const [renamingSku, setRenamingSku] = useState('')
+
+  // Create bundle modal state
+  const [showCreateBundleModal, setShowCreateBundleModal] = useState(false)
 
   useEffect(() => {
     loadData()
@@ -73,8 +86,22 @@ export function BundlesTab() {
     if (itemsResult.success) {
       setItems(itemsResult.data)
     }
+
     if (bundlesResult.success) {
-      setBundles(bundlesResult.data)
+      // Load components for each bundle
+      const bundlesWithComponents = await Promise.all(
+        bundlesResult.data.map(async (bundle) => {
+          const componentsResult = await getBundleComponents(bundle.sku_internal)
+          if (componentsResult.success && componentsResult.data.length > 0) {
+            const summary = componentsResult.data
+              .map((c: BundleComponent) => `${c.component_sku} x${c.quantity}`)
+              .join(', ')
+            return { ...bundle, components_summary: summary }
+          }
+          return { ...bundle, components_summary: '-' }
+        })
+      )
+      setBundles(bundlesWithComponents)
     }
     setLoading(false)
   }
@@ -149,10 +176,30 @@ export function BundlesTab() {
 
     if (result.success) {
       alert('บันทึก Bundle Recipe สำเร็จ')
+      // Reload data to refresh components summary
+      loadData()
     } else {
       alert('เกิดข้อผิดพลาด: ' + result.error)
     }
     setSaving(false)
+  }
+
+  function handleEditBundle(bundleSku: string) {
+    setSelectedBundle(bundleSku)
+    loadBundleComponents(bundleSku)
+  }
+
+  function openRenameModal(bundleSku: string) {
+    setRenamingSku(bundleSku)
+    setShowRenameModal(true)
+  }
+
+  function handleRenameSuccess() {
+    loadData()
+  }
+
+  function handleCreateBundleSuccess() {
+    loadData()
   }
 
   return (
@@ -275,7 +322,13 @@ export function BundlesTab() {
       </Card>
 
       <div>
-        <h3 className="text-lg font-semibold mb-4">Bundle List</h3>
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-lg font-semibold">Bundle List</h3>
+          <Button onClick={() => setShowCreateBundleModal(true)}>
+            <Plus className="w-4 h-4 mr-2" />
+            สร้าง Bundle
+          </Button>
+        </div>
         {loading ? (
           <p className="text-center py-8 text-muted-foreground">กำลังโหลด...</p>
         ) : bundles.length === 0 ? (
@@ -287,8 +340,10 @@ export function BundlesTab() {
             <TableHeader>
               <TableRow>
                 <TableHead>Bundle SKU</TableHead>
-                <TableHead>Product Name</TableHead>
+                <TableHead>Bundle Name</TableHead>
                 <TableHead className="text-right">Base Cost</TableHead>
+                <TableHead>Components</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -299,12 +354,51 @@ export function BundlesTab() {
                   <TableCell className="text-right">
                     {bundle.base_cost_per_unit.toFixed(2)}
                   </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {bundle.components_summary || '-'}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleEditBundle(bundle.sku_internal)}
+                        title="Edit Recipe"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => openRenameModal(bundle.sku_internal)}
+                        title="Rename Bundle SKU"
+                      >
+                        <FileEdit className="w-4 h-4 text-orange-600" />
+                      </Button>
+                    </div>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         )}
       </div>
+
+      {/* Create Bundle Modal */}
+      <CreateBundleModal
+        open={showCreateBundleModal}
+        onOpenChange={setShowCreateBundleModal}
+        onSuccess={handleCreateBundleSuccess}
+      />
+
+      {/* Rename SKU Modal */}
+      <RenameSkuModal
+        open={showRenameModal}
+        onOpenChange={setShowRenameModal}
+        currentSku={renamingSku}
+        skuType="bundle"
+        onSuccess={handleRenameSuccess}
+      />
     </div>
   )
 }
