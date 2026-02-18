@@ -1094,6 +1094,63 @@ Orders without tracking_number column but with metadata.tracking_id:
 
 ---
 
+## ✅ Feature 8: CEO Commission — Import from Bank + Source Accounts Setting
+
+**Files Changed:**
+- (TBD)
+**Commit:** `??? - feat(ceo-commission): add strict bank sources + import-from-bank declare flow`
+
+### Test Cases:
+
+#### 8.1 Source Accounts Setting (Strict)
+- [ ] Go to `/ceo-commission`
+- [ ] Verify section “แหล่งเงิน CEO Commission (บัญชีต้นทาง)” แสดง
+- [ ] Verify ถ้ายังไม่เลือกบัญชี → แสดง warning / empty state
+- [ ] เลือก 1 bank account → กดบันทึก
+- [ ] Refresh หน้า → ต้องยังเลือกอยู่ (state มาจาก DB ไม่ใช้ localStorage)
+
+#### 8.2 Import Candidate List (Source Filter)
+- [ ] Import bank statement ให้มีเงินเข้า 2 บัญชี
+- [ ] ตั้ง source = เฉพาะบัญชี A
+- [ ] กด “ดึงจากธนาคาร” → ต้องเห็นเฉพาะ txn ของบัญชี A
+- [ ] เปลี่ยน source = บัญชี B → ต้องสลับรายการตาม
+- [ ] เลือก source 2 บัญชี → ต้องรวมรายการทั้งสอง
+
+#### 8.3 Declare → Create Receipt + Link bank_transaction_id
+- [ ] เลือก txn เงินเข้า 10,000
+- [ ] กรอก personal=2,000 transfer=8,000
+- [ ] Confirm
+- [ ] Verify แถวใหม่ใน `ceo_commission_receipts` และ `bank_transaction_id` ไม่ null
+
+#### 8.4 Validation
+- [ ] personal+transfer != gross → ต้อง error
+- [ ] personal < 0 หรือ transfer < 0 → ต้อง error
+- [ ] transfer = 0 ได้ (ไม่สร้าง director loan top-up)
+
+#### 8.5 Idempotency / Duplicate Protection (Critical)
+- [ ] พยายาม declare txn เดิมอีกครั้ง
+- [ ] Expected: txn ไม่โผล่ใน candidate แล้ว หรือระบบบล็อกด้วย unique constraint
+- [ ] Verify ไม่มี wallet_ledger ซ้ำ
+
+#### 8.6 Wallet Integration (Director Loan)
+- [ ] เมื่อ transfer > 0 → ต้องมี wallet_ledger TOP_UP = transfer
+- [ ] Director Loan Balance card ต้องสะท้อนยอดนี้
+
+#### 8.7 Company Cashflow / P&L No-impact
+- [ ] ไป `/company-cashflow` → ต้องเห็น inflow เพิ่มตาม transfer (ตาม logic ของระบบ)
+- [ ] ไป `/daily-pl` → ต้องไม่เปลี่ยน
+
+#### 8.8 RLS Verification
+- [ ] Login as User A → ตั้ง source + declare แล้ว
+- [ ] Logout → Login as User B → เข้า `/ceo-commission`
+- [ ] Verify ไม่เห็น source/receipts ของ A
+- [ ] Verify “ดึงจากธนาคาร” ไม่เห็น txn ของ A (RLS bank_transactions)
+
+#### 8.9 Export CSV
+- [ ] Export CSV แล้วไฟล์ต้องตรงกับ filter + มี BOM + timezone ไทย
+
+---
+
 ## 🔍 Cross-Feature Integration Tests
 
 ### INT-1: Expenses + Audit Logs
@@ -1150,6 +1207,14 @@ Orders without tracking_number column but with metadata.tracking_id:
 - [ ] Go to Returns page
 - [ ] Search by imported tracking number
 - [ ] Verify order found immediately
+
+### INT-10: Bank Statement → CEO Commission Declare → Wallet → Company Cashflow
+- [ ] Import bank statement (มีเงินเข้า)
+- [ ] ไป `/ceo-commission` → ตั้ง Source Accounts
+- [ ] กด “ดึงจากธนาคาร” → เลือก txn แล้ว Declare (personal/transfer)
+- [ ] Verify wallet_ledger มี TOP_UP Director Loan ตาม transfer
+- [ ] Verify `/company-cashflow` สะท้อน inflow ตาม transfer
+- [ ] Verify `/daily-pl` ไม่เปลี่ยน
 
 ---
 
