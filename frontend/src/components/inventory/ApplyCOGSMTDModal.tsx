@@ -18,7 +18,12 @@ import {
   AlertTitle,
 } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, AlertCircle, CheckCircle2, Calendar } from 'lucide-react'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
+import { Loader2, AlertCircle, CheckCircle2, Calendar, ChevronDown } from 'lucide-react'
 import { applyCOGSMTD } from '@/app/(dashboard)/inventory/actions'
 import { getTodayBangkokString, getFirstDayOfMonthBangkokString } from '@/lib/bangkok-date-range'
 
@@ -26,12 +31,14 @@ interface ApplyCOGSMTDModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSuccess?: () => void
+  onViewRunDetails?: (runId: string, summary: any) => void
 }
 
 export function ApplyCOGSMTDModal({
   open,
   onOpenChange,
   onSuccess,
+  onViewRunDetails,
 }: ApplyCOGSMTDModalProps) {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<any>(null)
@@ -268,8 +275,95 @@ export function ApplyCOGSMTDModal({
                 </div>
               </div>
 
-              {/* Error List */}
-              {result.errors && result.errors.length > 0 && (
+              {/* Run ID and View Details Button */}
+              {result.run_id && (
+                <div className="border rounded-md p-4 bg-muted/30 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Run ID</p>
+                      <p className="text-xs font-mono text-blue-600">{result.run_id}</p>
+                    </div>
+                    {onViewRunDetails && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onViewRunDetails(result.run_id, {
+                          start_date: startDate,
+                          end_date: endDate,
+                          method: 'FIFO',
+                          total: result.total,
+                          successful: result.successful,
+                          skipped: result.skipped,
+                          failed: result.failed,
+                        })}
+                      >
+                        View Run Details
+                      </Button>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    บันทึกรายละเอียดของการรันนี้ไว้แล้ว สามารถดูรายละเอียด Order-level และ Export ได้
+                  </p>
+                </div>
+              )}
+
+              {/* Skip Reasons Breakdown */}
+              {result.skip_reasons && result.skip_reasons.length > 0 && (
+                <Collapsible className="space-y-2 border rounded-md p-4">
+                  <CollapsibleTrigger className="flex items-center justify-between w-full">
+                    <div className="flex items-center gap-2">
+                      <ChevronDown className="h-4 w-4" />
+                      <p className="text-sm font-semibold">
+                        Skip Reasons Breakdown ({result.skip_reasons.length} categories)
+                      </p>
+                    </div>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="space-y-3 pt-3">
+                    {result.skip_reasons.map((reason: any, idx: number) => (
+                      <div
+                        key={idx}
+                        className="border-l-4 border-yellow-500 pl-3 py-2 bg-yellow-50/50"
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="font-semibold text-sm">{reason.label}</p>
+                          <Badge variant="secondary">{reason.count} orders</Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground mb-2">
+                          Code: <span className="font-mono">{reason.code}</span>
+                        </p>
+                        {reason.samples && reason.samples.length > 0 && (
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium">
+                              ตัวอย่าง (แสดง {reason.samples.length} รายการแรก):
+                            </p>
+                            {reason.samples.map((sample: any, sIdx: number) => (
+                              <div
+                                key={sIdx}
+                                className="text-xs flex items-center gap-2 bg-white rounded px-2 py-1"
+                              >
+                                <span className="font-mono text-blue-600">
+                                  {sample.order_id}
+                                </span>
+                                {sample.sku && (
+                                  <span className="text-muted-foreground">
+                                    SKU: {sample.sku}
+                                  </span>
+                                )}
+                                {sample.detail && (
+                                  <span className="text-orange-600">{sample.detail}</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </CollapsibleContent>
+                </Collapsible>
+              )}
+
+              {/* Legacy Error List (fallback if skip_reasons not available) */}
+              {!result.skip_reasons && result.errors && result.errors.length > 0 && (
                 <div className="space-y-2">
                   <p className="text-sm font-semibold">
                     Errors/Skipped Details ({result.errors.length}):

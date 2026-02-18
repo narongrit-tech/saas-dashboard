@@ -14,12 +14,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Package } from 'lucide-react'
+import { Package, Search } from 'lucide-react'
 import { formatBangkok } from '@/lib/bangkok-time'
 import { getTodayBangkokString, getFirstDayOfMonthBangkokString } from '@/lib/bangkok-date-range'
 import { getReceiptLayers, getCOGSAllocations, checkIsInventoryAdmin } from '@/app/(dashboard)/inventory/actions'
 import { ApplyCOGSMTDModal } from '@/components/inventory/ApplyCOGSMTDModal'
 import { COGSCoveragePanel } from '@/components/inventory/COGSCoveragePanel'
+import { RunHistorySection } from '@/components/inventory/RunHistorySection'
+import { RunDetailsModal } from '@/components/inventory/RunDetailsModal'
 
 interface ReceiptLayer {
   id: string
@@ -54,6 +56,17 @@ export function MovementsTab() {
   const [startDate, setStartDate] = useState(getFirstDayOfMonthBangkokString())
   const [endDate, setEndDate] = useState(getTodayBangkokString())
 
+  // Order ID search
+  const [orderIdSearch, setOrderIdSearch] = useState('')
+
+  // Run Details Modal
+  const [showRunDetailsModal, setShowRunDetailsModal] = useState(false)
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [selectedRunSummary, setSelectedRunSummary] = useState<any>(null)
+
+  // Refresh trigger for run history
+  const [runHistoryRefresh, setRunHistoryRefresh] = useState(0)
+
   useEffect(() => {
     loadData()
     checkAdmin()
@@ -82,6 +95,24 @@ export function MovementsTab() {
     }
   }
 
+  function handleViewRunDetails(runId: string, summary: any) {
+    setSelectedRunId(runId)
+    setSelectedRunSummary(summary)
+    setShowRunDetailsModal(true)
+  }
+
+  function handleCOGSSuccess() {
+    loadData()
+    setRunHistoryRefresh(prev => prev + 1)
+  }
+
+  // Filter allocations by Order ID search
+  const filteredAllocations = orderIdSearch.trim()
+    ? allocations.filter(alloc =>
+        alloc.order_id.toLowerCase().includes(orderIdSearch.toLowerCase().trim())
+      )
+    : allocations
+
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
@@ -93,6 +124,7 @@ export function MovementsTab() {
           <TabsTrigger value="coverage">Coverage Check</TabsTrigger>
           <TabsTrigger value="layers">Receipt Layers</TabsTrigger>
           <TabsTrigger value="allocations">COGS Allocations</TabsTrigger>
+          <TabsTrigger value="runhistory">Run History</TabsTrigger>
         </TabsList>
 
         <TabsContent value="coverage" className="space-y-4">
@@ -182,11 +214,35 @@ export function MovementsTab() {
         </TabsContent>
 
         <TabsContent value="allocations">
+          {/* Order ID Search */}
+          <div className="mb-4">
+            <Label htmlFor="orderIdSearch">Search by Order ID</Label>
+            <div className="relative">
+              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                id="orderIdSearch"
+                placeholder="ค้นหา Order ID..."
+                value={orderIdSearch}
+                onChange={(e) => setOrderIdSearch(e.target.value)}
+                className="pl-8"
+              />
+            </div>
+            {orderIdSearch.trim() && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Found {filteredAllocations.length} of {allocations.length} allocations
+              </p>
+            )}
+          </div>
+
           {loading ? (
             <p className="text-center py-8 text-muted-foreground">กำลังโหลด...</p>
           ) : allocations.length === 0 ? (
             <p className="text-center py-8 text-muted-foreground">
               ยังไม่มี COGS Allocations ในระบบ
+            </p>
+          ) : filteredAllocations.length === 0 ? (
+            <p className="text-center py-8 text-muted-foreground">
+              ไม่พบ Order ID ที่ค้นหา
             </p>
           ) : (
             <div className="rounded-md border">
@@ -204,7 +260,7 @@ export function MovementsTab() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {allocations.map((alloc) => (
+                  {filteredAllocations.map((alloc) => (
                     <TableRow key={alloc.id}>
                       <TableCell className="font-mono">{alloc.order_id}</TableCell>
                       <TableCell className="font-mono">{alloc.sku_internal}</TableCell>
@@ -249,6 +305,13 @@ export function MovementsTab() {
             </div>
           )}
         </TabsContent>
+
+        <TabsContent value="runhistory">
+          <RunHistorySection
+            onViewDetails={handleViewRunDetails}
+            refreshTrigger={runHistoryRefresh}
+          />
+        </TabsContent>
       </Tabs>
 
       <div className="flex justify-end gap-2">
@@ -271,9 +334,17 @@ export function MovementsTab() {
         <ApplyCOGSMTDModal
           open={showCOGSMTDModal}
           onOpenChange={setShowCOGSMTDModal}
-          onSuccess={loadData}
+          onSuccess={handleCOGSSuccess}
+          onViewRunDetails={handleViewRunDetails}
         />
       )}
+
+      <RunDetailsModal
+        open={showRunDetailsModal}
+        onOpenChange={setShowRunDetailsModal}
+        runId={selectedRunId}
+        runSummary={selectedRunSummary}
+      />
     </div>
   )
 }
