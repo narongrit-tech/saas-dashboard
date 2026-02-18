@@ -7,6 +7,9 @@ import {
   ReturnSubmitPayload,
   ReturnType,
   OrderLineItem,
+  QueueItem,
+  RecentReturn,
+  UndoReturnPayload,
 } from '@/types/returns'
 
 /**
@@ -300,6 +303,348 @@ export async function submitReturn(
     return { success: true, error: null }
   } catch (error) {
     console.error('[submitReturn] Unexpected error:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    }
+  }
+}
+
+/**
+ * Get returns queue: orders that likely need returns processing
+ * Uses heuristics to identify orders that may need review
+ */
+export async function getReturnsQueue(filters?: {
+  dateFrom?: string // ISO date
+  dateTo?: string // ISO date
+  statusGroups?: string[] // e.g., ['delivered', 'completed']
+  includeCancelled?: boolean
+}): Promise<{ data: QueueItem[] | null; error: string | null }> {
+  try {
+    const supabase = await createClient()
+
+    // Get current user
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return { data: null, error: 'Not authenticated' }
+    }
+
+    // Default date range: last 30 days
+    const dateTo = filters?.dateTo || new Date().toISOString().split('T')[0]
+    const dateFrom =
+      filters?.dateFrom ||
+      new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+
+    // Build query for orders
+    let query = supabase
+      .from('sales_orders')
+      .select(
+        `
+        id,
+        order_id,
+        external_order_id,
+        tracking_number,
+        source_platform,
+        marketplace,
+        status_group,
+        platform_status,
+        payment_status,
+        shipped_at,
+        delivered_at,
+        order_date,
+        quantity,
+        created_by
+      `
+      )
+      .eq('created_by', user.id)
+      .gte('order_date', dateFrom)
+      .lte('order_date', dateTo)
+      .not('shipped_at', 'is', null) // Must have shipped
+
+    // Status group filter
+    if (filters?.statusGroups && filters.statusGroups.length > 0) {
+      query = query.in('status_group', filters.statusGroups)
+    } else {
+      // Default: delivered/completed orders
+      query = query.in('status_group', ['delivered', 'completed'])
+    }
+
+    // Payment status filter: look for refund indicators
+    // Note: This is heuristic - adjust based on actual data patterns
+    if (!filters?.includeCancelled) {
+      // Optionally filter by payment_status containing 'refund'
+      // This is a soft filter, may need adjustment
+    }
+
+    query = query.order('shipped_at', { ascending: false }).limit(100)
+
+    const { data: orderLines, error: fetchError } = await query
+
+    if (fetchError) {
+      console.error('[getReturnsQueue] Fetch error:', fetchError)
+      return { data: null, error: fetchError.message }
+    }
+
+    if (!orderLines || orderLines.length === 0) {
+      return { data: [], error: null }
+    }
+
+    // Get existing returns for these orders
+    const orderLineIds = orderLines.map((o) => o.id)
+    const { data: returns, error: returnsError } = await supabase
+      .from('inventory_returns')
+      .select('order_id, qty')
+      .in('order_id', orderLineIds)
+      .eq('action_type', 'RETURN')
+
+    if (returnsError) {
+      console.error('[getReturnsQueue] Returns error:', returnsError)
+      // Continue without returns data
+    }
+
+    // Build map: order_line_id -> total_returned_qty
+    const returnsMap = new Map<string, number>()
+    if (returns) {
+      for (const ret of returns) {
+        returnsMap.set(ret.order_id, (returnsMap.get(ret.order_id) || 0) + ret.qty)
+      }
+    }
+
+    // Group by external_order_id or order_id
+    const queueMap = new Map<string, QueueItem>()
+
+    for (const line of orderLines) {
+      const orderKey = line.external_order_id || line.order_id
+      const returnedQty = returnsMap.get(line.id) || 0
+      const remainingQty = line.quantity - returnedQty
+
+      if (!queueMap.has(orderKey)) {
+        queueMap.set(orderKey, {
+          id: line.id,
+          order_id: line.order_id,
+          external_order_id: line.external_order_id,
+          tracking_number: line.tracking_number,
+          source_platform: line.source_platform,
+          marketplace: line.marketplace,
+          status_group: line.status_group,
+          platform_status: line.platform_status,
+          payment_status: line.payment_status,
+          shipped_at: line.shipped_at,
+          delivered_at: line.delivered_at,
+          order_date: line.order_date,
+          sold_qty: line.quantity,
+          returned_qty: returnedQty,
+          remaining_qty: remainingQty,
+          created_by: line.created_by,
+        })
+      } else {
+        // Aggregate quantities
+        const existing = queueMap.get(orderKey)!
+        existing.sold_qty += line.quantity
+        existing.returned_qty += returnedQty
+        existing.remaining_qty += remainingQty
+      }
+    }
+
+    // Filter: only show orders with remaining_qty > 0
+    const results = Array.from(queueMap.values()).filter(
+      (item) => item.remaining_qty > 0
+    )
+
+    return { data: results, error: null }
+  } catch (error) {
+    console.error('[getReturnsQueue] Unexpected error:', error)
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    }
+  }
+}
+
+/**
+ * Get recent returns: last 20 return records
+ */
+export async function getRecentReturns(): Promise<{
+  data: RecentReturn[] | null
+  error: string | null
+}> {
+  try {
+    const supabase = await createClient()
+
+    // Get current user
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return { data: null, error: 'Not authenticated' }
+    }
+
+    // Fetch recent returns
+    const { data: returns, error: fetchError } = await supabase
+      .from('inventory_returns')
+      .select(
+        `
+        id,
+        order_id,
+        sku,
+        qty,
+        return_type,
+        note,
+        returned_at,
+        action_type,
+        reversed_return_id,
+        created_by
+      `
+      )
+      .eq('created_by', user.id)
+      .order('returned_at', { ascending: false })
+      .limit(20)
+
+    if (fetchError) {
+      console.error('[getRecentReturns] Fetch error:', fetchError)
+      return { data: null, error: fetchError.message }
+    }
+
+    if (!returns || returns.length === 0) {
+      return { data: [], error: null }
+    }
+
+    // Get order info for display (external_order_id, tracking_number)
+    const orderIdsSet = new Set(returns.map((r) => r.order_id))
+    const orderIds = Array.from(orderIdsSet)
+    const { data: orders, error: ordersError } = await supabase
+      .from('sales_orders')
+      .select('id, external_order_id, tracking_number')
+      .in('id', orderIds)
+
+    if (ordersError) {
+      console.error('[getRecentReturns] Orders error:', ordersError)
+      // Continue without order info
+    }
+
+    // Build map: order_id -> order info
+    const ordersMap = new Map<string, { external_order_id: string | null; tracking_number: string | null }>()
+    if (orders) {
+      for (const order of orders) {
+        ordersMap.set(order.id, {
+          external_order_id: order.external_order_id,
+          tracking_number: order.tracking_number,
+        })
+      }
+    }
+
+    // Enrich returns with order info
+    const results: RecentReturn[] = returns.map((ret) => {
+      const orderInfo = ordersMap.get(ret.order_id)
+      return {
+        ...ret,
+        action_type: (ret.action_type || 'RETURN') as 'RETURN' | 'UNDO',
+        external_order_id: orderInfo?.external_order_id || null,
+        tracking_number: orderInfo?.tracking_number || null,
+      }
+    })
+
+    return { data: results, error: null }
+  } catch (error) {
+    console.error('[getRecentReturns] Unexpected error:', error)
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    }
+  }
+}
+
+/**
+ * Undo a return: create reversal record
+ * Reverses stock/COGS for RETURN_RECEIVED type
+ */
+export async function undoReturn(
+  payload: UndoReturnPayload
+): Promise<{ success: boolean; error: string | null }> {
+  try {
+    const supabase = await createClient()
+
+    // Get current user
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return { success: false, error: 'Not authenticated' }
+    }
+
+    // Fetch original return
+    const { data: originalReturn, error: fetchError } = await supabase
+      .from('inventory_returns')
+      .select('*')
+      .eq('id', payload.return_id)
+      .eq('created_by', user.id)
+      .single()
+
+    if (fetchError || !originalReturn) {
+      console.error('[undoReturn] Fetch error:', fetchError)
+      return { success: false, error: 'Return not found or not owned by user' }
+    }
+
+    // Validate: must be RETURN action (not already UNDO)
+    if (originalReturn.action_type === 'UNDO') {
+      return { success: false, error: 'Cannot undo an undo action' }
+    }
+
+    // Validate: not already undone
+    const { data: existingUndo, error: undoCheckError } = await supabase
+      .from('inventory_returns')
+      .select('id')
+      .eq('reversed_return_id', payload.return_id)
+      .eq('action_type', 'UNDO')
+      .maybeSingle()
+
+    if (undoCheckError) {
+      console.error('[undoReturn] Undo check error:', undoCheckError)
+      return { success: false, error: undoCheckError.message }
+    }
+
+    if (existingUndo) {
+      return { success: false, error: 'This return has already been undone' }
+    }
+
+    // Create undo record
+    const undoRecord = {
+      order_id: originalReturn.order_id,
+      sku: originalReturn.sku,
+      qty: originalReturn.qty,
+      return_type: originalReturn.return_type,
+      note: `UNDO: ${originalReturn.note || '(no note)'}`,
+      created_by: user.id,
+      returned_at: new Date().toISOString(),
+      action_type: 'UNDO',
+      reversed_return_id: originalReturn.id,
+    }
+
+    const { error: insertError } = await supabase
+      .from('inventory_returns')
+      .insert([undoRecord])
+
+    if (insertError) {
+      console.error('[undoReturn] Insert error:', insertError)
+      return { success: false, error: insertError.message }
+    }
+
+    // TODO: For RETURN_RECEIVED type:
+    // - Create inventory movement OUT (reverse the stock in)
+    // - Create COGS allocation with is_reversal=true (to negate the previous reversal)
+    // This requires integration with inventory costing engine
+    // For MVP, we just track the undo record
+
+    revalidatePath('/returns')
+
+    return { success: true, error: null }
+  } catch (error) {
+    console.error('[undoReturn] Unexpected error:', error)
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',

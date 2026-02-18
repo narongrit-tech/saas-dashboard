@@ -5,10 +5,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Loader2, Search, X, ArrowLeftCircle, Package } from 'lucide-react'
 import { OrderSearchResult } from '@/types/returns'
 import { searchOrdersForReturn } from './actions'
 import { ReturnDrawer } from '@/components/returns/ReturnDrawer'
+import { QueueTab } from '@/components/returns/QueueTab'
+import { RecentTab } from '@/components/returns/RecentTab'
 
 export default function ReturnsPage() {
   const [query, setQuery] = useState('')
@@ -17,6 +20,7 @@ export default function ReturnsPage() {
   const [error, setError] = useState<string | null>(null)
   const [selectedOrder, setSelectedOrder] = useState<OrderSearchResult | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState('search')
 
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -25,15 +29,15 @@ export default function ReturnsPage() {
     inputRef.current?.focus()
   }, [])
 
-  // Refocus after drawer closes
+  // Refocus after drawer closes (only if on search tab)
   useEffect(() => {
-    if (!drawerOpen) {
+    if (!drawerOpen && activeTab === 'search') {
       // Small delay to ensure drawer animation completes
       setTimeout(() => {
         inputRef.current?.focus()
       }, 100)
     }
-  }, [drawerOpen])
+  }, [drawerOpen, activeTab])
 
   const handleSearch = async () => {
     if (!query.trim()) {
@@ -104,6 +108,21 @@ export default function ReturnsPage() {
     // Refocus handled by useEffect
   }
 
+  const handleQueueSelect = (order: OrderSearchResult) => {
+    setSelectedOrder(order)
+    setDrawerOpen(true)
+  }
+
+  const handleTabChange = (value: string) => {
+    setActiveTab(value)
+    // If switching to search tab, refocus input
+    if (value === 'search') {
+      setTimeout(() => {
+        inputRef.current?.focus()
+      }, 100)
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -114,73 +133,92 @@ export default function ReturnsPage() {
         </p>
       </div>
 
-      {/* Search Section */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <ArrowLeftCircle className="h-5 w-5" />
-            ค้นหา Order
-          </CardTitle>
-          <CardDescription>
-            สแกนหรือพิมพ์ Order ID / Tracking Number (กด Enter เพื่อค้นหา)
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Input
-                ref={inputRef}
-                type="text"
-                placeholder="Scan or type Order ID / Tracking Number..."
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={handleKeyDown}
-                disabled={searching}
-                className="h-14 text-lg pr-10"
-                autoFocus
-              />
-              {query && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 h-8 w-8 p-0"
-                  onClick={handleClear}
+      {/* Main Content: Search + Tabs */}
+      <Tabs value={activeTab} onValueChange={handleTabChange}>
+        {/* Search Card - Always visible */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ArrowLeftCircle className="h-5 w-5" />
+              ค้นหา Order
+            </CardTitle>
+            <CardDescription>
+              สแกนหรือพิมพ์ Order ID / Tracking Number (กด Enter เพื่อค้นหา)
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Input
+                  ref={inputRef}
+                  type="text"
+                  placeholder="Scan or type Order ID / Tracking Number..."
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={handleKeyDown}
                   disabled={searching}
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              )}
+                  className="h-14 text-lg pr-10"
+                  autoFocus
+                />
+                {query && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 h-8 w-8 p-0"
+                    onClick={handleClear}
+                    disabled={searching}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+              <Button
+                onClick={handleSearch}
+                disabled={!query.trim() || searching}
+                size="lg"
+                className="h-14 px-8"
+              >
+                {searching ? (
+                  <>
+                    <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                    กำลังค้นหา...
+                  </>
+                ) : (
+                  <>
+                    <Search className="mr-2 h-5 w-5" />
+                    ค้นหา
+                  </>
+                )}
+              </Button>
             </div>
-            <Button
-              onClick={handleSearch}
-              disabled={!query.trim() || searching}
-              size="lg"
-              className="h-14 px-8"
-            >
-              {searching ? (
-                <>
-                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                  กำลังค้นหา...
-                </>
-              ) : (
-                <>
-                  <Search className="mr-2 h-5 w-5" />
-                  ค้นหา
-                </>
-              )}
-            </Button>
-          </div>
 
-          {/* Error message */}
-          {error && (
-            <div className="mt-4 p-4 bg-destructive/10 text-destructive rounded-lg">
-              {error}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            {/* Error message */}
+            {error && (
+              <div className="mt-4 p-4 bg-destructive/10 text-destructive rounded-lg">
+                {error}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-      {/* Search Results */}
+        {/* Tabs */}
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="queue">รอเช็ค (Queue)</TabsTrigger>
+          <TabsTrigger value="recent">คืนล่าสุด (Recent)</TabsTrigger>
+        </TabsList>
+
+        {/* Queue Tab Content */}
+        <TabsContent value="queue">
+          <QueueTab onSelectOrder={handleQueueSelect} />
+        </TabsContent>
+
+        {/* Recent Tab Content */}
+        <TabsContent value="recent">
+          <RecentTab />
+        </TabsContent>
+      </Tabs>
+
+      {/* Search Results (shown when searching from top) */}
       {searchResults.length > 1 && (
         <Card>
           <CardHeader>
