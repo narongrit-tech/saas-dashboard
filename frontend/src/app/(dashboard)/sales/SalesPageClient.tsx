@@ -34,6 +34,7 @@ import { AddOrderDialog } from '@/components/sales/AddOrderDialog'
 import { EditOrderDialog } from '@/components/sales/EditOrderDialog'
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
 import { SalesImportDialog } from '@/components/sales/SalesImportDialog'
+import { ShopeeOrdersImportDialog } from '@/components/sales/ShopeeOrdersImportDialog'
 import { ResetTikTokDialog } from '@/components/sales/ResetTikTokDialog'
 import { OrderDetailDrawer } from '@/components/sales/OrderDetailDrawer'
 import { ApplyCOGSMTDModal } from '@/components/inventory/ApplyCOGSMTDModal'
@@ -97,6 +98,7 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
   const [showEditDialog, setShowEditDialog] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showImportDialog, setShowImportDialog] = useState(false)
+  const [showShopeeImportDialog, setShowShopeeImportDialog] = useState(false)
   const [showAffiliateImportDialog, setShowAffiliateImportDialog] = useState(false)
   const [showResetDialog, setShowResetDialog] = useState(false)
   const [showCOGSMTDModal, setShowCOGSMTDModal] = useState(false)
@@ -266,7 +268,17 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
           return
         }
 
-        const result = await getSalesGMVSummary(filters.startDate, filters.endDate)
+        const result = await getSalesGMVSummary(
+          {
+            sourcePlatform: filters.sourcePlatform,
+            status: filters.status,
+            paymentStatus: filters.paymentStatus,
+            startDate: filters.startDate,
+            endDate: filters.endDate,
+            search: filters.search,
+          },
+          dateBasis
+        )
 
         // Guard: discard stale responses
         if (signal.isStale) return
@@ -666,6 +678,7 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
         data={gmvSummary}
         loading={gmvSummaryLoading}
         error={gmvSummaryError}
+        dateBasis={dateBasis}
       />
 
       {/* DEBUG CHIP (Dev Only) */}
@@ -853,7 +866,11 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
         </Button>
         <Button variant="outline" onClick={() => setShowImportDialog(true)}>
           <FileUp className="mr-2 h-4 w-4" />
-          Import Sales
+          Import TikTok
+        </Button>
+        <Button variant="outline" onClick={() => setShowShopeeImportDialog(true)}>
+          <FileUp className="mr-2 h-4 w-4" />
+          Import Shopee
         </Button>
         <Button variant="outline" onClick={() => setShowAffiliateImportDialog(true)}>
           <Link className="mr-2 h-4 w-4" />
@@ -1191,6 +1208,12 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
       <SalesImportDialog
         open={showImportDialog}
         onOpenChange={setShowImportDialog}
+        onSuccess={fetchOrders}
+      />
+
+      <ShopeeOrdersImportDialog
+        open={showShopeeImportDialog}
+        onOpenChange={setShowShopeeImportDialog}
         onSuccess={fetchOrders}
       />
 

@@ -1967,24 +1967,34 @@ export interface GMVSummaryResult {
 }
 
 /**
- * Get GMV summary for date range (B, C, Leakage metrics)
+ * Get GMV summary filtered by the same criteria as the orders table.
  *
- * @param startDate - Start date (Bangkok timezone, YYYY-MM-DD)
- * @param endDate - End date (Bangkok timezone, YYYY-MM-DD)
- * @returns GMV summary with B (created), C (fulfilled), and leakage
+ * COHORT APPROACH: Both Created and Fulfilled are computed from ONE cohort
+ * of orders (defined by the selected date range + date basis). Fulfilled is
+ * the subset of the cohort where shipped_at IS NOT NULL and status_group !=
+ * 'ยกเลิกแล้ว'. This guarantees leakage = created − fulfilled ≥ 0 always.
+ *
+ * GMV per order = COALESCE(order_amount, SUM(total_amount per line)):
+ *   - order_amount: written to sales_orders by the importer when available
+ *   - SUM(total_amount): correct fallback for both Shopee (single-SKU) and
+ *     TikTok (multi-SKU, since total_amount = unit_price × qty per line)
  */
 export async function getSalesGMVSummary(
-  startDate: string,
-  endDate: string
+  filters: ExportFilters,
+  dateBasis: 'order' | 'paid' = 'order'
 ): Promise<GMVSummaryResult> {
   noStore() // Prevent caching for real-time GMV data
   const startedAt = Date.now()
-  let rowCount = 0
   let requestError: string | null = null
 
   console.log('[Sales][getSalesGMVSummary] start', {
-    startDate,
-    endDate,
+    startDate: filters.startDate,
+    endDate: filters.endDate,
+    sourcePlatform: filters.sourcePlatform || 'all',
+    dateBasis,
+    hasStatus: Boolean(filters.status?.length),
+    paymentStatus: filters.paymentStatus || 'all',
+    hasSearch: Boolean(filters.search?.trim()),
   })
 
   try {
@@ -1999,70 +2009,148 @@ export async function getSalesGMVSummary(
       return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
     }
 
-    // Query sales_gmv_daily_summary view
-    const { data, error } = await supabase
-      .from('sales_gmv_daily_summary')
-      .select('*')
-      .eq('created_by', user.id)
-      .gte('date_bkk', startDate)
-      .lte('date_bkk', endDate)
-
-    if (error) {
-      console.error('Error fetching GMV summary:', error)
-      requestError = error.message
-      return { success: false, error: `เกิดข้อผิดพลาด: ${error.message}` }
-    }
-
-    rowCount = data?.length || 0
-
-    if (!data || data.length === 0) {
-      // No data for date range - return zeros
+    if (!filters.startDate || !filters.endDate) {
       return {
         success: true,
-        data: {
-          gmv_created: 0,
-          orders_created: 0,
-          gmv_fulfilled: 0,
-          orders_fulfilled: 0,
-          leakage_amount: 0,
-          leakage_pct: 0,
-        },
+        data: { gmv_created: 0, orders_created: 0, gmv_fulfilled: 0, orders_fulfilled: 0, leakage_amount: 0, leakage_pct: 0 },
       }
     }
 
-    // Aggregate across all days in range
-    const summary = data.reduce(
-      (acc, row) => {
-        acc.gmv_created += Number(row.gmv_created || 0)
-        acc.orders_created += Number(row.orders_created || 0)
-        acc.gmv_fulfilled += Number(row.gmv_fulfilled || 0)
-        acc.orders_fulfilled += Number(row.orders_fulfilled || 0)
-        return acc
-      },
-      {
-        gmv_created: 0,
-        orders_created: 0,
-        gmv_fulfilled: 0,
-        orders_fulfilled: 0,
-        leakage_amount: 0,
-        leakage_pct: 0,
+    // Compute end-of-day Bangkok as ISO string (avoids cutting off late-night orders)
+    const { toZonedTime } = await import('date-fns-tz')
+    const { endOfDay } = await import('date-fns')
+    const bangkokEndDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
+    const endOfDayISO = endOfDay(bangkokEndDate).toISOString()
+
+    // ===== Single cohort query =====
+    // Fetch all lines in date range with the fields needed for GMV computation.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let query: any = supabase
+      .from('sales_orders')
+      .select('external_order_id, order_id, order_amount, total_amount, shipped_at, status_group, created_time, order_date, paid_time')
+      .eq('created_by', user.id)
+
+    // Non-date filters
+    if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
+      query = query.eq('source_platform', filters.sourcePlatform)
+    }
+    if (filters.status && filters.status.length > 0) {
+      query = query.in('platform_status', filters.status)
+    }
+    if (filters.paymentStatus && filters.paymentStatus !== 'all') {
+      query = query.eq('payment_status', filters.paymentStatus)
+    }
+    if (filters.search && filters.search.trim()) {
+      query = query.or(
+        `order_id.ilike.%${filters.search}%,product_name.ilike.%${filters.search}%,external_order_id.ilike.%${filters.search}%`
+      )
+    }
+
+    // Date filter — defines the cohort
+    if (dateBasis === 'paid') {
+      // Paid basis: filter by paid_time; exclude unpaid rows
+      query = query
+        .not('paid_time', 'is', null)
+        .gte('paid_time', filters.startDate)
+        .lte('paid_time', endOfDayISO)
+    } else {
+      // Order basis: fetch by order_date (broader); COALESCE applied in TS below
+      query = query
+        .gte('order_date', filters.startDate)
+        .lte('order_date', endOfDayISO)
+    }
+
+    const { data: rawLines, error: queryError } = await query.limit(30000)
+    if (queryError) {
+      requestError = queryError.message
+      return { success: false, error: `เกิดข้อผิดพลาด: ${queryError.message}` }
+    }
+
+    // COALESCE(created_time, order_date) client-side date filter (order basis)
+    const allLines = rawLines || []
+    const cohortLines = dateBasis === 'order'
+      ? allLines.filter((line: { created_time?: string | null; order_date?: string | null }) => {
+          const effectiveDate = line.created_time || line.order_date
+          if (!effectiveDate) return false
+          const bangkokDateStr = toBangkokDateString(new Date(effectiveDate))
+          if (filters.startDate && bangkokDateStr < filters.startDate) return false
+          if (filters.endDate && bangkokDateStr > filters.endDate) return false
+          return true
+        })
+      : allLines
+
+    if (cohortLines.length === 0) {
+      return {
+        success: true,
+        data: { gmv_created: 0, orders_created: 0, gmv_fulfilled: 0, orders_fulfilled: 0, leakage_amount: 0, leakage_pct: 0 },
       }
-    )
+    }
 
-    // Calculate leakage
-    summary.leakage_amount = summary.gmv_created - summary.gmv_fulfilled
-    summary.leakage_pct =
-      summary.gmv_created > 0
-        ? (summary.leakage_amount / summary.gmv_created) * 100
-        : 0
+    // ===== Aggregate per order key =====
+    // GMV = COALESCE(order_amount, SUM(total_amount))
+    // Fulfilled = shipped_at IS NOT NULL AND status_group != 'ยกเลิกแล้ว'
+    interface OrderBucket {
+      order_amount_seen: number | null // First non-null order_amount from any line
+      line_total_sum: number           // SUM(total_amount) across all lines (fallback)
+      shipped_at: string | null
+      is_cancelled: boolean
+    }
 
-    // Round to 2 decimal places
-    summary.gmv_created = Math.round(summary.gmv_created * 100) / 100
-    summary.gmv_fulfilled = Math.round(summary.gmv_fulfilled * 100) / 100
-    summary.leakage_amount = Math.round(summary.leakage_amount * 100) / 100
-    summary.leakage_pct = Math.round(summary.leakage_pct * 100) / 100
+    const orderMap = new Map<string, OrderBucket>()
 
-    return { success: true, data: summary }
+    for (const line of cohortLines) {
+      const key = (line.external_order_id as string | null) || (line.order_id as string)
+      const lineTotal = Number(line.total_amount ?? 0)
+      const lineOrderAmt = line.order_amount != null ? Number(line.order_amount) : null
+      const lineShipped = (line.shipped_at as string | null) ?? null
+      const lineCancelled = (line.status_group as string | null) === 'ยกเลิกแล้ว'
+
+      const existing = orderMap.get(key)
+      if (!existing) {
+        orderMap.set(key, {
+          order_amount_seen: lineOrderAmt,
+          line_total_sum: lineTotal,
+          shipped_at: lineShipped,
+          is_cancelled: lineCancelled,
+        })
+      } else {
+        existing.line_total_sum += lineTotal
+        // Keep first non-null order_amount (same value repeated across lines)
+        if (existing.order_amount_seen == null && lineOrderAmt != null) {
+          existing.order_amount_seen = lineOrderAmt
+        }
+        // shipped_at: any line having it means order was shipped
+        if (!existing.shipped_at && lineShipped) existing.shipped_at = lineShipped
+        // Cancelled: any line with cancelled status poisons the whole order
+        if (lineCancelled) existing.is_cancelled = true
+      }
+    }
+
+    // Compute totals
+    let gmv_created = 0, orders_created = 0, gmv_fulfilled = 0, orders_fulfilled = 0
+
+    for (const data of Array.from(orderMap.values())) {
+      const gmv = data.order_amount_seen ?? data.line_total_sum
+      const is_fulfilled = !!data.shipped_at && !data.is_cancelled
+      gmv_created += gmv
+      orders_created++
+      if (is_fulfilled) {
+        gmv_fulfilled += gmv
+        orders_fulfilled++
+      }
+    }
+
+    gmv_created = Math.round(gmv_created * 100) / 100
+    gmv_fulfilled = Math.round(gmv_fulfilled * 100) / 100
+    const leakage_amount = Math.round((gmv_created - gmv_fulfilled) * 100) / 100
+    const leakage_pct = gmv_created > 0
+      ? Math.round((leakage_amount / gmv_created) * 100 * 100) / 100
+      : 0
+
+    return {
+      success: true,
+      data: { gmv_created, orders_created, gmv_fulfilled, orders_fulfilled, leakage_amount, leakage_pct },
+    }
   } catch (error) {
     console.error('Unexpected error in getSalesGMVSummary:', error)
     requestError = error instanceof Error ? error.message : 'unknown error'
@@ -2073,9 +2161,9 @@ export async function getSalesGMVSummary(
   } finally {
     console.log('[Sales][getSalesGMVSummary] end', {
       durationMs: Date.now() - startedAt,
-      startDate,
-      endDate,
-      rowCount,
+      startDate: filters.startDate,
+      endDate: filters.endDate,
+      dateBasis,
       error: requestError,
     })
   }

@@ -13,9 +13,10 @@ interface GMVCardsProps {
   data: GMVSummary | null
   loading: boolean
   error: string | null
+  dateBasis?: 'order' | 'paid'
 }
 
-export function GMVCards({ data, loading, error }: GMVCardsProps) {
+export function GMVCards({ data, loading, error, dateBasis = 'order' }: GMVCardsProps) {
   // Format currency helper
   const formatCurrency = (amount: number) => {
     return amount.toLocaleString('th-TH', {
@@ -76,7 +77,7 @@ export function GMVCards({ data, loading, error }: GMVCardsProps) {
             <TrendingUp className="h-4 w-4 text-blue-500" />
           </div>
           <CardDescription className="text-xs">
-            ยอดรวมตาม Created Time
+            ยอดรวมตาม {dateBasis === 'paid' ? 'Paid Date' : 'Order Date'}
           </CardDescription>
         </CardHeader>
         <CardContent>

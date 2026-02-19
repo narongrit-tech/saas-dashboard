@@ -987,6 +987,18 @@ export async function importSalesChunk(
       }
     }
 
+    // ─── Pre-compute order-level total per external_order_id ────────────────
+    // Rule: order_amount must be the SAME on every line of an order.
+    // We sum unit_price * quantity across all lines sharing the same order key
+    // so that multi-SKU orders get the correct order total as fallback.
+    const orderTotalMap = new Map<string, number>()
+    for (const row of chunkData) {
+      const key = row.external_order_id || row.order_id
+      if (!key) continue
+      const lineContrib = (row.unit_price || 0) * (row.quantity || 0)
+      orderTotalMap.set(key, (orderTotalMap.get(key) || 0) + lineContrib)
+    }
+
     // Insert sales orders (chunk) with order_line_hash for deduplication
     const salesRows = chunkData.map((row) => {
       const orderLineHash = generateOrderLineHash(
@@ -997,6 +1009,20 @@ export async function importSalesChunk(
         row.quantity || 0,
         row.total_amount || 0
       )
+
+      // Resolve order_amount with 3-level priority:
+      //   1. row.order_amount        — Shopee parser sets this directly
+      //   2. metadata.order_amount   — TikTok parser stores the "Order Amount" column here
+      //   3. orderTotalMap[key]      — SUM(unit_price*qty) per order, always computable
+      const orderKey = row.external_order_id || row.order_id || ''
+      const resolvedOrderAmount = (() => {
+        if (row.order_amount != null && row.order_amount > 0) return row.order_amount
+        const meta = row.metadata?.order_amount
+        if (typeof meta === 'number' && Number.isFinite(meta) && meta > 0) return meta
+        const computed = orderTotalMap.get(orderKey)
+        if (computed != null && computed > 0) return computed
+        return null
+      })()
 
       return {
         order_id: row.order_id,
@@ -1038,8 +1064,33 @@ export async function importSalesChunk(
 
         // Tracking number (for Returns search)
         tracking_number: row.tracking_number,
+
+        // Order-level GMV (same value on every line of the same order)
+        order_amount: resolvedOrderAmount,
       }
     })
+
+    // ─── Guard log: warn if any rows still have null order_amount ────────────
+    const nullAmtRows = salesRows.filter((r) => r.order_amount == null)
+    if (nullAmtRows.length > 0) {
+      const byPlatform = new Map<string, number>()
+      for (const r of nullAmtRows) {
+        const plat = r.source_platform || r.marketplace || 'unknown'
+        byPlatform.set(plat, (byPlatform.get(plat) || 0) + 1)
+      }
+      const sample = nullAmtRows.find((r) => (r.source_platform || r.marketplace) === 'tiktok_shop')
+        || nullAmtRows[0]
+      console.warn(
+        `[importSalesChunk] ⚠️  ${nullAmtRows.length} rows still have null order_amount`,
+        {
+          byPlatform: Object.fromEntries(byPlatform),
+          sampleOrderId: sample?.external_order_id || sample?.order_id,
+          samplePlatform: sample?.source_platform || sample?.marketplace,
+        }
+      )
+    } else {
+      console.log(`[importSalesChunk] ✓ All ${salesRows.length} rows have order_amount set`)
+    }
 
     // Upsert with idempotency (safe field updates on conflict)
     let insertedCount = 0
