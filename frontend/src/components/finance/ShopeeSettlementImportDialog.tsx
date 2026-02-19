@@ -2,7 +2,7 @@
 
 /**
  * ShopeeSettlementImportDialog
- * Import "Income / โอนเงินสำเร็จ" CSV into shopee_order_settlements
+ * Import "Income / โอนเงินสำเร็จ" (.csv หรือ .xlsx) into shopee_order_settlements
  */
 
 import { useState, useRef } from 'react'
@@ -10,7 +10,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Upload, CheckCircle, AlertCircle, X, Loader2 } from 'lucide-react'
-import { parseShopeeSettlementCSV } from '@/lib/importers/shopee-settlement-parser'
+import { parseShopeeSettlementFile } from '@/lib/importers/shopee-settlement-parser'
+import { calculateFileHash } from '@/lib/file-hash'
 import {
   createShopeeSettlementBatch,
   importShopeeSettlementChunk,
@@ -27,19 +28,12 @@ interface Props {
 
 type Step = 'upload' | 'importing' | 'result'
 
-async function computeFileHash(text: string): Promise<string> {
-  const buf = new TextEncoder().encode(text)
-  const hashBuf = await crypto.subtle.digest('SHA-256', buf)
-  return Array.from(new Uint8Array(hashBuf)).map((b) => b.toString(16).padStart(2, '0')).join('')
-}
-
 export function ShopeeSettlementImportDialog({ open, onOpenChange, onSuccess }: Props) {
   const [step, setStep] = useState<Step>('upload')
   const [file, setFile] = useState<File | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState(0)
   const [result, setResult] = useState<{ inserted: number; skipped: number; totalNetPayout?: number } | null>(null)
-  const [allowReimport, setAllowReimport] = useState(false)
   const [duplicateInfo, setDuplicateInfo] = useState<{ existingBatchId: string; message: string } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -49,7 +43,6 @@ export function ShopeeSettlementImportDialog({ open, onOpenChange, onSuccess }: 
     setError(null)
     setProgress(0)
     setResult(null)
-    setAllowReimport(false)
     setDuplicateInfo(null)
   }
 
@@ -58,15 +51,18 @@ export function ShopeeSettlementImportDialog({ open, onOpenChange, onSuccess }: 
     onOpenChange(false)
   }
 
-  async function handleImport(selectedFile: File, reimport = false) {
+  async function handleImport(selectedFile: File, allowReimport = false) {
     setStep('importing')
-    setProgress(0)
+    setProgress(5)
     setError(null)
     setDuplicateInfo(null)
 
     try {
-      const text = await selectedFile.text()
-      const parsed = parseShopeeSettlementCSV(text)
+      // Read file as ArrayBuffer (works for both CSV and XLSX)
+      const buffer = await selectedFile.arrayBuffer()
+
+      // Parse (auto-detects CSV vs XLSX from fileName)
+      const parsed = await parseShopeeSettlementFile(buffer, selectedFile.name)
 
       if (!parsed.success || parsed.rows.length === 0) {
         const firstError = parsed.errors[0]?.message ?? 'ไม่สามารถ parse ไฟล์ได้'
@@ -75,15 +71,16 @@ export function ShopeeSettlementImportDialog({ open, onOpenChange, onSuccess }: 
         return
       }
 
-      const fileHash = await computeFileHash(text)
+      setProgress(15)
 
-      // Create batch
+      const fileHash = await calculateFileHash(buffer)
+
       const batchForm = new FormData()
       batchForm.set('fileHash', fileHash)
       batchForm.set('fileName', selectedFile.name)
       batchForm.set('totalRows', String(parsed.rows.length))
       batchForm.set('dateRange', '')
-      batchForm.set('allowReimport', String(reimport))
+      batchForm.set('allowReimport', String(allowReimport))
 
       const batchResult = await createShopeeSettlementBatch(batchForm)
       if (!batchResult.success) {
@@ -98,8 +95,6 @@ export function ShopeeSettlementImportDialog({ open, onOpenChange, onSuccess }: 
       }
 
       const batchId = batchResult.batchId!
-
-      // Import chunks
       const totalChunks = Math.ceil(parsed.rows.length / CHUNK_SIZE)
       let totalInserted = 0
       let totalSkipped = 0
@@ -115,16 +110,15 @@ export function ShopeeSettlementImportDialog({ open, onOpenChange, onSuccess }: 
         const chunkResult = await importShopeeSettlementChunk(chunkForm)
         if (!chunkResult.success) {
           setError(chunkResult.error ?? 'เกิดข้อผิดพลาดระหว่าง import')
-          setStep('result')
           setResult({ inserted: totalInserted, skipped: totalSkipped })
+          setStep('result')
           return
         }
         totalInserted += chunkResult.inserted
         totalSkipped += chunkResult.skipped
-        setProgress(Math.round(((i + 1) / totalChunks) * 100))
+        setProgress(15 + Math.round(((i + 1) / totalChunks) * 80))
       }
 
-      // Finalize
       const finalForm = new FormData()
       finalForm.set('batchId', batchId)
       finalForm.set('totalInserted', String(totalInserted))
@@ -135,14 +129,10 @@ export function ShopeeSettlementImportDialog({ open, onOpenChange, onSuccess }: 
         totalRefunds: parsed.summary.totalRefunds,
         orderCount: parsed.summary.orderCount,
       }))
-
       await finalizeShopeeSettlementBatch(finalForm)
 
-      setResult({
-        inserted: totalInserted,
-        skipped: totalSkipped,
-        totalNetPayout: parsed.summary.totalNetPayout,
-      })
+      setProgress(100)
+      setResult({ inserted: totalInserted, skipped: totalSkipped, totalNetPayout: parsed.summary.totalNetPayout })
       setStep('result')
       onSuccess?.()
     } catch (err: unknown) {
@@ -162,9 +152,9 @@ export function ShopeeSettlementImportDialog({ open, onOpenChange, onSuccess }: 
         {step === 'upload' && (
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              อัปโหลดไฟล์ <strong>Income / โอนเงินสำเร็จ</strong> (.csv)
+              อัปโหลดไฟล์ <strong>Income / โอนเงินสำเร็จ</strong>
               <br />
-              <span className="text-xs">ไฟล์: Income.โอนเงินสำเร็จ.th.YYYYMMDD_YYYYMMDD.xlsx - Income.csv</span>
+              <span className="text-xs text-gray-500">ไฟล์: Income.โอนเงินสำเร็จ.th.YYYYMMDD_YYYYMMDD.xlsx หรือ .csv</span>
             </p>
 
             {error && (
@@ -184,7 +174,6 @@ export function ShopeeSettlementImportDialog({ open, onOpenChange, onSuccess }: 
                     variant="outline"
                     className="mt-2"
                     onClick={() => {
-                      setAllowReimport(true)
                       setDuplicateInfo(null)
                       if (file) handleImport(file, true)
                     }}
@@ -200,22 +189,19 @@ export function ShopeeSettlementImportDialog({ open, onOpenChange, onSuccess }: 
               onClick={() => fileInputRef.current?.click()}
             >
               <Upload className="h-8 w-8 text-gray-400 mb-2" />
-              <p className="text-sm text-gray-600">คลิกเพื่อเลือกไฟล์ .csv</p>
-              {file && <p className="text-xs text-green-600 mt-1">{file.name}</p>}
+              <p className="text-sm text-gray-600">คลิกเพื่อเลือกไฟล์</p>
+              <p className="text-xs text-gray-400 mt-1">.xlsx หรือ .csv</p>
+              {file && <p className="text-xs text-green-600 mt-2 font-medium">{file.name}</p>}
             </div>
 
             <input
               ref={fileInputRef}
               type="file"
-              accept=".csv,.txt"
+              accept=".csv,.xlsx,.xls,.txt"
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0]
-                if (f) {
-                  setFile(f)
-                  setError(null)
-                  setDuplicateInfo(null)
-                }
+                if (f) { setFile(f); setError(null); setDuplicateInfo(null) }
                 e.target.value = ''
               }}
             />
@@ -270,17 +256,12 @@ export function ShopeeSettlementImportDialog({ open, onOpenChange, onSuccess }: 
               <Button variant="outline" onClick={handleClose}>
                 <X className="mr-2 h-4 w-4" /> ยกเลิก
               </Button>
-              <Button
-                onClick={() => file && handleImport(file, allowReimport)}
-                disabled={!file}
-              >
+              <Button onClick={() => file && handleImport(file)} disabled={!file}>
                 <Upload className="mr-2 h-4 w-4" /> Import
               </Button>
             </>
           )}
-          {step === 'result' && (
-            <Button onClick={handleClose}>ปิด</Button>
-          )}
+          {step === 'result' && <Button onClick={handleClose}>ปิด</Button>}
         </DialogFooter>
       </DialogContent>
     </Dialog>
