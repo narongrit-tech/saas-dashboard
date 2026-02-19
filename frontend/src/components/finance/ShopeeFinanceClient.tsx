@@ -38,6 +38,8 @@ interface Props {
   walletTxns: ShopeeFinanceWalletRow[]
   startDate: string
   endDate: string
+  basePath?: string
+  tab?: 'cashflow' | 'settlements'
 }
 
 function fmt(n: number) {
@@ -49,7 +51,15 @@ function fmtDate(d: string | null): string {
   return new Date(d).toLocaleDateString('th-TH', { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
-export function ShopeeFinanceClient({ summary, settlements, walletTxns, startDate, endDate }: Props) {
+export function ShopeeFinanceClient({
+  summary,
+  settlements,
+  walletTxns,
+  startDate,
+  endDate,
+  basePath = '/finance/shopee',
+  tab,
+}: Props) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [showBalanceDialog, setShowBalanceDialog] = useState(false)
@@ -63,16 +73,20 @@ export function ShopeeFinanceClient({ summary, settlements, walletTxns, startDat
 
   function applyFilter() {
     const params = new URLSearchParams()
+    if (tab) params.set('tab', tab)
     if (localStart) params.set('startDate', localStart)
     if (localEnd) params.set('endDate', localEnd)
     const q = params.toString()
-    startTransition(() => { router.push(`/finance/shopee${q ? '?' + q : ''}`) })
+    startTransition(() => { router.push(`${basePath}${q ? '?' + q : ''}`) })
   }
 
   function clearFilter() {
     setLocalStart('')
     setLocalEnd('')
-    startTransition(() => { router.push('/finance/shopee') })
+    const params = new URLSearchParams()
+    if (tab) params.set('tab', tab)
+    const q = params.toString()
+    startTransition(() => { router.push(`${basePath}${q ? '?' + q : ''}`) })
   }
 
   const hasFilter = Boolean(startDate || endDate)

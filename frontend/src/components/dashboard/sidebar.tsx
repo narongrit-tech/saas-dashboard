@@ -23,7 +23,6 @@ import {
   ChevronDown,
   ChevronRight,
   ArrowLeftCircle,
-  ShoppingBag,
 } from 'lucide-react'
 
 interface MenuItem {
@@ -81,8 +80,8 @@ const menuGroups: MenuGroup[] = [
     defaultExpanded: true,
     items: [
       {
-        title: 'Marketplace Wallets',
-        href: '/finance/marketplace-wallets',
+        title: 'Marketplace Finance',
+        href: '/finance/marketplaces/tiktok-shop',
         icon: Wallet,
       },
       {
@@ -114,11 +113,6 @@ const menuGroups: MenuGroup[] = [
         title: 'P&L Reconciliation',
         href: '/reconciliation',
         icon: GitCompare,
-      },
-      {
-        title: 'Shopee Finance',
-        href: '/finance/shopee',
-        icon: ShoppingBag,
       },
     ],
   },
