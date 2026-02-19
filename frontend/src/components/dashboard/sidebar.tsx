@@ -81,7 +81,7 @@ const menuGroups: MenuGroup[] = [
     items: [
       {
         title: 'Marketplace Finance',
-        href: '/finance/marketplaces/tiktok-shop',
+        href: '/finance/marketplaces',
         icon: Wallet,
       },
       {
