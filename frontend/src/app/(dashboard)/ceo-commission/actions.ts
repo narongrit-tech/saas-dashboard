@@ -294,7 +294,7 @@ export async function getCommissionPlatforms(): Promise<{
     }
 
     // Get unique platforms
-    const platforms = [...new Set(data?.map((r) => r.platform) || [])]
+    const platforms = Array.from(new Set(data?.map((r) => r.platform) || []))
 
     return { success: true, data: platforms }
   } catch (error) {
