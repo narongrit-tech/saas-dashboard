@@ -1979,6 +1979,30 @@ export interface GMVSummaryResult {
  *   - SUM(total_amount): correct fallback for both Shopee (single-SKU) and
  *     TikTok (multi-SKU, since total_amount = unit_price × qty per line)
  */
+/**
+ * SQL verification helper (copy into Supabase SQL editor to cross-check UI):
+ *
+ * WITH per_order AS (
+ *   SELECT
+ *     COALESCE(external_order_id, order_id) AS order_key,
+ *     MAX(order_amount)     AS order_amount_col,
+ *     SUM(total_amount)     AS line_total_sum,
+ *     MAX(shipped_at)       AS shipped_at,
+ *     MAX(CASE WHEN status_group = 'ยกเลิกแล้ว' THEN 1 ELSE 0 END) AS is_cancelled
+ *   FROM sales_orders
+ *   WHERE created_by = '<uid>'
+ *     AND source_platform = 'tiktok_shop'                        -- or remove for All
+ *     AND order_date >= '2026-01-01' AND order_date < '2026-02-01'
+ *   GROUP BY 1
+ * )
+ * SELECT
+ *   COUNT(*)                                                       AS created_orders,
+ *   SUM(COALESCE(NULLIF(order_amount_col,0), line_total_sum))      AS created_gmv,
+ *   COUNT(*) FILTER (WHERE shipped_at IS NOT NULL AND is_cancelled=0) AS fulfilled_orders,
+ *   SUM(COALESCE(NULLIF(order_amount_col,0), line_total_sum))
+ *     FILTER (WHERE shipped_at IS NOT NULL AND is_cancelled=0)     AS fulfilled_gmv
+ * FROM per_order;
+ */
 export async function getSalesGMVSummary(
   filters: ExportFilters,
   dateBasis: 'order' | 'paid' = 'order'
@@ -1986,6 +2010,8 @@ export async function getSalesGMVSummary(
   noStore() // Prevent caching for real-time GMV data
   const startedAt = Date.now()
   let requestError: string | null = null
+  let totalRawLines = 0
+  let pageFetches = 0
 
   console.log('[Sales][getSalesGMVSummary] start', {
     startDate: filters.startDate,
@@ -2022,54 +2048,72 @@ export async function getSalesGMVSummary(
     const bangkokEndDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
     const endOfDayISO = endOfDay(bangkokEndDate).toISOString()
 
-    // ===== Single cohort query =====
-    // Fetch all lines in date range with the fields needed for GMV computation.
+    // ===== Build base query (filters only — no range yet) =====
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let query: any = supabase
+    let baseQuery: any = supabase
       .from('sales_orders')
       .select('external_order_id, order_id, order_amount, total_amount, shipped_at, status_group, created_time, order_date, paid_time')
       .eq('created_by', user.id)
 
     // Non-date filters
     if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
-      query = query.eq('source_platform', filters.sourcePlatform)
+      baseQuery = baseQuery.eq('source_platform', filters.sourcePlatform)
     }
     if (filters.status && filters.status.length > 0) {
-      query = query.in('platform_status', filters.status)
+      baseQuery = baseQuery.in('platform_status', filters.status)
     }
     if (filters.paymentStatus && filters.paymentStatus !== 'all') {
-      query = query.eq('payment_status', filters.paymentStatus)
+      baseQuery = baseQuery.eq('payment_status', filters.paymentStatus)
     }
     if (filters.search && filters.search.trim()) {
-      query = query.or(
+      baseQuery = baseQuery.or(
         `order_id.ilike.%${filters.search}%,product_name.ilike.%${filters.search}%,external_order_id.ilike.%${filters.search}%`
       )
     }
 
     // Date filter — defines the cohort
     if (dateBasis === 'paid') {
-      // Paid basis: filter by paid_time; exclude unpaid rows
-      query = query
+      baseQuery = baseQuery
         .not('paid_time', 'is', null)
         .gte('paid_time', filters.startDate)
         .lte('paid_time', endOfDayISO)
     } else {
-      // Order basis: fetch by order_date (broader); COALESCE applied in TS below
-      query = query
+      // Fetch by order_date (broader); COALESCE(created_time, order_date) applied in TS
+      baseQuery = baseQuery
         .gte('order_date', filters.startDate)
         .lte('order_date', endOfDayISO)
     }
 
-    const { data: rawLines, error: queryError } = await query.limit(30000)
-    if (queryError) {
-      requestError = queryError.message
-      return { success: false, error: `เกิดข้อผิดพลาด: ${queryError.message}` }
+    // ===== Paginated fetch — bypasses Supabase PostgREST default 1000-row cap =====
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let allFetchedLines: any[] = []
+    const PAGE_SIZE = 1000
+    let from = 0
+    let hasMore = true
+
+    while (hasMore) {
+      const { data: page, error: pageError } = await baseQuery.range(from, from + PAGE_SIZE - 1)
+      pageFetches++
+
+      if (pageError) {
+        requestError = pageError.message
+        return { success: false, error: `เกิดข้อผิดพลาด: ${pageError.message}` }
+      }
+
+      if (page && page.length > 0) {
+        allFetchedLines = allFetchedLines.concat(page)
+        hasMore = page.length === PAGE_SIZE
+        from += PAGE_SIZE
+      } else {
+        hasMore = false
+      }
     }
 
-    // COALESCE(created_time, order_date) client-side date filter (order basis)
-    const allLines = rawLines || []
+    totalRawLines = allFetchedLines.length
+
+    // ===== COALESCE(created_time, order_date) client-side date filter (order basis) =====
     const cohortLines = dateBasis === 'order'
-      ? allLines.filter((line: { created_time?: string | null; order_date?: string | null }) => {
+      ? allFetchedLines.filter((line: { created_time?: string | null; order_date?: string | null }) => {
           const effectiveDate = line.created_time || line.order_date
           if (!effectiveDate) return false
           const bangkokDateStr = toBangkokDateString(new Date(effectiveDate))
@@ -2077,7 +2121,18 @@ export async function getSalesGMVSummary(
           if (filters.endDate && bangkokDateStr > filters.endDate) return false
           return true
         })
-      : allLines
+      : allFetchedLines
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[Sales][getSalesGMVSummary] lines fetched', {
+        rawLines: totalRawLines,
+        cohortLines: cohortLines.length,
+        pageFetches,
+        dateBasis,
+        sourcePlatform: filters.sourcePlatform || 'all',
+        dateRange: `${filters.startDate} → ${filters.endDate}`,
+      })
+    }
 
     if (cohortLines.length === 0) {
       return {
@@ -2086,12 +2141,19 @@ export async function getSalesGMVSummary(
       }
     }
 
-    // ===== Aggregate per order key =====
-    // GMV = COALESCE(order_amount, SUM(total_amount))
-    // Fulfilled = shipped_at IS NOT NULL AND status_group != 'ยกเลิกแล้ว'
+    // ===== Per-order aggregation =====
+    //
+    // GMV rule (per task spec):
+    //   - If order_amount is non-null AND same across all lines  → use MAX(order_amount)
+    //   - Otherwise                                              → use SUM(total_amount)
+    //
+    // This is equivalent to: COALESCE(NULLIF(MAX(order_amount), 0), SUM(total_amount))
+    // when order_amount is either 0/null (not set) or the correct order total.
+    //
+    // Fulfilled = subset of cohort where shipped_at IS NOT NULL AND status_group != 'ยกเลิกแล้ว'
     interface OrderBucket {
-      order_amount_seen: number | null // First non-null order_amount from any line
-      line_total_sum: number           // SUM(total_amount) across all lines (fallback)
+      order_amounts: number[]  // All non-null order_amount values seen (for uniformity check)
+      line_total_sum: number   // SUM(total_amount) across all lines
       shipped_at: string | null
       is_cancelled: boolean
     }
@@ -2101,27 +2163,24 @@ export async function getSalesGMVSummary(
     for (const line of cohortLines) {
       const key = (line.external_order_id as string | null) || (line.order_id as string)
       const lineTotal = Number(line.total_amount ?? 0)
-      const lineOrderAmt = line.order_amount != null ? Number(line.order_amount) : null
+      const lineOrderAmt = (line.order_amount != null && Number(line.order_amount) > 0)
+        ? Number(line.order_amount)
+        : null
       const lineShipped = (line.shipped_at as string | null) ?? null
       const lineCancelled = (line.status_group as string | null) === 'ยกเลิกแล้ว'
 
       const existing = orderMap.get(key)
       if (!existing) {
         orderMap.set(key, {
-          order_amount_seen: lineOrderAmt,
+          order_amounts: lineOrderAmt != null ? [lineOrderAmt] : [],
           line_total_sum: lineTotal,
           shipped_at: lineShipped,
           is_cancelled: lineCancelled,
         })
       } else {
         existing.line_total_sum += lineTotal
-        // Keep first non-null order_amount (same value repeated across lines)
-        if (existing.order_amount_seen == null && lineOrderAmt != null) {
-          existing.order_amount_seen = lineOrderAmt
-        }
-        // shipped_at: any line having it means order was shipped
+        if (lineOrderAmt != null) existing.order_amounts.push(lineOrderAmt)
         if (!existing.shipped_at && lineShipped) existing.shipped_at = lineShipped
-        // Cancelled: any line with cancelled status poisons the whole order
         if (lineCancelled) existing.is_cancelled = true
       }
     }
@@ -2130,7 +2189,16 @@ export async function getSalesGMVSummary(
     let gmv_created = 0, orders_created = 0, gmv_fulfilled = 0, orders_fulfilled = 0
 
     for (const data of Array.from(orderMap.values())) {
-      const gmv = data.order_amount_seen ?? data.line_total_sum
+      // Use order_amount only if all collected values are identical (i.e. it's order-level)
+      let gmv: number
+      if (data.order_amounts.length > 0) {
+        const first = data.order_amounts[0]
+        const allSame = data.order_amounts.every((a) => a === first)
+        gmv = allSame ? first : data.line_total_sum
+      } else {
+        gmv = data.line_total_sum
+      }
+
       const is_fulfilled = !!data.shipped_at && !data.is_cancelled
       gmv_created += gmv
       orders_created++
@@ -2146,6 +2214,19 @@ export async function getSalesGMVSummary(
     const leakage_pct = gmv_created > 0
       ? Math.round((leakage_amount / gmv_created) * 100 * 100) / 100
       : 0
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[Sales][getSalesGMVSummary] result', {
+        created_orders: orders_created,
+        created_gmv: gmv_created,
+        fulfilled_orders: orders_fulfilled,
+        fulfilled_gmv: gmv_fulfilled,
+        leakage_amount,
+        leakage_pct,
+        distinct_order_keys: orderMap.size,
+        total_lines: cohortLines.length,
+      })
+    }
 
     return {
       success: true,
@@ -2164,6 +2245,9 @@ export async function getSalesGMVSummary(
       startDate: filters.startDate,
       endDate: filters.endDate,
       dateBasis,
+      sourcePlatform: filters.sourcePlatform || 'all',
+      totalRawLines,
+      pageFetches,
       error: requestError,
     })
   }
