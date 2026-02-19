@@ -30,6 +30,7 @@ import { EditLedgerDialog } from '@/components/wallets/EditLedgerDialog'
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
 import { TigerImportDialog } from '@/components/wallets/TigerImportDialog'
 import { PerformanceAdsImportDialog } from '@/components/wallets/PerformanceAdsImportDialog'
+import { ShopeeWalletImportDialog } from '@/components/wallets/ShopeeWalletImportDialog'
 import {
   deleteWalletLedgerEntry,
   exportWalletLedger,
@@ -53,6 +54,7 @@ export default function WalletsPage() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showTigerImportDialog, setShowTigerImportDialog] = useState(false)
   const [showPerformanceAdsImportDialog, setShowPerformanceAdsImportDialog] = useState(false)
+  const [showShopeeWalletImportDialog, setShowShopeeWalletImportDialog] = useState(false)
   const [selectedEntry, setSelectedEntry] = useState<WalletLedger | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
@@ -490,6 +492,14 @@ export default function WalletsPage() {
             </>
           )}
           <Button
+            variant="secondary"
+            onClick={() => setShowShopeeWalletImportDialog(true)}
+            className="bg-orange-500 hover:bg-orange-600 text-white"
+          >
+            <Upload className="mr-2 h-4 w-4" />
+            Import Shopee Wallet
+          </Button>
+          <Button
             variant="outline"
             onClick={handleExport}
             disabled={exportLoading || loading || ledgerEntries.length === 0}
@@ -683,6 +693,15 @@ export default function WalletsPage() {
             loading={deleteLoading}
             title="ยืนยันการลบรายการ"
             description="คุณต้องการลบรายการนี้ใช่หรือไม่? การดำเนินการนี้ไม่สามารถย้อนกลับได้"
+          />
+
+          <ShopeeWalletImportDialog
+            open={showShopeeWalletImportDialog}
+            onOpenChange={setShowShopeeWalletImportDialog}
+            onSuccess={() => {
+              // Shopee wallet transactions are in a separate table
+              // Refresh the ledger view if needed in future
+            }}
           />
 
           {selectedWallet.wallet_type === 'ADS' && (
