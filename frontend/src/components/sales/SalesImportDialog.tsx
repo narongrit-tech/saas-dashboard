@@ -17,7 +17,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { FileSpreadsheet, CheckCircle2, AlertCircle, Loader2, Info, ExternalLink } from 'lucide-react'
+import { FileSpreadsheet, CheckCircle2, AlertCircle, Loader2, Info, ExternalLink, Package } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 import {
   createImportBatch,
@@ -25,6 +25,7 @@ import {
   finalizeImportBatch,
   replaceSalesImportBatch,
 } from '@/app/(dashboard)/sales/sales-import-actions'
+import { applyCOGSForBatch } from '@/app/(dashboard)/inventory/actions'
 import { SalesImportPreview, ParsedSalesRow, SalesImportResult } from '@/types/sales-import'
 import { calculateFileHash, toPlain } from '@/lib/file-hash'
 import { parseTikTokFile } from '@/lib/sales-parser'
@@ -109,6 +110,8 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
     fileHash?: string;
   } | null>(null)
   const [processingInfo, setProcessingInfo] = useState<{ batchId?: string; fileName?: string; createdAt?: string } | null>(null)
+  const [cogsApplying, setCogsApplying] = useState(false)
+  const [cogsApplied, setCogsApplied] = useState(false)
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
@@ -917,6 +920,43 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
                 )}
               </AlertDescription>
             </Alert>
+
+            {/* Apply COGS button (only when success and batchId available) */}
+            {result.success && result.batchId && (
+              <Button
+                variant="secondary"
+                disabled={cogsApplying || cogsApplied}
+                onClick={async () => {
+                  setCogsApplying(true)
+                  try {
+                    // Fire without blocking — user can close dialog; notification bell shows result
+                    applyCOGSForBatch(result.batchId!).then(() => {
+                      setCogsApplied(true)
+                    })
+                    toast({
+                      title: 'เริ่มประมวลผล COGS แล้ว',
+                      description: 'ดูผลที่กระดิ่งมุมขวาบนเมื่อเสร็จ',
+                    })
+                    setCogsApplied(true)
+                  } catch {
+                    toast({
+                      variant: 'destructive',
+                      title: 'Apply COGS ล้มเหลว',
+                      description: 'กรุณาลองใหม่จากหน้า Inventory',
+                    })
+                  } finally {
+                    setCogsApplying(false)
+                  }
+                }}
+              >
+                {cogsApplying ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Package className="mr-2 h-4 w-4" />
+                )}
+                {cogsApplied ? 'COGS กำลังประมวลผล...' : 'Apply COGS สำหรับ batch นี้'}
+              </Button>
+            )}
 
             {/* Action Buttons */}
             <div className="flex justify-end gap-2">

@@ -30,6 +30,7 @@ import {
   Loader2,
   Info,
   Download,
+  Package,
 } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 import {
@@ -40,6 +41,7 @@ import {
   createShopeeOrdersBatch,
   replaceShopeeOrdersBatch,
 } from '@/app/(dashboard)/sales/shopee-import-actions'
+import { applyCOGSForBatch } from '@/app/(dashboard)/inventory/actions'
 import { ParsedSalesRow, SalesImportResult } from '@/types/sales-import'
 import { calculateFileHash, toPlain } from '@/lib/file-hash'
 import { parseShopeeOrdersFile } from '@/lib/importers/shopee-orders-parser'
@@ -135,6 +137,8 @@ export function ShopeeOrdersImportDialog({
     existingRowCount?: number
     fileHash?: string
   } | null>(null)
+  const [cogsApplying, setCogsApplying] = useState(false)
+  const [cogsApplied, setCogsApplied] = useState(false)
 
   // Reset on open
   useEffect(() => {
@@ -603,6 +607,43 @@ export function ShopeeOrdersImportDialog({
               >
                 <Download className="h-4 w-4 mr-2" />
                 ดาวน์โหลด skipped rows ({result.skipped} รายการ)
+              </Button>
+            )}
+
+            {/* Apply COGS button */}
+            {result.success && result.batchId && (
+              <Button
+                variant="secondary"
+                className="w-full"
+                disabled={cogsApplying || cogsApplied}
+                onClick={async () => {
+                  setCogsApplying(true)
+                  try {
+                    applyCOGSForBatch(result.batchId!).then(() => {
+                      setCogsApplied(true)
+                    })
+                    toast({
+                      title: 'เริ่มประมวลผล COGS แล้ว',
+                      description: 'ดูผลที่กระดิ่งมุมขวาบนเมื่อเสร็จ',
+                    })
+                    setCogsApplied(true)
+                  } catch {
+                    toast({
+                      variant: 'destructive',
+                      title: 'Apply COGS ล้มเหลว',
+                      description: 'กรุณาลองใหม่จากหน้า Inventory',
+                    })
+                  } finally {
+                    setCogsApplying(false)
+                  }
+                }}
+              >
+                {cogsApplying ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Package className="mr-2 h-4 w-4" />
+                )}
+                {cogsApplied ? 'COGS กำลังประมวลผล...' : 'Apply COGS สำหรับ batch นี้'}
               </Button>
             )}
 
