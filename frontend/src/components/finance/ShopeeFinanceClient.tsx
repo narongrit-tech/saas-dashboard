@@ -3,7 +3,8 @@
 /**
  * ShopeeFinanceClient
  * Interactive UI for Finance > Shopee page
- * - 4 summary cards
+ * - 5 summary cards (Net Order Settlement, Bank Transfer Out, Wallet Net Change, Settled Orders, Wallet Transactions)
+ * - Date range filter
  * - 2 tabs: Settlements | Wallet Transactions
  * - Import buttons + dialogs
  */
@@ -22,7 +23,7 @@ import {
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Upload, TrendingUp, ArrowDownUp, ShoppingBag, Wallet } from 'lucide-react'
+import { Upload, TrendingUp, ArrowDownUp, ShoppingBag, Wallet, Banknote, Info, Loader2 } from 'lucide-react'
 import { ShopeeBalanceImportDialog } from '@/components/finance/ShopeeBalanceImportDialog'
 import { ShopeeSettlementImportDialog } from '@/components/finance/ShopeeSettlementImportDialog'
 import type {
@@ -35,6 +36,8 @@ interface Props {
   summary: ShopeeFinanceSummary
   settlements: ShopeeFinanceSettlementRow[]
   walletTxns: ShopeeFinanceWalletRow[]
+  startDate: string
+  endDate: string
 }
 
 function fmt(n: number) {
@@ -46,17 +49,33 @@ function fmtDate(d: string | null): string {
   return new Date(d).toLocaleDateString('th-TH', { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
-export function ShopeeFinanceClient({ summary, settlements, walletTxns }: Props) {
+export function ShopeeFinanceClient({ summary, settlements, walletTxns, startDate, endDate }: Props) {
   const router = useRouter()
-  const [, startTransition] = useTransition()
+  const [isPending, startTransition] = useTransition()
   const [showBalanceDialog, setShowBalanceDialog] = useState(false)
   const [showSettlementDialog, setShowSettlementDialog] = useState(false)
+  const [localStart, setLocalStart] = useState(startDate)
+  const [localEnd, setLocalEnd] = useState(endDate)
 
   function refresh() {
-    startTransition(() => {
-      router.refresh()
-    })
+    startTransition(() => { router.refresh() })
   }
+
+  function applyFilter() {
+    const params = new URLSearchParams()
+    if (localStart) params.set('startDate', localStart)
+    if (localEnd) params.set('endDate', localEnd)
+    const q = params.toString()
+    startTransition(() => { router.push(`/finance/shopee${q ? '?' + q : ''}`) })
+  }
+
+  function clearFilter() {
+    setLocalStart('')
+    setLocalEnd('')
+    startTransition(() => { router.push('/finance/shopee') })
+  }
+
+  const hasFilter = Boolean(startDate || endDate)
 
   return (
     <div className="space-y-6">
@@ -89,29 +108,76 @@ export function ShopeeFinanceClient({ summary, settlements, walletTxns }: Props)
         </div>
       </div>
 
-      {/* 4 Summary Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
+      {/* Date Range Filter */}
+      <Card className="p-4">
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="text-sm font-medium text-muted-foreground">ช่วงวันที่:</span>
+          <input
+            type="date"
+            value={localStart}
+            onChange={(e) => setLocalStart(e.target.value)}
+            className="border rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-orange-400"
+          />
+          <span className="text-sm text-muted-foreground">ถึง</span>
+          <input
+            type="date"
+            value={localEnd}
+            onChange={(e) => setLocalEnd(e.target.value)}
+            className="border rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-orange-400"
+          />
+          <Button size="sm" onClick={applyFilter} disabled={isPending} className="bg-orange-500 hover:bg-orange-600 text-white">
+            {isPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+            กรอง
+          </Button>
+          {hasFilter && (
+            <Button size="sm" variant="ghost" onClick={clearFilter} disabled={isPending}>
+              ล้างตัวกรอง
+            </Button>
+          )}
+          {hasFilter && (
+            <span className="text-xs text-orange-600 font-medium">
+              กำลังแสดงเฉพาะช่วง {startDate || '...'} — {endDate || '...'}
+            </span>
+          )}
+        </div>
+      </Card>
+
+      {/* 5 Summary Cards */}
+      <div className="grid gap-4 grid-cols-2 md:grid-cols-3 xl:grid-cols-5">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Net Payout</CardTitle>
+            <CardTitle className="text-sm font-medium">Net Order Settlement</CardTitle>
             <TrendingUp className="h-4 w-4 text-green-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-600">
-              ฿{fmt(summary.totalNetPayout)}
+              ฿{fmt(summary.netOrderSettlement)}
             </div>
-            <p className="text-xs text-muted-foreground mt-1">จาก Settlement Report</p>
+            <p className="text-xs text-muted-foreground mt-1">ยอดสุทธิจาก Settlement Report</p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Wallet Movement</CardTitle>
+            <CardTitle className="text-sm font-medium">Bank Transfer Out</CardTitle>
+            <Banknote className="h-4 w-4 text-orange-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-orange-600">
+              ฿{fmt(summary.bankTransferOut)}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">ถอนเข้า Bank (การถอนเงิน)</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Wallet Net Change</CardTitle>
             <ArrowDownUp className="h-4 w-4 text-blue-500" />
           </CardHeader>
           <CardContent>
-            <div className={`text-2xl font-bold ${summary.totalWalletMovement >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-              {summary.totalWalletMovement >= 0 ? '+' : ''}฿{fmt(summary.totalWalletMovement)}
+            <div className={`text-2xl font-bold ${summary.walletNetChange >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+              {summary.walletNetChange >= 0 ? '+' : ''}฿{fmt(summary.walletNetChange)}
             </div>
             <p className="text-xs text-muted-foreground mt-1">Net จาก Balance Report</p>
           </CardContent>
@@ -144,11 +210,20 @@ export function ShopeeFinanceClient({ summary, settlements, walletTxns }: Props)
         </Card>
       </div>
 
+      {/* Info note */}
+      <p className="text-xs text-muted-foreground flex items-center gap-1">
+        <Info className="h-3 w-3 shrink-0" />
+        <span>
+          <strong>Net Order Settlement</strong> คือยอดสุทธิจาก Settlement Report (หักค่า Commission/Fee แล้ว) —
+          ยอดที่โอนเข้าบัญชีธนาคารจริงดูจาก <strong>Bank Transfer Out</strong> (รายการ &quot;การถอนเงิน&quot; ที่สำเร็จใน Wallet)
+        </span>
+      </p>
+
       {/* 2-Tab Table */}
       <Tabs defaultValue="settlements">
         <TabsList>
-          <TabsTrigger value="settlements">Settlements ({summary.settledOrderCount})</TabsTrigger>
-          <TabsTrigger value="wallet">Wallet Transactions ({summary.walletTxnCount})</TabsTrigger>
+          <TabsTrigger value="settlements">Settlements ({summary.settledOrderCount.toLocaleString('th-TH')})</TabsTrigger>
+          <TabsTrigger value="wallet">Wallet Transactions ({summary.walletTxnCount.toLocaleString('th-TH')})</TabsTrigger>
         </TabsList>
 
         {/* Tab 1: Settlements */}

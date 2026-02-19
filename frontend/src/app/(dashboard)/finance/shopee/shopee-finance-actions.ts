@@ -442,8 +442,9 @@ export async function finalizeShopeeSettlementBatch(formData: FormData): Promise
 // ============================================================
 
 export interface ShopeeFinanceSummary {
-  totalNetPayout: number
-  totalWalletMovement: number
+  netOrderSettlement: number  // SUM(net_payout) from settlements
+  walletNetChange: number     // SUM(amount) from wallet txns (signed)
+  bankTransferOut: number     // SUM(ABS(amount)) for withdrawal rows
   settledOrderCount: number
   walletTxnCount: number
 }
@@ -473,7 +474,10 @@ export interface ShopeeFinanceWalletRow {
   balance: number | null
 }
 
-export async function getShopeeFinanceSummary(): Promise<{
+export async function getShopeeFinanceSummary(params?: {
+  startDate?: string
+  endDate?: string
+}): Promise<{
   summary: ShopeeFinanceSummary
   settlements: ShopeeFinanceSettlementRow[]
   walletTxns: ShopeeFinanceWalletRow[]
@@ -481,52 +485,86 @@ export async function getShopeeFinanceSummary(): Promise<{
   noStore()
   const supabase = createClient()
 
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return {
-      summary: { totalNetPayout: 0, totalWalletMovement: 0, settledOrderCount: 0, walletTxnCount: 0 },
-      settlements: [],
-      walletTxns: [],
-    }
+  const emptySummary: ShopeeFinanceSummary = {
+    netOrderSettlement: 0,
+    walletNetChange: 0,
+    bankTransferOut: 0,
+    settledOrderCount: 0,
+    walletTxnCount: 0,
   }
 
-  // Fetch recent 200 settlements
-  const { data: settlements } = await supabase
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    return { summary: emptySummary, settlements: [], walletTxns: [] }
+  }
+
+  const { startDate, endDate } = params ?? {}
+
+  // ── Aggregate queries (all rows, minimal columns) ──────────────
+  let settleAggQ = supabase
+    .from('shopee_order_settlements')
+    .select('net_payout')
+    .eq('created_by', user.id)
+
+  let walletAggQ = supabase
+    .from('shopee_wallet_transactions')
+    .select('amount, transaction_type, status')
+    .eq('created_by', user.id)
+
+  if (startDate) {
+    settleAggQ = settleAggQ.gte('paid_out_date', startDate)
+    walletAggQ = walletAggQ.gte('occurred_at', `${startDate}T00:00:00+07:00`)
+  }
+  if (endDate) {
+    settleAggQ = settleAggQ.lte('paid_out_date', endDate)
+    walletAggQ = walletAggQ.lte('occurred_at', `${endDate}T23:59:59+07:00`)
+  }
+
+  // ── Display queries (200 most recent rows, all columns) ─────────
+  let settleDispQ = supabase
     .from('shopee_order_settlements')
     .select('id, external_order_id, paid_out_date, order_date, net_payout, commission, service_fee, payment_processing_fee, platform_infra_fee, shipping_buyer_paid, refunds')
     .eq('created_by', user.id)
     .order('paid_out_date', { ascending: false })
     .limit(200)
 
-  // Fetch recent 200 wallet transactions
-  const { data: walletTxns } = await supabase
+  let walletDispQ = supabase
     .from('shopee_wallet_transactions')
     .select('id, occurred_at, transaction_type, transaction_mode, ref_no, status, amount, balance')
     .eq('created_by', user.id)
     .order('occurred_at', { ascending: false })
     .limit(200)
 
-  // Aggregate summary
-  const totalNetPayout = (settlements ?? []).reduce((sum, r) => sum + (r.net_payout ?? 0), 0)
-  const totalWalletMovement = (walletTxns ?? []).reduce((sum, r) => sum + (r.amount ?? 0), 0)
+  if (startDate) {
+    settleDispQ = settleDispQ.gte('paid_out_date', startDate)
+    walletDispQ = walletDispQ.gte('occurred_at', `${startDate}T00:00:00+07:00`)
+  }
+  if (endDate) {
+    settleDispQ = settleDispQ.lte('paid_out_date', endDate)
+    walletDispQ = walletDispQ.lte('occurred_at', `${endDate}T23:59:59+07:00`)
+  }
 
-  // Get total counts (separate queries for accuracy)
-  const { count: settledCount } = await supabase
-    .from('shopee_order_settlements')
-    .select('*', { count: 'exact', head: true })
-    .eq('created_by', user.id)
+  const [
+    { data: allSettlements },
+    { data: allWalletTxns },
+    { data: settlements },
+    { data: walletTxns },
+  ] = await Promise.all([settleAggQ, walletAggQ, settleDispQ, walletDispQ])
 
-  const { count: walletCount } = await supabase
-    .from('shopee_wallet_transactions')
-    .select('*', { count: 'exact', head: true })
-    .eq('created_by', user.id)
+  // ── Compute metrics ────────────────────────────────────────────
+  const netOrderSettlement = (allSettlements ?? []).reduce((s, r) => s + (r.net_payout ?? 0), 0)
+  const walletNetChange    = (allWalletTxns ?? []).reduce((s, r) => s + (r.amount ?? 0), 0)
+  const bankTransferOut    = (allWalletTxns ?? [])
+    .filter((r) => r.transaction_type?.includes('การถอนเงิน') && r.status?.includes('สำเร็จ'))
+    .reduce((s, r) => s + Math.abs(r.amount ?? 0), 0)
 
   return {
     summary: {
-      totalNetPayout,
-      totalWalletMovement,
-      settledOrderCount: settledCount ?? 0,
-      walletTxnCount: walletCount ?? 0,
+      netOrderSettlement,
+      walletNetChange,
+      bankTransferOut,
+      settledOrderCount: (allSettlements ?? []).length,
+      walletTxnCount: (allWalletTxns ?? []).length,
     },
     settlements: (settlements ?? []) as ShopeeFinanceSettlementRow[],
     walletTxns: (walletTxns ?? []) as ShopeeFinanceWalletRow[],
