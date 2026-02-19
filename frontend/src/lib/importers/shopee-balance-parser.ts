@@ -4,18 +4,47 @@
  *
  * Source file: "my_balance_transaction_report...xlsx - Transaction Report.csv"
  *
- * Format:
- * - ~16 preamble/metadata rows before the real header row
- * - Header columns (Thai): วันที่ทำธุรกรรม, ประเภทการทำธุรกรรม, หมายเลขอ้างอิง,
- *                           รูปแบบธุรกรรม, สถานะ, จำนวนเงิน, คงเหลือ
- * - Amount is signed: positive = credit, negative = debit
+ * Actual header columns (confirmed from real file):
+ *   วันที่ | ประเภทการทำธุรกรรม | คำอธิบาย | รหัสคำสั่งซื้อ |
+ *   รูปแบบธุรกรรม | จำนวนเงิน | สถานะ | ยอดเงินหลังทำธุรกรรมเสร็จสิ้น
+ *
+ * Header row appears around row 15–25 (varies by export date range).
+ * Scan up to MAX_HEADER_SCAN_ROWS to find it.
  *
  * Supports: .csv (UTF-8/BOM) and .xlsx
  */
 
 import * as XLSX from 'xlsx'
-import { parseCSVWithDynamicHeader } from '@/lib/importers/csvHeaderScanner'
+import { parseCSVLine } from '@/lib/importers/csvHeaderScanner'
 import { parse as parseDateFns, isValid } from 'date-fns'
+
+// ============================================================
+// Constants
+// ============================================================
+
+/** How many rows to scan before giving up looking for the header */
+const MAX_HEADER_SCAN_ROWS = 50
+
+/**
+ * ALL THREE must appear in the header row (trimmed, case-insensitive includes).
+ * Using the exact Thai strings from the actual Shopee export.
+ */
+const REQUIRED_HEADERS = ['วันที่', 'ประเภทการทำธุรกรรม', 'จำนวนเงิน'] as const
+
+/**
+ * Column name candidates for each logical field.
+ * First match wins (exact → substring fallback).
+ */
+const COL = {
+  occurred_at:      ['วันที่', 'วันที่ทำธุรกรรม'],
+  transaction_type: ['ประเภทการทำธุรกรรม'],
+  description:      ['คำอธิบาย'],
+  ref_no:           ['รหัสคำสั่งซื้อ', 'หมายเลขอ้างอิง', 'Order ID'],
+  transaction_mode: ['รูปแบบธุรกรรม'],
+  status:           ['สถานะ'],
+  amount:           ['จำนวนเงิน'],
+  balance:          ['ยอดเงินหลังทำธุรกรรมเสร็จสิ้น', 'ยอดคงเหลือ', 'คงเหลือ'],
+}
 
 // ============================================================
 // Types
@@ -25,11 +54,11 @@ export interface ShopeeBalanceTransaction {
   occurred_at: string                          // ISO +07:00 (Bangkok)
   transaction_type: string                     // ประเภทการทำธุรกรรม
   transaction_mode: string | null              // รูปแบบธุรกรรม
-  ref_no: string | null                        // หมายเลขอ้างอิง
+  ref_no: string | null                        // รหัสคำสั่งซื้อ
   status: string | null                        // สถานะ
   amount: number                               // signed: positive = credit, negative = debit
-  balance: number | null                       // คงเหลือ
-  raw: Record<string, string | number>         // full row for audit
+  balance: number | null                       // ยอดเงินหลังทำธุรกรรมเสร็จสิ้น
+  raw: Record<string, string | number>
   source_row_number: number
 }
 
@@ -50,30 +79,18 @@ export interface ShopeeBalanceParseResult {
 }
 
 // ============================================================
-// Constants
-// ============================================================
-
-const REQUIRED_HEADERS = ['วันที่ทำธุรกรรม', 'ประเภทการทำธุรกรรม', 'จำนวนเงิน']
-
-const COL = {
-  occurred_at:      ['วันที่ทำธุรกรรม'],
-  transaction_type: ['ประเภทการทำธุรกรรม'],
-  transaction_mode: ['รูปแบบธุรกรรม'],
-  ref_no:           ['หมายเลขอ้างอิง'],
-  status:           ['สถานะ'],
-  amount:           ['จำนวนเงิน'],
-  balance:          ['คงเหลือ', 'ยอดคงเหลือ'],
-}
-
-// ============================================================
-// Shared helpers (handle both string and number cell values)
+// Column map helpers
 // ============================================================
 
 function findCol(headers: string[], candidates: string[]): string | null {
   for (const c of candidates) {
     const norm = c.trim().toLowerCase()
-    const found = headers.find((h) => h.trim().toLowerCase() === norm)
-    if (found) return found
+    // Exact match first
+    const exact = headers.find((h) => h.trim().toLowerCase() === norm)
+    if (exact) return exact
+    // Substring fallback (handles minor suffix differences)
+    const sub = headers.find((h) => h.trim().toLowerCase().includes(norm))
+    if (sub) return sub
   }
   return null
 }
@@ -90,26 +107,26 @@ function getField(row: Record<string, string | number>, colMap: Record<string, s
   const col = colMap[field]
   if (!col) return ''
   const v = row[col]
-  if (v === null || v === undefined) return ''
-  return String(v)
+  return v === null || v === undefined ? '' : String(v)
 }
 
 function getRawValue(row: Record<string, string | number>, colMap: Record<string, string | null>, field: string): string | number {
   const col = colMap[field]
-  if (!col) return ''
-  return row[col] ?? ''
+  return col ? (row[col] ?? '') : ''
 }
 
+// ============================================================
+// Value parsers (handle string and number cell values)
+// ============================================================
+
 /**
- * Parse date — handles:
- *  - Thai/ISO string formats: dd/MM/yyyy HH:mm:ss, yyyy-MM-dd, etc.
- *  - Excel serial date numbers (e.g. 45678.1234)
- * Returns Bangkok ISO string (+07:00)
+ * Parse date → Bangkok ISO string (+07:00)
+ * Handles: Thai/ISO strings, Excel serial date numbers
  */
 function parseBangkokDate(raw: string | number | null | undefined): string | null {
   if (raw === null || raw === undefined || raw === '' || raw === '-') return null
 
-  // Excel numeric serial date
+  // Excel numeric serial date (e.g. 45678.1234)
   if (typeof raw === 'number') {
     const ms = (raw - 25569) * 86400000
     const d = new Date(ms)
@@ -151,10 +168,7 @@ function parseBangkokDate(raw: string | number | null | undefined): string | nul
   return null
 }
 
-/**
- * Parse signed amount (e.g. "1,234.56", "-500.00", "฿1,234.56", or native number)
- * Returns signed numeric value.
- */
+/** Parse signed amount — handles "฿1,234.56", "-500", native number */
 function parseSignedAmount(raw: string | number | null | undefined): number | null {
   if (raw === null || raw === undefined || raw === '' || raw === '-') return null
   if (typeof raw === 'number') return isNaN(raw) ? null : raw
@@ -174,7 +188,7 @@ function parseUnsignedAmount(raw: string | number | null | undefined): number | 
 }
 
 // ============================================================
-// Core processing (shared between CSV and XLSX paths)
+// Core row processing (shared between CSV and XLSX paths)
 // ============================================================
 
 function processBalanceRows(
@@ -196,31 +210,41 @@ function processBalanceRows(
   const colMap = buildColMap(headers)
 
   const txnRows: ShopeeBalanceTransaction[] = []
-  const errors: ShopeeBalanceParseResult['errors'] = []
+  const parseErrors: ShopeeBalanceParseResult['errors'] = []
   let totalCredit = 0
   let totalDebit = 0
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]
-    const rowNumber = headerRowIndex + 2 + i
+    const rowNumber = headerRowIndex + 2 + i // 1-indexed source row
 
     const occurredAtRaw = getRawValue(row, colMap, 'occurred_at')
     const transactionType = getField(row, colMap, 'transaction_type').trim()
     const amountRaw = getRawValue(row, colMap, 'amount')
 
-    // Skip summary/footer/empty rows
+    // Skip footer/summary/empty rows
     if (!transactionType || transactionType.includes('ยอดรวม') || transactionType.toLowerCase().includes('total')) continue
-    if (!occurredAtRaw || String(occurredAtRaw) === '-') continue
+    if (!occurredAtRaw || String(occurredAtRaw) === '-' || String(occurredAtRaw) === '') continue
 
     const occurredAt = parseBangkokDate(occurredAtRaw)
     if (!occurredAt) {
-      errors.push({ row: rowNumber, field: 'วันที่ทำธุรกรรม', message: `วันที่ไม่ถูกต้อง: "${occurredAtRaw}"`, severity: 'warning' })
+      parseErrors.push({
+        row: rowNumber,
+        field: 'วันที่',
+        message: `วันที่ไม่ถูกต้อง: "${occurredAtRaw}"`,
+        severity: 'warning',
+      })
       continue
     }
 
     const amount = parseSignedAmount(amountRaw)
     if (amount === null) {
-      errors.push({ row: rowNumber, field: 'จำนวนเงิน', message: `จำนวนเงินไม่ถูกต้อง: "${amountRaw}"`, severity: 'warning' })
+      parseErrors.push({
+        row: rowNumber,
+        field: 'จำนวนเงิน',
+        message: `จำนวนเงินไม่ถูกต้อง: "${amountRaw}"`,
+        severity: 'warning',
+      })
       continue
     }
 
@@ -233,8 +257,7 @@ function processBalanceRows(
     const statusRaw = getField(row, colMap, 'status').trim()
     const status = statusRaw && statusRaw !== '-' ? statusRaw : null
 
-    const balanceRaw = getRawValue(row, colMap, 'balance')
-    const balance = parseUnsignedAmount(balanceRaw)
+    const balance = parseUnsignedAmount(getRawValue(row, colMap, 'balance'))
 
     if (amount > 0) totalCredit += amount
     else if (amount < 0) totalDebit += Math.abs(amount)
@@ -253,11 +276,11 @@ function processBalanceRows(
   }
 
   if (txnRows.length === 0) {
-    return makeEmpty(errors.length > 0 ? errors : [{ message: 'ไม่มีแถวข้อมูลที่ valid', severity: 'error' }])
+    return makeEmpty(parseErrors.length > 0 ? parseErrors : [{ message: 'ไม่มีแถวข้อมูลที่ valid', severity: 'error' }])
   }
 
   return {
-    success: errors.filter((e) => e.severity === 'error').length === 0,
+    success: parseErrors.filter((e) => e.severity === 'error').length === 0,
     detectedHeaderRow: headerRowIndex,
     totalRows: txnRows.length,
     rows: txnRows,
@@ -268,7 +291,7 @@ function processBalanceRows(
       netAmount: totalCredit - totalDebit,
       txnCount: txnRows.length,
     },
-    errors,
+    errors: parseErrors,
     warnings: [
       `พบ ${txnRows.length} รายการ (Header row: บรรทัดที่ ${headerRowIndex + 1})`,
       `เงินเข้า: ฿${totalCredit.toLocaleString('th-TH', { minimumFractionDigits: 2 })}`,
@@ -278,25 +301,76 @@ function processBalanceRows(
 }
 
 // ============================================================
+// CSV header scanner (inline, MAX_HEADER_SCAN_ROWS limit)
+// ============================================================
+
+interface CsvScanResult {
+  headerRowIndex: number
+  headers: string[]
+  dataRows: Record<string, string | number>[]
+}
+
+function scanCsvForHeader(text: string): CsvScanResult | null {
+  const normalized = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const lines = normalized.split('\n')
+  const limit = Math.min(lines.length, MAX_HEADER_SCAN_ROWS)
+
+  for (let i = 0; i < limit; i++) {
+    const line = lines[i]
+    // Check if this line contains ALL required header strings
+    if (REQUIRED_HEADERS.every((h) => line.includes(h))) {
+      const headers = parseCSVLine(line).map((h) => h.trim())
+
+      // Build data rows below the header
+      const dataRows: Record<string, string | number>[] = []
+      for (let r = i + 1; r < lines.length; r++) {
+        const dataLine = lines[r].trim()
+        if (!dataLine) continue
+        const values = parseCSVLine(lines[r])
+        const obj: Record<string, string | number> = {}
+        headers.forEach((h, idx) => {
+          obj[h] = (values[idx] ?? '').trim()
+        })
+        dataRows.push(obj)
+      }
+
+      return { headerRowIndex: i, headers, dataRows }
+    }
+  }
+  return null
+}
+
+// ============================================================
 // CSV path
 // ============================================================
 
 export function parseShopeeBalanceCSV(text: string): ShopeeBalanceParseResult {
-  const parsed = parseCSVWithDynamicHeader(text, REQUIRED_HEADERS)
-  if (!parsed) {
-    return {
-      success: false,
-      detectedHeaderRow: -1,
-      totalRows: 0,
-      rows: [],
-      sampleRows: [],
-      summary: { totalCredit: 0, totalDebit: 0, netAmount: 0, txnCount: 0 },
-      errors: [{ message: `ไม่พบ header row ที่มีคอลัมน์: ${REQUIRED_HEADERS.join(', ')}`, severity: 'error' }],
-      warnings: [],
-    }
+  const failResult = (message: string): ShopeeBalanceParseResult => ({
+    success: false,
+    detectedHeaderRow: -1,
+    totalRows: 0,
+    rows: [],
+    sampleRows: [],
+    summary: { totalCredit: 0, totalDebit: 0, netAmount: 0, txnCount: 0 },
+    errors: [{ message, severity: 'error' }],
+    warnings: [],
+  })
+
+  const scanned = scanCsvForHeader(text)
+  if (!scanned) {
+    return failResult(
+      `ไม่พบ header row ใน ${MAX_HEADER_SCAN_ROWS} แถวแรก ` +
+      `(ต้องมีคอลัมน์: ${REQUIRED_HEADERS.join(', ')})`
+    )
   }
-  // CSV rows are all strings — cast to shared type
-  return processBalanceRows(parsed.rows as Record<string, string | number>[], parsed.headers, parsed.headerRowIndex)
+
+  console.log(`[ShopeeBalance CSV] detectedHeaderRowIndex: ${scanned.headerRowIndex}`)
+
+  const result = processBalanceRows(scanned.dataRows, scanned.headers, scanned.headerRowIndex)
+
+  console.log(`[ShopeeBalance CSV] totalRowsParsed: ${result.totalRows}`)
+
+  return result
 }
 
 // ============================================================
@@ -328,10 +402,11 @@ export function parseShopeeBalanceXLSX(buffer: ArrayBuffer): ShopeeBalanceParseR
     const ws = workbook.Sheets[sheetName]
     const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true }) as (string | number)[][]
 
-    // Scan for header row
     let headerRowIndex = -1
     let headerRow: (string | number)[] = []
-    for (let r = 0; r < Math.min(rawRows.length, 300); r++) {
+
+    const limit = Math.min(rawRows.length, MAX_HEADER_SCAN_ROWS)
+    for (let r = 0; r < limit; r++) {
       const rowStr = rawRows[r].map((c) => String(c ?? '')).join(',')
       if (REQUIRED_HEADERS.every((h) => rowStr.includes(h))) {
         headerRowIndex = r
@@ -339,7 +414,10 @@ export function parseShopeeBalanceXLSX(buffer: ArrayBuffer): ShopeeBalanceParseR
         break
       }
     }
+
     if (headerRowIndex === -1) continue // try next sheet
+
+    console.log(`[ShopeeBalance XLSX] sheet="${sheetName}" detectedHeaderRowIndex: ${headerRowIndex}`)
 
     const headers = headerRow.map((c) => String(c ?? '').trim())
 
@@ -356,10 +434,18 @@ export function parseShopeeBalanceXLSX(buffer: ArrayBuffer): ShopeeBalanceParseR
     }
 
     if (dataRows.length === 0) continue
-    return processBalanceRows(dataRows, headers, headerRowIndex)
+
+    const result = processBalanceRows(dataRows, headers, headerRowIndex)
+
+    console.log(`[ShopeeBalance XLSX] totalRowsParsed: ${result.totalRows}`)
+
+    return result
   }
 
-  return failResult(`ไม่พบ header row ที่มีคอลัมน์: ${REQUIRED_HEADERS.join(', ')} ในทุก sheet`)
+  return failResult(
+    `ไม่พบ header row ใน ${MAX_HEADER_SCAN_ROWS} แถวแรกของทุก sheet ` +
+    `(ต้องมีคอลัมน์: ${REQUIRED_HEADERS.join(', ')})`
+  )
 }
 
 // ============================================================
@@ -368,15 +454,18 @@ export function parseShopeeBalanceXLSX(buffer: ArrayBuffer): ShopeeBalanceParseR
 
 /**
  * Parse Shopee Balance Transaction Report — auto-detects CSV vs XLSX
- * @param buffer  ArrayBuffer of the file
- * @param fileName  Original file name (used to pick parser)
+ * @param buffer   ArrayBuffer of the file (works for both formats)
+ * @param fileName Original file name (used to pick parser)
  */
-export async function parseShopeeBalanceFile(buffer: ArrayBuffer, fileName: string): Promise<ShopeeBalanceParseResult> {
+export async function parseShopeeBalanceFile(
+  buffer: ArrayBuffer,
+  fileName: string
+): Promise<ShopeeBalanceParseResult> {
   const lower = fileName.toLowerCase()
   if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
     return parseShopeeBalanceXLSX(buffer)
   }
-  // CSV / TXT: decode text then parse
+  // CSV / TXT: decode and parse
   const text = new TextDecoder('utf-8').decode(buffer)
   return parseShopeeBalanceCSV(text)
 }
