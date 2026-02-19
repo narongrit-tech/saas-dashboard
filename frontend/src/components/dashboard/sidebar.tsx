@@ -23,6 +23,7 @@ import {
   ChevronDown,
   ChevronRight,
   ArrowLeftCircle,
+  ShoppingBag,
 } from 'lucide-react'
 
 interface MenuItem {
@@ -113,6 +114,11 @@ const menuGroups: MenuGroup[] = [
         title: 'P&L Reconciliation',
         href: '/reconciliation',
         icon: GitCompare,
+      },
+      {
+        title: 'Shopee Finance',
+        href: '/finance/shopee',
+        icon: ShoppingBag,
       },
     ],
   },
