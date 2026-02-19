@@ -1,6 +1,6 @@
 'use client'
 
-import { Bell, LogOut, User } from 'lucide-react'
+import { LogOut, User } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
+import { NotificationBell } from '@/components/notifications/NotificationBell'
 
 interface HeaderProps {
   title: string
@@ -36,10 +37,7 @@ export function Header({ title, user }: HeaderProps) {
       <h1 className="text-2xl font-bold">{title}</h1>
 
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" className="relative">
-          <Bell className="h-5 w-5" />
-          <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500" />
-        </Button>
+        <NotificationBell />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
