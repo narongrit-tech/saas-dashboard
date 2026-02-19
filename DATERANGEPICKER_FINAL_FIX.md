@@ -149,7 +149,7 @@ Test on all pages:
 - [ ] `/ads` - Ads Performance
 - [ ] `/sales` - Sales Orders
 - [ ] `/expenses` - Expenses
-- [ ] `/cashflow` - Cashflow
+- [ ] `/finance/marketplace-wallets` - Cashflow
 - [ ] `/company-cashflow` - Company Cashflow
 - [ ] `/reconciliation` - P&L vs Cashflow Reconciliation
 - [ ] `/bank` - Bank Module

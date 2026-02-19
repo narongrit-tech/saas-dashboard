@@ -50,20 +50,20 @@ Phase 2B implements TikTok Income/Settlement importer with full reconciliation a
   - Returns counts: inserted, updated, reconciled, not found in forecast
 
 ### Frontend (UI Components)
-- `frontend/src/components/cashflow/ImportIncomeDialog.tsx`
+- `frontend/src/components/finance/marketplace-wallets/ImportIncomeDialog.tsx`
   - File upload dialog for Income reports
   - Shows reconciliation results (matched with forecast count)
   - Success/error states with Thai messages
 
 ### Updated Files
-- `frontend/src/app/(dashboard)/cashflow/page.tsx`
+- `frontend/src/app/(dashboard)/finance/marketplace-wallets/page.tsx`
   - **MAJOR UPGRADE**: Forecast vs Actual comparison
   - 3 summary cards: Forecast, Actual, Gap
   - Tabs: Forecast / Actual / Exceptions
   - Exceptions section: Overdue Forecast + Settled Without Forecast
   - Two import buttons: "Import Forecast" + "Import Actual"
 
-- `frontend/src/app/(dashboard)/cashflow/actions.ts`
+- `frontend/src/app/(dashboard)/finance/marketplace-wallets/actions.ts`
   - Added `getSettledSummary()`: Sum settlement amounts in date range
   - Added `getSettledTransactions()`: Fetch settled rows
   - Added `getOverdueForecast()`: Unsettled past estimated_settle_time
@@ -174,7 +174,7 @@ Phase 2B implements TikTok Income/Settlement importer with full reconciliation a
 
 #### 2. Income Import
 - [ ] Login to app
-- [ ] Go to /cashflow page
+- [ ] Go to /finance/marketplace-wallets page
 - [ ] Click "Import Actual" button
 - [ ] Upload sample file: `/mnt/data/income_20260119121416(UTC+7).xlsx`
 - [ ] Verify success message shows:
@@ -256,7 +256,7 @@ limit 10;
 ✅ TypeScript Compilation: PASSED
 ✅ Next.js Build: PASSED (with --no-lint)
 Route: /api/import/tiktok/income → Successfully built
-Route: /cashflow → Successfully built (7 kB, up from 3.87 kB)
+Route: /finance/marketplace-wallets → Successfully built (7 kB, up from 3.87 kB)
 ```
 
 ### Lint Status
@@ -297,7 +297,7 @@ npx tsx scripts/test-onhold-parse.ts
 ```bash
 cd frontend
 npm run dev
-# Visit http://localhost:3000/cashflow
+# Visit http://localhost:3000/finance/marketplace-wallets
 ```
 
 #### 4. Build for Production

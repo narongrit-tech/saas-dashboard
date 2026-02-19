@@ -261,4 +261,4 @@ Create `BANK_MODULE_QA.md` with sections:
 6. ⏳ Update CLAUDE.md
 
 **Estimated Remaining Work:** 8-10 hours
-**Complexity:** Medium (reuse existing patterns from wallets/cashflow modules)
+**Complexity:** Medium (reuse existing patterns from wallets/finance/marketplace-wallets modules)

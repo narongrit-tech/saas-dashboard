@@ -366,7 +366,7 @@
 
    Files to fix:
    - lib/daily-pl.ts
-   - lib/cashflow.ts
+   - lib/finance/marketplace-wallets.ts
    - app/(dashboard)/actions.ts
    - sales/actions.ts
    ```

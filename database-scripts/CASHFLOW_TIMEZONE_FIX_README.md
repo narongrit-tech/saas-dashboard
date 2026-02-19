@@ -183,11 +183,11 @@ FULL OUTER JOIN summary_actual ON raw_actual.th_date = summary_actual.date;
 
 ## ไฟล์ที่แก้ไข
 
-1. ✅ `frontend/src/app/(dashboard)/cashflow/cashflow-api-actions.ts`
+1. ✅ `frontend/src/app/(dashboard)/finance/marketplace-wallets/finance/marketplace-wallets-api-actions.ts`
    - เพิ่ม `import { formatBangkok }`
    - แทนที่ `.toISOString().split('T')[0]` ด้วย `formatBangkok(date, 'yyyy-MM-dd')`
 
-2. ✅ `frontend/src/app/(dashboard)/cashflow/page.tsx`
+2. ✅ `frontend/src/app/(dashboard)/finance/marketplace-wallets/page.tsx`
    - แก้ `formatDate()` ให้ parse date string เป็น local date
 
 3. ✅ `database-scripts/migration-012-cashflow-timezone-summary-fix.sql`

@@ -56,9 +56,9 @@ Where:
 - Critical for small business survival
 
 **Files Created:**
-- `frontend/src/lib/cashflow.ts` - Backend calculation utilities
-- `frontend/src/app/(dashboard)/cashflow/page.tsx` - UI page
-- `frontend/src/app/(dashboard)/cashflow/actions.ts` - Server actions
+- `frontend/src/lib/finance/marketplace-wallets.ts` - Backend calculation utilities
+- `frontend/src/app/(dashboard)/finance/marketplace-wallets/page.tsx` - UI page
+- `frontend/src/app/(dashboard)/finance/marketplace-wallets/actions.ts` - Server actions
 
 **Business Formula:**
 ```
@@ -317,7 +317,7 @@ Before going to production, test these scenarios with real data:
    - Net Profit = Revenue - Advertising - COGS - Operating
    - Used by: Daily P&L page
 
-2. frontend/src/lib/cashflow.ts
+2. frontend/src/lib/finance/marketplace-wallets.ts
    - Cashflow calculations
    - Net Change = Cash In (completed only) - Cash Out
    - Used by: Cashflow page

@@ -142,13 +142,13 @@ ORDER BY tablename, indexname;
 -- ============================================
 --
 -- Files modified:
--- 1. frontend/src/app/(dashboard)/cashflow/cashflow-api-actions.ts
+-- 1. frontend/src/app/(dashboard)/finance/marketplace-wallets/finance/marketplace-wallets-api-actions.ts
 --    - Added: import { formatBangkok } from '@/lib/bangkok-time'
 --    - Changed: .gte('date', startDate.toISOString().split('T')[0])
 --      → .gte('date', formatBangkok(startDate, 'yyyy-MM-dd'))
 --    - Applied to: getCashflowSummary, getDailyCashflowSummary, rebuildCashflowSummary
 --
--- 2. frontend/src/app/(dashboard)/cashflow/page.tsx
+-- 2. frontend/src/app/(dashboard)/finance/marketplace-wallets/page.tsx
 --    - Changed: formatDate() to parse date string as local date (not UTC)
 --    - Prevents: new Date('2026-01-25') → UTC midnight → timezone shift
 --

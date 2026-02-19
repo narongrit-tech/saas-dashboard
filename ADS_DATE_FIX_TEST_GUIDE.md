@@ -36,7 +36,7 @@ const startDateStr = format(startDate, 'yyyy-MM-dd');
 **Fixed:** ตอนนี้ทั้ง `getAdsSummary()` และ `getAdsPerformance()` ใช้ `format()` เหมือนกัน → date range consistent
 
 ### ปัญหา 3: Date Picker ไม่เหมือนหน้าอื่น
-**Fixed:** เปลี่ยนเป็น `SingleDateRangePicker` (เดียวกับ sales/expenses/cashflow)
+**Fixed:** เปลี่ยนเป็น `SingleDateRangePicker` (เดียวกับ sales/expenses/finance/marketplace-wallets)
 
 ---
 
@@ -181,7 +181,7 @@ WHERE ad_date = '2026-01-17';
 ### Pages to Check:
 - `/sales` - date range filter ต้องยังใช้งานได้ปกติ
 - `/expenses` - date range filter ต้องยังใช้งานได้ปกติ
-- `/cashflow` - date range filter ต้องยังใช้งานได้ปกติ
+- `/finance/marketplace-wallets` - date range filter ต้องยังใช้งานได้ปกติ
 - `/company-cashflow` - date range filter ต้องยังใช้งานได้ปกติ
 - `/reconciliation` - date range filter ต้องยังใช้งานได้ปกติ
 

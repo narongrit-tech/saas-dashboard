@@ -55,7 +55,7 @@ These pages use `SingleDateRangePicker` and automatically inherit the new behavi
 - ✅ `/ads` - Ads Performance
 - ✅ `/sales` - Sales Orders
 - ✅ `/expenses` - Expenses
-- ✅ `/cashflow` - Cashflow (Settlement tracking)
+- ✅ `/finance/marketplace-wallets` - Cashflow (Settlement tracking)
 - ✅ `/company-cashflow` - Company Cashflow
 - ✅ `/reconciliation` - P&L vs Cashflow Reconciliation
 - ✅ `/bank` - Bank Module (Daily Summary + Transactions)
@@ -146,7 +146,7 @@ These pages use `SingleDateRangePicker` and automatically inherit the new behavi
 
 ### Test Case 4: Range Selection Cancellation
 **Steps:**
-1. เปิดหน้า `/cashflow`
+1. เปิดหน้า `/finance/marketplace-wallets`
 2. คลิก date range picker button
 3. คลิกวันที่ 10 มกราคม (start date)
 4. **ไม่คลิก end date**

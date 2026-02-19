@@ -57,7 +57,7 @@ Rollback all date picker refactor changes to restore original behavior (before T
    - Removed: `format()` imports
    - Preserved: Campaign type tabs UI and modal instance key (from separate features)
 
-3. `frontend/src/app/(dashboard)/cashflow/page.tsx`
+3. `frontend/src/app/(dashboard)/finance/marketplace-wallets/page.tsx`
 4. `frontend/src/app/(dashboard)/company-cashflow/page.tsx`
 5. `frontend/src/app/(dashboard)/expenses/page.tsx`
 6. `frontend/src/app/(dashboard)/reconciliation/page.tsx`
@@ -106,7 +106,7 @@ Rollback all date picker refactor changes to restore original behavior (before T
 - `/ads`: 15.4 kB (was 15.9 kB - slightly smaller after rollback)
 - `/bank`: 12.1 kB (was 13 kB)
 - `/bank-reconciliation`: 11.2 kB (was 12 kB)
-- `/cashflow`: 9.37 kB (was 10.2 kB)
+- `/finance/marketplace-wallets`: 9.37 kB (was 10.2 kB)
 - `/company-cashflow`: 6.85 kB (was 4.03 kB)
 - `/expenses`: 10.3 kB (was 8.57 kB)
 - `/reconciliation`: 6.9 kB (was 4.06 kB)
@@ -186,7 +186,7 @@ eae2893 Revert "refactor(ui): unify date range picker across all pages (TikTok-s
 #### Cross-Page Testing
 - [ ] `/sales` - Date picker works
 - [ ] `/expenses` - Date picker works
-- [ ] `/cashflow` - Date picker works
+- [ ] `/finance/marketplace-wallets` - Date picker works
 - [ ] `/company-cashflow` - Date picker works
 - [ ] `/reconciliation` - Date picker works
 - [ ] `/bank` - Date picker works

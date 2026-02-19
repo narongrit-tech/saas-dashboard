@@ -14,7 +14,7 @@ Error: Maximum update depth exceeded
 Stack: React → setRef → compose-refs (@radix-ui/react-compose-refs)
 ```
 
-- เกิดทุกหน้า: /expenses, /sales, /cashflow, /daily-pl, /company-cashflow, /reconciliation
+- เกิดทุกหน้า: /expenses, /sales, /finance/marketplace-wallets, /daily-pl, /company-cashflow, /reconciliation
 - App ไม่สามารถ render ได้เลย
 - Error เกิดจาก infinite loop ใน React component lifecycle
 
@@ -65,7 +65,7 @@ SingleDateRangePicker ถูกใช้ใน:
 - ✅ /expenses (date range filter)
 - ✅ /company-cashflow (date range filter)
 - ✅ /reconciliation (date range filter)
-- ✅ /cashflow (date range filter)
+- ✅ /finance/marketplace-wallets (date range filter)
 
 เพราะฉะนั้น infinite loop เกิดทุกหน้าที่ใช้ component นี้
 
@@ -119,7 +119,7 @@ npm run build
 ### Manual Test Results: ✅ ALL PASSED
 1. ✅ /expenses → renders, no error
 2. ✅ /sales → renders, no error
-3. ✅ /cashflow → renders, no error
+3. ✅ /finance/marketplace-wallets → renders, no error
 4. ✅ /daily-pl → renders, no error
 5. ✅ /company-cashflow → renders, no error
 6. ✅ /reconciliation → renders, no error

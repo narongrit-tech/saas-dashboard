@@ -80,7 +80,7 @@ Expected:
 **Objective:** Verify auto-match works for exact settlement match
 
 **Setup:**
-1. Navigate to `/cashflow` page
+1. Navigate to `/finance/marketplace-wallets` page
 2. Import TikTok Income file (or manually create settlement):
    - Transaction ID: "TEST_SETTLEMENT_001"
    - Settlement Amount: 10000

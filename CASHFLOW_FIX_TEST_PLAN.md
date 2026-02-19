@@ -101,7 +101,7 @@ WHERE marketplace = 'tiktok';
 ### STEP 2: Import TikTok Onhold (Forecast)
 
 **Actions:**
-1. Go to `/cashflow` page
+1. Go to `/finance/marketplace-wallets` page
 2. Click "Import Forecast" button
 3. Select TikTok Onhold Excel file
 4. Optional: Check "Allow re-upload same file (testing mode)" for testing
@@ -149,7 +149,7 @@ ORDER BY date;
 ### STEP 3: Import TikTok Income (Actual)
 
 **Actions:**
-1. Stay on `/cashflow` page
+1. Stay on `/finance/marketplace-wallets` page
 2. Click "Import Actual" button
 3. Select TikTok Income/Settlement Excel file
 4. Click "นำเข้าข้อมูล"
@@ -202,7 +202,7 @@ ORDER BY date;
 ### STEP 4: Verify Daily Summary Table (UX)
 
 **Actions:**
-1. Stay on `/cashflow` page
+1. Stay on `/finance/marketplace-wallets` page
 2. Scroll to "Daily Cash In Summary (Forecast vs Actual)" section
 
 **Expected:**
@@ -217,7 +217,7 @@ ORDER BY date;
 
 **Page Load Performance:**
 ```
-Check Network tab → /cashflow page load
+Check Network tab → /finance/marketplace-wallets page load
 Expected: < 500ms TTFB (Time To First Byte)
 
 Check Console → [Daily Summary Table] log
@@ -337,7 +337,7 @@ SELECT rebuild_cashflow_daily_summary(
 - Rebuild succeeds ✅
 
 **Verify UI:**
-1. Go to `/cashflow` page
+1. Go to `/finance/marketplace-wallets` page
 2. Check date range includes 2026-01-28
 3. Look at daily summary table
 

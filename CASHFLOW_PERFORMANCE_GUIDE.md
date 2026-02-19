@@ -2,7 +2,7 @@
 
 ## Overview
 
-Optimized `/cashflow` page for fast initial load (<500ms) and scalable for large datasets.
+Optimized `/finance/marketplace-wallets` page for fast initial load (<500ms) and scalable for large datasets.
 
 ## Changes Made
 
@@ -118,16 +118,16 @@ Or use the UI after replacing page.tsx (see step 3).
 
 ```bash
 # Backup old file
-mv frontend/src/app/(dashboard)/cashflow/page.tsx frontend/src/app/(dashboard)/cashflow/page-old.tsx
+mv frontend/src/app/(dashboard)/finance/marketplace-wallets/page.tsx frontend/src/app/(dashboard)/finance/marketplace-wallets/page-old.tsx
 
 # Use optimized version
-mv frontend/src/app/(dashboard)/cashflow/page-optimized.tsx frontend/src/app/(dashboard)/cashflow/page.tsx
+mv frontend/src/app/(dashboard)/finance/marketplace-wallets/page-optimized.tsx frontend/src/app/(dashboard)/finance/marketplace-wallets/page.tsx
 ```
 
 ### 4. Test Performance
 
 **A) Check Summary Load Time**
-1. Open `/cashflow` page
+1. Open `/finance/marketplace-wallets` page
 2. Open browser DevTools → Network tab
 3. Filter by "cashflow"
 4. Verify only 1 request: `getCashflowSummary`
@@ -348,7 +348,7 @@ If issues occur, revert to old version:
 
 ```bash
 # Restore old page
-mv frontend/src/app/(dashboard)/cashflow/page-old.tsx frontend/src/app/(dashboard)/cashflow/page.tsx
+mv frontend/src/app/(dashboard)/finance/marketplace-wallets/page-old.tsx frontend/src/app/(dashboard)/finance/marketplace-wallets/page.tsx
 
 # Drop new table (optional)
 DROP TABLE IF EXISTS cashflow_daily_summary;

@@ -165,7 +165,7 @@ Phase 2A implements core foundations for cashflow forecasting, ads tracking, and
   }
   ```
 
-#### 4. Cashflow Page (`frontend/src/app/(dashboard)/cashflow/page.tsx`)
+#### 4. Cashflow Page (`frontend/src/app/(dashboard)/finance/marketplace-wallets/page.tsx`)
 
 **Features:**
 - **DateRangeFilter** integration (default: last 7 days)
@@ -185,7 +185,7 @@ Phase 2A implements core foundations for cashflow forecasting, ads tracking, and
   - Displays import result (counts, errors, warnings)
   - Auto-refresh data on success
 
-**Server Actions:** (`frontend/src/app/(dashboard)/cashflow/actions.ts`)
+**Server Actions:** (`frontend/src/app/(dashboard)/finance/marketplace-wallets/actions.ts`)
 - `getUnsettledSummary(startDate, endDate)` - Summary stats
 - `getUnsettledTransactions(startDate, endDate)` - List of txns
 - `getNext7DaysForecast()` - Next 7 days grouped by date
@@ -408,11 +408,11 @@ frontend/src/lib/importers/tiktok-onhold.ts
 frontend/src/lib/importers/tiktok-ads-daily.ts
 frontend/src/app/api/import/tiktok/onhold/route.ts
 frontend/src/app/api/import/tiktok/ads-daily/route.ts
-frontend/src/app/(dashboard)/cashflow/page.tsx (rewritten)
-frontend/src/app/(dashboard)/cashflow/actions.ts (extended)
+frontend/src/app/(dashboard)/finance/marketplace-wallets/page.tsx (rewritten)
+frontend/src/app/(dashboard)/finance/marketplace-wallets/actions.ts (extended)
 frontend/src/app/(dashboard)/ads/page.tsx
 frontend/src/app/(dashboard)/ads/actions.ts
-frontend/src/components/cashflow/ImportOnholdDialog.tsx
+frontend/src/components/finance/marketplace-wallets/ImportOnholdDialog.tsx
 frontend/src/components/ads/ImportAdsDialog.tsx
 database-scripts/migration-001-import-batches.sql
 database-scripts/migration-002-unsettled-transactions.sql

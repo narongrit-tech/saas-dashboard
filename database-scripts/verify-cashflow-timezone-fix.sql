@@ -36,7 +36,7 @@ ORDER BY tablename, indexname;
 -- ============================================
 -- STEP 3: RE-IMPORT DATA (MANUAL STEP)
 -- ============================================
--- 1. Go to /cashflow page
+-- 1. Go to /finance/marketplace-wallets page
 -- 2. Import Onhold file (with "Delivered + N days")
 -- 3. Import Income file
 -- 4. Check console logs for:
@@ -185,7 +185,7 @@ GROUP BY (settled_time AT TIME ZONE 'Asia/Bangkok')::date;
 -- ✅ Daily summary 2026-01-25 has actual_sum > 0
 -- ✅ Indexes created and being used
 -- ✅ Rebuild function logs NOTICE message
--- ✅ Frontend /cashflow page shows correct daily buckets
+-- ✅ Frontend /finance/marketplace-wallets page shows correct daily buckets
 
 -- ============================================
 -- TROUBLESHOOTING

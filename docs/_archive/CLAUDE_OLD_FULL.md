@@ -230,16 +230,16 @@ Later: CSV import, inventory, payables, reports, tax, APIs
 - ✅ 0% NULL estimated_settle_time
 
 **Location:**
-- Page: `frontend/src/app/(dashboard)/cashflow/page.tsx`
-- API Actions: `frontend/src/app/(dashboard)/cashflow/cashflow-api-actions.ts`
-- Legacy Actions: `frontend/src/app/(dashboard)/cashflow/actions.ts`
+- Page: `frontend/src/app/(dashboard)/finance/marketplace-wallets/page.tsx`
+- API Actions: `frontend/src/app/(dashboard)/finance/marketplace-wallets/finance/marketplace-wallets-api-actions.ts`
+- Legacy Actions: `frontend/src/app/(dashboard)/finance/marketplace-wallets/actions.ts`
 - TikTok Onhold Parser: `frontend/src/lib/importers/tiktok-onhold.ts`
 - TikTok Income Parser: `frontend/src/lib/importers/tiktok-income.ts`
 - Reconciliation: `frontend/src/lib/reconcile/settlement-reconcile.ts`
-- Types: `frontend/src/types/cashflow-api.ts`
+- Types: `frontend/src/types/finance/marketplace-wallets-api.ts`
 - Components:
-  - `frontend/src/components/cashflow/ImportOnholdDialog.tsx`
-  - `frontend/src/components/cashflow/ImportIncomeDialog.tsx`
+  - `frontend/src/components/finance/marketplace-wallets/ImportOnholdDialog.tsx`
+  - `frontend/src/components/finance/marketplace-wallets/ImportIncomeDialog.tsx`
   - `frontend/src/components/shared/SingleDateRangePicker.tsx`
 - Database:
   - Migration: `database-scripts/migration-010-cashflow-performance.sql`
@@ -649,7 +649,7 @@ Later: CSV import, inventory, payables, reports, tax, APIs
 - `/daily-pl` - Single date selector
 - `/company-cashflow` - Date range filter
 - `/reconciliation` - Date range filter
-- `/cashflow` - Date range filter (already existed)
+- `/finance/marketplace-wallets` - Date range filter (already existed)
 
 **Bangkok Timezone Utilities:**
 - `frontend/src/lib/bangkok-time.ts` - Central timezone handling

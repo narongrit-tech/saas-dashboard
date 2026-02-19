@@ -111,7 +111,7 @@ summary.date: 2026-01-01 ✅
    - Pagination: 50 rows per page
 
 **Code Location:**
-- File: `frontend/src/app/(dashboard)/cashflow/cashflow-api-actions.ts`
+- File: `frontend/src/app/(dashboard)/finance/marketplace-wallets/finance/marketplace-wallets-api-actions.ts`
 - Functions:
   - `getCashflowSummary()` → queries `cashflow_daily_summary`
   - `getDailyCashflowSummary()` → queries `cashflow_daily_summary`
@@ -280,8 +280,8 @@ database-scripts/debug-cashflow.sql (NEW)
 
 ### Application Code
 ```
-frontend/src/app/(dashboard)/cashflow/cashflow-api-actions.ts (MODIFIED)
-frontend/src/app/(dashboard)/cashflow/page.tsx (MODIFIED - subtitle added)
+frontend/src/app/(dashboard)/finance/marketplace-wallets/finance/marketplace-wallets-api-actions.ts (MODIFIED)
+frontend/src/app/(dashboard)/finance/marketplace-wallets/page.tsx (MODIFIED - subtitle added)
 frontend/src/app/api/import/tiktok/income/route.ts (MODIFIED - auto rebuild)
 frontend/src/app/api/import/tiktok/onhold/route.ts (MODIFIED - auto rebuild)
 frontend/src/lib/reconcile/settlement-reconcile.ts (MODIFIED - batching)
@@ -320,7 +320,7 @@ Time: 13.1 seconds ✅
 
 ### Performance Test
 ```
-Page Load: /cashflow
+Page Load: /finance/marketplace-wallets
 - TTFB: 595ms ✅
 - Summary Query: 253ms (DB time) ✅
 - Daily Table: 87ms ✅

@@ -45,7 +45,7 @@ System underwent comprehensive financial hardening to ensure correctness with re
 
 **Files Modified:**
 - `frontend/src/lib/daily-pl.ts` - 3 functions hardened
-- `frontend/src/lib/cashflow.ts` - 3 functions hardened
+- `frontend/src/lib/finance/marketplace-wallets.ts` - 3 functions hardened
 - `frontend/src/app/(dashboard)/actions.ts` - 4 aggregations hardened
 - `frontend/src/app/(dashboard)/sales/actions.ts` - Input validation hardened
 - `frontend/src/app/(dashboard)/expenses/actions.ts` - Input validation hardened
@@ -184,7 +184,7 @@ System underwent comprehensive financial hardening to ensure correctness with re
 
 ---
 
-### File: `frontend/src/lib/cashflow.ts`
+### File: `frontend/src/lib/finance/marketplace-wallets.ts`
 
 **Changes:**
 1. **getDailyCashIn()** (lines 66-75)
@@ -385,7 +385,7 @@ The system now **GUARANTEES:**
 
 **Core Calculation Files (4):**
 1. `frontend/src/lib/daily-pl.ts` - P&L calculations
-2. `frontend/src/lib/cashflow.ts` - Cashflow calculations
+2. `frontend/src/lib/finance/marketplace-wallets.ts` - Cashflow calculations
 3. `frontend/src/app/(dashboard)/actions.ts` - Dashboard stats
 4. `frontend/src/app/(dashboard)/sales/actions.ts` - Sales input
 5. `frontend/src/app/(dashboard)/expenses/actions.ts` - Expense input

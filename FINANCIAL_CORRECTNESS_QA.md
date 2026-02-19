@@ -46,7 +46,7 @@ SELECT total_amount FROM sales_orders WHERE order_id = 'MAN-...-001';
 
 **Protection code location:**
 - `lib/daily-pl.ts:63-67` (revenue)
-- `lib/cashflow.ts:67-71` (cash in)
+- `lib/finance/marketplace-wallets.ts:67-71` (cash in)
 - `app/(dashboard)/actions.ts:70-73` (dashboard sales)
 
 ---

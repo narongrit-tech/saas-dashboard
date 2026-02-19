@@ -90,7 +90,7 @@ The SaaS Dashboard system has undergone **comprehensive autonomous hardening** a
    - Changes: Precision rounding, negative value rejection, NaN guards
    - Impact: P&L calculations now mathematically precise
 
-2. **`frontend/src/lib/cashflow.ts`**
+2. **`frontend/src/lib/finance/marketplace-wallets.ts`**
    - Functions: getDailyCashIn(), getDailyCashOut(), getDailyCashflow(), getDailyCashflowRange()
    - Changes: Precision rounding, negative value rejection, running balance precision
    - Impact: Cashflow calculations precise, no accumulation errors

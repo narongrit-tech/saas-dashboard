@@ -29,7 +29,7 @@
 **Rule:** Cash In = SUM(sales_orders.total_amount) WHERE status = 'completed' ONLY
 
 **Code Verification:**
-- `lib/cashflow.ts:45-55`: ✅ Uses `.eq('status', 'completed')`
+- `lib/finance/marketplace-wallets.ts:45-55`: ✅ Uses `.eq('status', 'completed')`
 - Only completed orders count as cash received
 
 **Test Cases:**
@@ -48,7 +48,7 @@
 **Code Verification:**
 - `expenses/actions.ts:16`: ✅ VALID_CATEGORIES enforced
 - `lib/daily-pl.ts:76-89`: ✅ Queries by category
-- `lib/cashflow.ts:75-85`: ✅ All expenses (no filter)
+- `lib/finance/marketplace-wallets.ts:75-85`: ✅ All expenses (no filter)
 
 **Test Cases:**
 - [ ] Add Advertising expense → Advertising Cost increases in P&L
@@ -81,7 +81,7 @@
 **Rule:** Net Change = Cash In - Cash Out
 
 **Code Verification:**
-- `lib/cashflow.ts:110-112`: ✅ Correct formula with NaN safety
+- `lib/finance/marketplace-wallets.ts:110-112`: ✅ Correct formula with NaN safety
 - `cashflow/page.tsx`: ✅ Displays correctly
 
 **Test Cases:**
@@ -117,7 +117,7 @@
 
 **Code Verification:**
 - `lib/daily-pl.ts:125-131`: ✅ Number.isFinite() check
-- `lib/cashflow.ts:110-112`: ✅ Number.isFinite() check
+- `lib/finance/marketplace-wallets.ts:110-112`: ✅ Number.isFinite() check
 - `app/(dashboard)/actions.ts:80-82`: ✅ Number.isFinite() check
 
 **Test Cases:**
@@ -307,7 +307,7 @@
 
 **Code Verification:**
 - All P&L calculations in `lib/daily-pl.ts` (server-side)
-- All Cashflow calculations in `lib/cashflow.ts` (server-side)
+- All Cashflow calculations in `lib/finance/marketplace-wallets.ts` (server-side)
 - Client only displays data
 
 **Status:** ✅ VERIFIED - No client calculations

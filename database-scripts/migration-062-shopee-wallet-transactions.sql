@@ -4,7 +4,7 @@
 
 -- ============================================================
 -- Table: marketplace_wallet_transactions
--- Stores raw wallet/cashflow transactions imported from
+-- Stores raw wallet/finance/marketplace-wallets transactions imported from
 -- marketplace platforms (Shopee Transaction Report, etc.)
 -- ============================================================
 
@@ -106,7 +106,7 @@ create trigger marketplace_wallet_transactions_updated_at
 -- ============================================================
 
 comment on table marketplace_wallet_transactions is
-  'Raw wallet/cashflow transactions imported from marketplace platforms (Shopee, TikTok, etc.)';
+  'Raw wallet/finance/marketplace-wallets transactions imported from marketplace platforms (Shopee, TikTok, etc.)';
 
 comment on column marketplace_wallet_transactions.platform is
   'Source platform: shopee | tiktok | lazada';

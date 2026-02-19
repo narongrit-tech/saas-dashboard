@@ -73,7 +73,7 @@ All pages using `SingleDateRangePicker` automatically get the new behavior:
 1. ✅ `/ads` - Ads Performance
 2. ✅ `/sales` - Sales Orders
 3. ✅ `/expenses` - Expenses
-4. ✅ `/cashflow` - Cashflow (Settlement tracking)
+4. ✅ `/finance/marketplace-wallets` - Cashflow (Settlement tracking)
 5. ✅ `/company-cashflow` - Company Cashflow
 6. ✅ `/reconciliation` - P&L vs Cashflow Reconciliation
 7. ✅ `/bank` - Bank Module (Daily Summary)
