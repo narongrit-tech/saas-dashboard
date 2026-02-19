@@ -82,7 +82,7 @@ const menuGroups: MenuGroup[] = [
     items: [
       {
         title: 'Marketplace Wallets',
-        href: '/cashflow',
+        href: '/finance/marketplace-wallets',
         icon: Wallet,
       },
       {
