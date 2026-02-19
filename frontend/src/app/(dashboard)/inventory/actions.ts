@@ -23,6 +23,12 @@ import {
   type CostingMethod,
   type COGSApplyResult,
 } from '@/lib/inventory-costing'
+import {
+  createCogsRun,
+  completeCogsRunSuccess,
+  completeCogsRunFailed,
+  createNotificationForRun,
+} from './cogs-run-actions'
 
 // ============================================
 // Helper Functions
@@ -691,6 +697,7 @@ export async function applyCOGSMTD(params: {
 } = {}) {
   const method = params.method || 'FIFO'
   let run_id: string | null = null // Track run ID for logging
+  let cogs_run_id: string | null = null // Track cogs_allocation_runs ID for notifications
 
   try {
     const supabase = createClient()
@@ -763,6 +770,19 @@ export async function applyCOGSMTD(params: {
     }
 
     console.log(`Apply COGS Range: ${startDateISO} to ${endDateISO}`)
+
+    // ============================================
+    // CREATE COGS_ALLOCATION_RUN (notification tracking)
+    // ============================================
+    const cogsRunResult = await createCogsRun({
+      triggerSource: 'DATE_RANGE',
+      dateFrom: startDateISO,
+      dateTo: endDateISO,
+    })
+    if (cogsRunResult.success && cogsRunResult.runId) {
+      cogs_run_id = cogsRunResult.runId
+      console.log(`Created cogs_allocation_run: ${cogs_run_id}`)
+    }
 
     // ============================================
     // CREATE RUN RECORD (for logging)
@@ -1208,16 +1228,48 @@ export async function applyCOGSMTD(params: {
     revalidatePath('/sales')
     revalidatePath('/daily-pl')
 
+    // ============================================
+    // COMPLETE COGS_ALLOCATION_RUN (success)
+    // ============================================
+    if (cogs_run_id) {
+      const notifSummary = {
+        total: summary.total,
+        eligible: summary.eligible,
+        successful: summary.successful,
+        skipped: summary.skipped,
+        failed: summary.failed,
+        partial: summary.partial,
+        skip_reasons: skipReasonsArray,
+      }
+      await completeCogsRunSuccess(cogs_run_id, notifSummary)
+      await createNotificationForRun(cogs_run_id, {
+        total: summary.total,
+        successful: summary.successful,
+        skipped: summary.skipped,
+        failed: summary.failed,
+      })
+    }
+
     return {
       success: true,
       data: {
         ...summary,
         skip_reasons: skipReasonsArray,
         run_id, // Include run_id in response
+        cogs_run_id, // Include cogs_allocation_runs id
       },
     }
   } catch (error) {
     console.error('Unexpected error in applyCOGSMTD:', error)
+
+    // Mark cogs_allocation_run as failed if it was created
+    if (typeof cogs_run_id === 'string' && cogs_run_id) {
+      await completeCogsRunFailed(
+        cogs_run_id,
+        error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด'
+      )
+    }
+
     return {
       success: false,
       error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
@@ -2870,6 +2922,454 @@ export async function clearPartialCOGSAllocations(
       success: false,
       error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
       cleared: 0,
+    }
+  }
+}
+
+// ============================================
+// Apply COGS for a specific Import Batch
+// ============================================
+
+/**
+ * Apply COGS for all eligible orders in a specific import batch.
+ * Uses the same processing loop as applyCOGSMTD but scoped to a single batch.
+ * Idempotent: safe to run multiple times.
+ */
+export async function applyCOGSForBatch(importBatchId: string): Promise<{
+  success: boolean
+  error?: string
+  data: {
+    total: number
+    eligible: number
+    successful: number
+    skipped: number
+    failed: number
+    partial: number
+    errors: Array<{ order_id: string; reason: string }>
+    skip_reasons: Array<{ code: string; label: string; count: number; samples: Array<{ order_id: string; sku?: string; detail?: string }> }>
+    run_id: string | null
+    cogs_run_id: string | null
+  } | null
+}> {
+  const method: CostingMethod = 'FIFO'
+  let run_id: string | null = null
+  let cogs_run_id: string | null = null
+
+  try {
+    const supabase = createClient()
+
+    // Auth check
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้', data: null }
+    }
+
+    // Admin check
+    const { data: roleData, error: roleError } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id)
+      .single()
+
+    if (roleError || roleData?.role !== 'admin') {
+      return {
+        success: false,
+        error: 'ไม่มีสิทธิ์เข้าถึงฟังก์ชันนี้ (Admin only)',
+        data: null,
+      }
+    }
+
+    // Create cogs_allocation_run record
+    const cogsRunResult = await createCogsRun({
+      triggerSource: 'IMPORT_BATCH',
+      importBatchId,
+    })
+    if (cogsRunResult.success && cogsRunResult.runId) {
+      cogs_run_id = cogsRunResult.runId
+      console.log(`Created cogs_allocation_run (batch): ${cogs_run_id}`)
+    }
+
+    // Create legacy run record
+    const { data: runData, error: runError } = await supabase
+      .from('inventory_cogs_apply_runs')
+      .insert({
+        start_date: null,
+        end_date: null,
+        method,
+        total: 0,
+        eligible: 0,
+        successful: 0,
+        skipped: 0,
+        failed: 0,
+        partial: 0,
+        created_by: user.id,
+      })
+      .select('id')
+      .single()
+
+    if (!runError && runData) {
+      run_id = runData.id
+    }
+
+    // ── Fetch orders for this import batch ──
+    const PAGE_SIZE = 1000
+    let allOrders: any[] = []
+    let currentPage = 0
+    let hasMore = true
+
+    while (hasMore) {
+      const from = currentPage * PAGE_SIZE
+      const to = from + PAGE_SIZE - 1
+
+      const { data: pageOrders, error: ordersError } = await supabase
+        .from('sales_orders')
+        .select('order_id, seller_sku, quantity, shipped_at, status_group')
+        .eq('import_batch_id', importBatchId)
+        .eq('created_by', user.id)
+        .neq('status_group', 'ยกเลิกแล้ว')
+        .not('shipped_at', 'is', null)
+        .order('shipped_at', { ascending: true })
+        .order('order_id', { ascending: true })
+        .range(from, to)
+
+      if (ordersError) {
+        console.error('Error fetching batch orders:', ordersError)
+        if (cogs_run_id) {
+          await completeCogsRunFailed(cogs_run_id, ordersError.message)
+        }
+        return { success: false, error: ordersError.message, data: null }
+      }
+
+      if (pageOrders && pageOrders.length > 0) {
+        allOrders = allOrders.concat(pageOrders)
+      }
+
+      hasMore = !!(pageOrders && pageOrders.length === PAGE_SIZE)
+      currentPage++
+      if (currentPage >= 100) {
+        hasMore = false
+      }
+    }
+
+    const orders = allOrders
+
+    if (!orders || orders.length === 0) {
+      const emptySummary = {
+        total: 0, eligible: 0, successful: 0, skipped: 0, failed: 0, partial: 0,
+        errors: [],
+        skip_reasons: [],
+        run_id,
+        cogs_run_id,
+        message: `ไม่มี orders ที่ shipped ใน batch ${importBatchId}`,
+      }
+      if (cogs_run_id) {
+        await completeCogsRunSuccess(cogs_run_id, emptySummary)
+        await createNotificationForRun(cogs_run_id, {
+          total: 0, successful: 0, skipped: 0, failed: 0,
+        })
+      }
+      return { success: true, data: emptySummary }
+    }
+
+    // ── Fetch bundle SKUs ──
+    const { data: bundleItemsData } = await supabase
+      .from('inventory_items')
+      .select('sku_internal')
+      .eq('is_bundle', true)
+
+    const bundleSkuSet = new Set<string>((bundleItemsData || []).map((i) => i.sku_internal))
+
+    // ── Check existing allocations (non-bundle only) ──
+    const nonBundleOrderIds = orders
+      .filter((o) => o.seller_sku && !bundleSkuSet.has(o.seller_sku))
+      .map((o) => o.order_id)
+
+    const allocatedOrderIds = new Set<string>()
+
+    if (nonBundleOrderIds.length > 0) {
+      const CHUNK_SIZE = 200
+      const chunks: string[][] = []
+      for (let i = 0; i < nonBundleOrderIds.length; i += CHUNK_SIZE) {
+        chunks.push(nonBundleOrderIds.slice(i, i + CHUNK_SIZE))
+      }
+
+      for (const chunk of chunks) {
+        const { data: chunkAllocs, error: allocError } = await supabase
+          .from('inventory_cogs_allocations')
+          .select('order_id')
+          .in('order_id', chunk)
+          .eq('is_reversal', false)
+
+        if (allocError) {
+          if (cogs_run_id) {
+            await completeCogsRunFailed(cogs_run_id, allocError.message)
+          }
+          return { success: false, error: allocError.message, data: null }
+        }
+
+        if (chunkAllocs) {
+          for (const row of chunkAllocs) {
+            allocatedOrderIds.add(String(row.order_id))
+          }
+        }
+      }
+    }
+
+    // ── Process loop (same as applyCOGSMTD) ──
+    interface BatchSkipReason {
+      code: string
+      label: string
+      count: number
+      samples: Array<{ order_id: string; sku?: string; detail?: string }>
+    }
+
+    const skipReasons = new Map<string, BatchSkipReason>()
+
+    const addSkipReason = (
+      code: string,
+      label: string,
+      order_id: string,
+      sku?: string,
+      detail?: string
+    ) => {
+      if (!skipReasons.has(code)) {
+        skipReasons.set(code, { code, label, count: 0, samples: [] })
+      }
+      const reason = skipReasons.get(code)!
+      reason.count++
+      if (reason.samples.length < 5) {
+        reason.samples.push({ order_id, sku, detail })
+      }
+    }
+
+    const runItems: Array<{
+      order_id: string
+      sku: string | null
+      qty: number | null
+      status: 'successful' | 'skipped' | 'failed' | 'partial'
+      reason: string | null
+      missing_skus: string[]
+      allocated_skus: string[]
+    }> = []
+
+    const summary = {
+      total: orders.length,
+      eligible: 0,
+      successful: 0,
+      skipped: 0,
+      failed: 0,
+      partial: 0,
+      errors: [] as Array<{ order_id: string; reason: string }>,
+    }
+
+    for (const order of orders) {
+      const order_id = order.order_id
+      const sku = order.seller_sku
+      const qty = order.quantity
+      const shipped_at = order.shipped_at
+      const isBundle = sku && bundleSkuSet.has(sku)
+
+      if (!isBundle && allocatedOrderIds.has(order_id)) {
+        summary.skipped++
+        summary.errors.push({ order_id, reason: 'already_allocated' })
+        addSkipReason('ALREADY_ALLOCATED', 'เคย allocate แล้ว (idempotent skip)', order_id, sku)
+        runItems.push({
+          order_id, sku: sku || null, qty: qty || null,
+          status: 'skipped', reason: 'ALREADY_ALLOCATED',
+          missing_skus: [], allocated_skus: sku ? [sku] : [],
+        })
+        continue
+      }
+
+      if (!sku || sku.trim() === '') {
+        summary.skipped++
+        summary.errors.push({ order_id, reason: 'missing_seller_sku' })
+        addSkipReason('MISSING_SKU', 'ไม่มี seller_sku ใน order', order_id)
+        runItems.push({
+          order_id, sku: null, qty: qty || null,
+          status: 'skipped', reason: 'MISSING_SKU',
+          missing_skus: [], allocated_skus: [],
+        })
+        continue
+      }
+
+      if (qty == null || !Number.isFinite(qty) || qty <= 0) {
+        summary.skipped++
+        summary.errors.push({ order_id, reason: `invalid_quantity_${qty}` })
+        addSkipReason('INVALID_QUANTITY', 'quantity ไม่ถูกต้อง (null/zero/negative)', order_id, sku, `qty=${qty}`)
+        runItems.push({
+          order_id, sku: sku || null, qty: qty || null,
+          status: 'skipped', reason: 'INVALID_QUANTITY',
+          missing_skus: [], allocated_skus: [],
+        })
+        continue
+      }
+
+      if (!shipped_at) {
+        summary.skipped++
+        summary.errors.push({ order_id, reason: 'missing_shipped_at' })
+        addSkipReason('NOT_SHIPPED', 'ยังไม่ได้ shipped (ไม่มี shipped_at)', order_id, sku)
+        runItems.push({
+          order_id, sku: sku || null, qty: qty || null,
+          status: 'skipped', reason: 'NOT_SHIPPED',
+          missing_skus: [], allocated_skus: [],
+        })
+        continue
+      }
+
+      summary.eligible++
+
+      try {
+        const result = await applyCOGSForOrderShippedCore(order_id, sku, qty, shipped_at, method)
+
+        if (result.status === 'success') {
+          summary.successful++
+          runItems.push({
+            order_id, sku: sku || null, qty: qty || null,
+            status: 'successful', reason: null,
+            missing_skus: [], allocated_skus: result.allocatedSkus,
+          })
+        } else if (result.status === 'already_allocated') {
+          summary.skipped++
+          summary.errors.push({ order_id, reason: 'already_allocated' })
+          addSkipReason('ALREADY_ALLOCATED', 'เคย allocate แล้ว (idempotent skip)', order_id, sku)
+          runItems.push({
+            order_id, sku: sku || null, qty: qty || null,
+            status: 'skipped', reason: 'ALREADY_ALLOCATED',
+            missing_skus: [], allocated_skus: result.allocatedSkus,
+          })
+        } else if (result.status === 'partial') {
+          summary.partial++
+          summary.errors.push({ order_id, reason: result.reason || 'PARTIAL' })
+          addSkipReason(
+            'PARTIAL_ALLOCATION',
+            `bundle allocate ได้บางส่วน (missing: ${result.missingSkus.join(', ')})`,
+            order_id, sku, result.reason
+          )
+          runItems.push({
+            order_id, sku: sku || null, qty: qty || null,
+            status: 'partial', reason: result.reason || 'PARTIAL_ALLOCATION',
+            missing_skus: result.missingSkus, allocated_skus: result.allocatedSkus,
+          })
+        } else {
+          summary.failed++
+          summary.errors.push({ order_id, reason: result.reason || 'applyCOGS_failed' })
+          addSkipReason(
+            'ALLOCATION_FAILED',
+            'ไม่สามารถ allocate ได้ (SKU ไม่มี/stock ไม่พอ/bundle ไม่มี recipe)',
+            order_id, sku, result.reason
+          )
+          runItems.push({
+            order_id, sku: sku || null, qty: qty || null,
+            status: 'failed', reason: result.reason || 'ALLOCATION_FAILED',
+            missing_skus: result.missingSkus, allocated_skus: result.allocatedSkus,
+          })
+        }
+      } catch (err) {
+        summary.failed++
+        const errorMsg = err instanceof Error ? err.message : 'unknown_error'
+        summary.errors.push({ order_id, reason: errorMsg })
+        addSkipReason('EXCEPTION', 'เกิด exception ระหว่าง allocate', order_id, sku, errorMsg)
+        runItems.push({
+          order_id, sku: sku || null, qty: qty || null,
+          status: 'failed', reason: 'EXCEPTION',
+          missing_skus: [sku], allocated_skus: [],
+        })
+      }
+    }
+
+    const skipReasonsArray = Array.from(skipReasons.values()).sort((a, b) => b.count - a.count)
+
+    // ── Save legacy run items ──
+    if (run_id && runItems.length > 0) {
+      const BATCH_SIZE = 1000
+      for (let i = 0; i < runItems.length; i += BATCH_SIZE) {
+        const batch = runItems.slice(i, i + BATCH_SIZE)
+        const itemsToInsert = batch.map((item) => ({
+          run_id,
+          order_id: item.order_id,
+          sku: item.sku,
+          qty: item.qty,
+          status: item.status,
+          reason: item.reason,
+          missing_skus: item.missing_skus,
+          allocated_skus: item.allocated_skus,
+        }))
+
+        const { error: insertError } = await supabase
+          .from('inventory_cogs_apply_run_items')
+          .insert(itemsToInsert)
+
+        if (insertError) {
+          console.error(`Failed to insert batch run items (batch ${i / BATCH_SIZE + 1}):`, insertError)
+        }
+      }
+
+      await supabase
+        .from('inventory_cogs_apply_runs')
+        .update({
+          total: summary.total,
+          eligible: summary.eligible,
+          successful: summary.successful,
+          skipped: summary.skipped,
+          failed: summary.failed,
+          partial: summary.partial,
+        })
+        .eq('id', run_id)
+    }
+
+    revalidatePath('/inventory')
+    revalidatePath('/sales')
+    revalidatePath('/daily-pl')
+
+    // ── Complete cogs_allocation_run (success) ──
+    if (cogs_run_id) {
+      const notifSummary = {
+        total: summary.total,
+        eligible: summary.eligible,
+        successful: summary.successful,
+        skipped: summary.skipped,
+        failed: summary.failed,
+        partial: summary.partial,
+        import_batch_id: importBatchId,
+        skip_reasons: skipReasonsArray,
+      }
+      await completeCogsRunSuccess(cogs_run_id, notifSummary)
+      await createNotificationForRun(cogs_run_id, {
+        total: summary.total,
+        successful: summary.successful,
+        skipped: summary.skipped,
+        failed: summary.failed,
+      })
+    }
+
+    return {
+      success: true,
+      data: {
+        ...summary,
+        skip_reasons: skipReasonsArray,
+        run_id,
+        cogs_run_id,
+      },
+    }
+  } catch (error) {
+    console.error('Unexpected error in applyCOGSForBatch:', error)
+
+    if (typeof cogs_run_id === 'string' && cogs_run_id) {
+      await completeCogsRunFailed(
+        cogs_run_id,
+        error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด'
+      )
+    }
+
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+      data: null,
     }
   }
 }

@@ -26,6 +26,7 @@ import {
 import { Loader2, AlertCircle, CheckCircle2, Calendar, ChevronDown } from 'lucide-react'
 import { applyCOGSMTD } from '@/app/(dashboard)/inventory/actions'
 import { getTodayBangkokString, getFirstDayOfMonthBangkokString } from '@/lib/bangkok-date-range'
+import { useToast } from '@/hooks/use-toast'
 
 interface ApplyCOGSMTDModalProps {
   open: boolean
@@ -43,6 +44,7 @@ export function ApplyCOGSMTDModal({
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
+  const { toast } = useToast()
 
   // Date range state
   const [startDate, setStartDate] = useState('')
@@ -100,6 +102,9 @@ export function ApplyCOGSMTDModal({
     setError(null)
     setResult(null)
 
+    // Track whether modal is still open when action completes
+    let modalWasClosedDuringProcessing = false
+
     try {
       const response = await applyCOGSMTD({
         method: 'FIFO',
@@ -107,27 +112,52 @@ export function ApplyCOGSMTDModal({
         endDate,
       })
 
+      // Check if modal was closed while processing
+      modalWasClosedDuringProcessing = !open
+
       if (!response.success) {
-        setError(response.error || 'เกิดข้อผิดพลาด')
+        if (modalWasClosedDuringProcessing) {
+          toast({
+            variant: 'destructive',
+            title: 'Apply COGS ล้มเหลว',
+            description: response.error || 'เกิดข้อผิดพลาด',
+          })
+        } else {
+          setError(response.error || 'เกิดข้อผิดพลาด')
+        }
       } else {
-        setResult(response.data)
+        if (modalWasClosedDuringProcessing) {
+          // Modal was closed — show toast notification instead
+          const data = response.data
+          toast({
+            title: 'Apply COGS เสร็จสิ้น',
+            description: `${data?.successful ?? 0} สำเร็จ, ${data?.skipped ?? 0} ข้าม, ${data?.failed ?? 0} ล้มเหลว — ดูรายละเอียดที่กระดิ่งมุมขวาบน`,
+          })
+        } else {
+          setResult(response.data)
+        }
         if (onSuccess) {
           onSuccess()
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด')
+      modalWasClosedDuringProcessing = !open
+      const msg = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด'
+      if (modalWasClosedDuringProcessing) {
+        toast({ variant: 'destructive', title: 'Apply COGS ล้มเหลว', description: msg })
+      } else {
+        setError(msg)
+      }
     } finally {
       setLoading(false)
     }
   }
 
   function handleClose() {
-    if (!loading) {
-      setResult(null)
-      setError(null)
-      onOpenChange(false)
-    }
+    // Always allow close — even while loading
+    setResult(null)
+    setError(null)
+    onOpenChange(false)
   }
 
   return (
@@ -394,7 +424,14 @@ export function ApplyCOGSMTDModal({
         <DialogFooter>
           {!result && (
             <>
-              <Button variant="outline" onClick={handleClose} disabled={loading}>
+              <div className="flex-1 flex items-center">
+                {loading && (
+                  <p className="text-xs text-muted-foreground">
+                    ปิดหน้าต่างได้ ระบบจะแจ้งเตือนที่กระดิ่งเมื่อเสร็จ
+                  </p>
+                )}
+              </div>
+              <Button variant="outline" onClick={handleClose}>
                 ยกเลิก
               </Button>
               <Button onClick={handleApply} disabled={loading || !startDate || !endDate}>
