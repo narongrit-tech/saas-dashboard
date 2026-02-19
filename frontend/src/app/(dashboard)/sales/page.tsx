@@ -1,6 +1,9 @@
 import { createClient } from '@/lib/supabase/server'
 import SalesPageClient from './SalesPageClient'
 
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 export default async function SalesPage() {
   // Check if user is admin (server-side)
   let isAdmin = false
