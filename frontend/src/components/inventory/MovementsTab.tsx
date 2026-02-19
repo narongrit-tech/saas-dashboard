@@ -344,6 +344,7 @@ export function MovementsTab() {
         onOpenChange={setShowRunDetailsModal}
         runId={selectedRunId}
         runSummary={selectedRunSummary}
+        isAdmin={isAdmin}
       />
     </div>
   )

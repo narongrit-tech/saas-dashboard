@@ -25,6 +25,7 @@ interface Run {
   successful: number
   skipped: number
   failed: number
+  partial: number
   created_at: string
 }
 
@@ -91,6 +92,7 @@ export function RunHistorySection({ onViewDetails, refreshTrigger }: RunHistoryS
               <TableHead className="text-center">Method</TableHead>
               <TableHead className="text-right">Total</TableHead>
               <TableHead className="text-right">Success</TableHead>
+              <TableHead className="text-right">Partial</TableHead>
               <TableHead className="text-right">Skipped</TableHead>
               <TableHead className="text-right">Failed</TableHead>
               <TableHead className="text-center">Actions</TableHead>
@@ -114,6 +116,9 @@ export function RunHistorySection({ onViewDetails, refreshTrigger }: RunHistoryS
                 <TableCell className="text-right text-green-600">
                   {run.successful}
                 </TableCell>
+                <TableCell className="text-right text-orange-500 font-medium">
+                  {run.partial > 0 ? run.partial : <span className="text-muted-foreground">0</span>}
+                </TableCell>
                 <TableCell className="text-right text-yellow-600">
                   {run.skipped}
                 </TableCell>
@@ -130,6 +135,7 @@ export function RunHistorySection({ onViewDetails, refreshTrigger }: RunHistoryS
                       method: run.method,
                       total: run.total,
                       successful: run.successful,
+                      partial: run.partial,
                       skipped: run.skipped,
                       failed: run.failed,
                     })}

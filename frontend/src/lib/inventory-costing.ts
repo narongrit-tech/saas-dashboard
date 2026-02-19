@@ -63,6 +63,25 @@ export interface BundleComponent {
   quantity: number
 }
 
+/**
+ * Result of applying COGS for a single order.
+ * Replaces the plain boolean return to surface partial allocation state.
+ *
+ * Statuses:
+ * - success: all components allocated (either now or previously)
+ * - already_allocated: all components were already done in a previous run
+ * - partial: some components allocated, some still missing (bundle orders)
+ * - failed: no components could be allocated
+ */
+export interface COGSApplyResult {
+  status: 'success' | 'already_allocated' | 'partial' | 'failed'
+  /** Component SKUs that have a valid allocation (previous run or this run) */
+  allocatedSkus: string[]
+  /** Component SKUs that still lack allocation after this run */
+  missingSkus: string[]
+  reason?: string
+}
+
 // ============================================
 // Opening Balance
 // ============================================
@@ -479,14 +498,20 @@ async function allocateAVG(
 // ============================================
 
 /**
- * Apply COGS for a shipped order (idempotent)
+ * Apply COGS for a shipped order (idempotent, partial-aware)
+ *
+ * For bundle orders: checks each component SKU independently.
+ * - Only allocates components that are NOT yet allocated (idempotent retry).
+ * - Returns 'partial' if some components are done but others still fail.
+ * - This means a previously partial order can be retried after adding stock
+ *   without manually specifying order_ids.
  *
  * @param order_id - Sales order ID
  * @param sku - SKU internal code (or bundle SKU) from sales_orders.seller_sku
  * @param qty - Quantity sold from sales_orders.quantity (must be > 0)
  * @param shipped_at - Timestamp when shipped (Bangkok TZ) from sales_orders.shipped_at
  * @param method - Costing method (FIFO or AVG)
- * @returns True if successful (or already allocated)
+ * @returns COGSApplyResult with status, allocatedSkus, missingSkus
  */
 export async function applyCOGSForOrderShipped(
   order_id: string,
@@ -494,7 +519,7 @@ export async function applyCOGSForOrderShipped(
   qty: number,
   shipped_at: string,
   method: CostingMethod
-): Promise<boolean> {
+): Promise<COGSApplyResult> {
   try {
     const supabase = createClient()
 
@@ -506,48 +531,25 @@ export async function applyCOGSForOrderShipped(
 
     if (authError || !user) {
       console.error('Authentication failed in applyCOGSForOrderShipped')
-      return false
+      return { status: 'failed', allocatedSkus: [], missingSkus: [sku], reason: 'AUTH_FAILED' }
     }
 
     // VALIDATION: Quantity must be valid
-    if (qty == null || !Number.isFinite(qty)) {
-      console.error(`Order ${order_id}: Invalid quantity (null or non-finite)`)
-      return false
-    }
-
-    if (qty <= 0) {
-      console.error(`Order ${order_id}: Invalid quantity (${qty}), must be > 0. Skipping.`)
-      return false
+    if (qty == null || !Number.isFinite(qty) || qty <= 0) {
+      console.error(`Order ${order_id}: Invalid quantity (${qty})`)
+      return { status: 'failed', allocatedSkus: [], missingSkus: [sku], reason: 'INVALID_QUANTITY' }
     }
 
     // VALIDATION: SKU must not be empty
     if (!sku || sku.trim() === '') {
-      console.error(`Order ${order_id}: Missing SKU (seller_sku). Skipping.`)
-      return false
+      console.error(`Order ${order_id}: Missing SKU`)
+      return { status: 'failed', allocatedSkus: [], missingSkus: [], reason: 'MISSING_SKU' }
     }
 
     // VALIDATION: shipped_at must be valid
     if (!shipped_at) {
-      console.error(`Order ${order_id}: Missing shipped_at timestamp. Skipping.`)
-      return false
-    }
-
-    // Check idempotency: already allocated?
-    const { data: existing, error: existingError } = await supabase
-      .from('inventory_cogs_allocations')
-      .select('id')
-      .eq('order_id', order_id)
-      .eq('sku_internal', sku)
-      .eq('is_reversal', false)
-
-    if (existingError) {
-      console.error('Error checking existing allocations:', existingError)
-      return false
-    }
-
-    if (existing && existing.length > 0) {
-      console.log(`COGS already allocated for order ${order_id} SKU ${sku}`)
-      return true // Idempotent: already done
+      console.error(`Order ${order_id}: Missing shipped_at`)
+      return { status: 'failed', allocatedSkus: [], missingSkus: [sku], reason: 'MISSING_SHIPPED_AT' }
     }
 
     // Check if SKU is a bundle
@@ -558,64 +560,144 @@ export async function applyCOGSForOrderShipped(
       .single()
 
     if (itemError || !item) {
-      console.error(`SKU ${sku} not found`)
-      return false
+      console.error(`SKU ${sku} not found in inventory_items`)
+      return { status: 'failed', allocatedSkus: [], missingSkus: [sku], reason: 'SKU_NOT_FOUND' }
     }
 
-    // If bundle, expand to components
-    let items_to_allocate: Array<{ sku: string; qty: number }> = []
+    // ============================================
+    // NON-BUNDLE SKU: simple idempotency check
+    // ============================================
+    if (!item.is_bundle) {
+      // Check idempotency: allocation keyed by (order_id, sku_internal)
+      const { data: existing, error: existingError } = await supabase
+        .from('inventory_cogs_allocations')
+        .select('id')
+        .eq('order_id', order_id)
+        .eq('sku_internal', sku)
+        .eq('is_reversal', false)
 
-    if (item.is_bundle) {
-      const components = await getBundleComponents(sku)
-      if (components.length === 0) {
-        console.error(`Bundle ${sku} has no components`)
-        return false
+      if (existingError) {
+        console.error('Error checking existing allocations:', existingError)
+        return { status: 'failed', allocatedSkus: [], missingSkus: [sku], reason: 'DB_ERROR' }
       }
 
-      items_to_allocate = components.map((c) => ({
-        sku: c.component_sku,
-        qty: c.quantity * qty, // Multiply by bundle qty
-      }))
-    } else {
-      items_to_allocate = [{ sku, qty }]
-    }
+      if (existing && existing.length > 0) {
+        console.log(`COGS already allocated for order ${order_id} SKU ${sku}`)
+        return { status: 'already_allocated', allocatedSkus: [sku], missingSkus: [] }
+      }
 
-    // Allocate COGS for each item
-    for (const item_to_allocate of items_to_allocate) {
+      // Allocate
       let success = false
-
       if (method === 'FIFO') {
-        const allocations = await allocateFIFO(
-          supabase,
-          item_to_allocate.sku,
-          item_to_allocate.qty,
-          order_id,
-          shipped_at
-        )
+        const allocations = await allocateFIFO(supabase, sku, qty, order_id, shipped_at)
         success = allocations.length > 0
       } else if (method === 'AVG') {
-        const allocation = await allocateAVG(
-          supabase,
-          item_to_allocate.sku,
-          item_to_allocate.qty,
-          order_id,
-          shipped_at
-        )
+        const allocation = await allocateAVG(supabase, sku, qty, order_id, shipped_at)
         success = allocation !== null
       }
 
-      if (!success) {
-        console.error(
-          `Failed to allocate COGS for SKU ${item_to_allocate.sku} (method: ${method})`
-        )
-        return false
+      if (success) {
+        return { status: 'success', allocatedSkus: [sku], missingSkus: [] }
+      } else {
+        return { status: 'failed', allocatedSkus: [], missingSkus: [sku], reason: 'ALLOCATION_FAILED' }
       }
     }
 
-    return true
+    // ============================================
+    // BUNDLE SKU: per-component idempotency check
+    // Allocate only components that are NOT yet done.
+    // This enables idempotent retry after adding missing stock.
+    // ============================================
+    const components = await getBundleComponents(sku)
+    if (components.length === 0) {
+      console.error(`Bundle ${sku} has no components`)
+      return { status: 'failed', allocatedSkus: [], missingSkus: [sku], reason: 'NO_BUNDLE_RECIPE' }
+    }
+
+    const items_to_allocate = components.map((c) => ({
+      sku: c.component_sku,
+      qty: c.quantity * qty,
+    }))
+
+    // Check existing allocations per component
+    const alreadyAllocatedSkus = new Set<string>()
+    for (const comp of items_to_allocate) {
+      const { data: existing } = await supabase
+        .from('inventory_cogs_allocations')
+        .select('id')
+        .eq('order_id', order_id)
+        .eq('sku_internal', comp.sku)
+        .eq('is_reversal', false)
+        .limit(1)
+
+      if (existing && existing.length > 0) {
+        alreadyAllocatedSkus.add(comp.sku)
+      }
+    }
+
+    // If ALL components already allocated → fully done
+    if (alreadyAllocatedSkus.size === items_to_allocate.length) {
+      const allSkus = items_to_allocate.map((i) => i.sku)
+      console.log(`Bundle ${sku} fully allocated for order ${order_id}`)
+      return { status: 'already_allocated', allocatedSkus: allSkus, missingSkus: [] }
+    }
+
+    // Allocate only unallocated components
+    const allocatedThisRun: string[] = []
+    const failedComponents: string[] = []
+
+    for (const comp of items_to_allocate) {
+      if (alreadyAllocatedSkus.has(comp.sku)) {
+        continue // Already done, skip
+      }
+
+      let success = false
+      if (method === 'FIFO') {
+        const allocations = await allocateFIFO(supabase, comp.sku, comp.qty, order_id, shipped_at)
+        success = allocations.length > 0
+      } else if (method === 'AVG') {
+        const allocation = await allocateAVG(supabase, comp.sku, comp.qty, order_id, shipped_at)
+        success = allocation !== null
+      }
+
+      if (success) {
+        allocatedThisRun.push(comp.sku)
+      } else {
+        console.error(`Failed to allocate COGS for bundle component ${comp.sku} (method: ${method})`)
+        failedComponents.push(comp.sku)
+      }
+    }
+
+    const allAllocatedSkus = [...Array.from(alreadyAllocatedSkus), ...allocatedThisRun]
+
+    if (failedComponents.length === 0) {
+      // All components done (some from before, some now)
+      return { status: 'success', allocatedSkus: allAllocatedSkus, missingSkus: [] }
+    } else if (allAllocatedSkus.length === 0) {
+      // Nothing allocated at all
+      return {
+        status: 'failed',
+        allocatedSkus: [],
+        missingSkus: failedComponents,
+        reason: `ALLOCATION_FAILED: ${failedComponents.join(', ')}`,
+      }
+    } else {
+      // Some done, some missing → partial
+      return {
+        status: 'partial',
+        allocatedSkus: allAllocatedSkus,
+        missingSkus: failedComponents,
+        reason: `PARTIAL: allocated [${allAllocatedSkus.join(', ')}], missing [${failedComponents.join(', ')}]`,
+      }
+    }
   } catch (error) {
     console.error('Unexpected error in applyCOGSForOrderShipped:', error)
-    return false
+    return {
+      status: 'failed',
+      allocatedSkus: [],
+      missingSkus: [sku],
+      reason: error instanceof Error ? error.message : 'EXCEPTION',
+    }
   }
 }
 
