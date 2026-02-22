@@ -40,6 +40,7 @@ import {
   ShopeeWalletImportResult,
 } from '@/app/(dashboard)/wallets/shopee-wallet-import-actions'
 import { parseShopeeWalletCSV, ShopeeWalletTransaction } from '@/lib/importers/shopee-wallet-parser'
+import { sanitizeCSVField } from '@/lib/csv'
 
 // ============================================================
 // Types
@@ -83,10 +84,7 @@ function downloadSkippedCSV(rows: ShopeeWalletTransaction[], filename: string) {
     headers.join(','),
     ...rows.map((r) => {
       const rec = r as unknown as Record<string, unknown>
-      return headers.map((h) => {
-        const val = String(rec[h] ?? '')
-        return val.includes(',') || val.includes('"') ? `"${val.replace(/"/g, '""')}"` : val
-      }).join(',')
+      return headers.map((h) => sanitizeCSVField(rec[h])).join(',')
     }),
   ]
   const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' })

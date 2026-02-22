@@ -1,5 +1,7 @@
 'use server'
 
+import { toCSVRow } from '@/lib/csv'
+
 /**
  * Company-level Cashflow Server Actions
  * Tracks actual cash movements (in/out) at company level
@@ -301,7 +303,7 @@ export async function exportCompanyCashflow(
 
     const csvContent = [
       headers.join(','),
-      ...rows.map((row) => row.join(',')),
+      ...rows.map((row) => toCSVRow(row)),
     ].join('\n')
 
     // Generate filename with Bangkok timezone timestamp

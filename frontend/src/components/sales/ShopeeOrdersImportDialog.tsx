@@ -45,6 +45,7 @@ import { applyCOGSForBatch } from '@/app/(dashboard)/inventory/actions'
 import { ParsedSalesRow, SalesImportResult } from '@/types/sales-import'
 import { calculateFileHash, toPlain } from '@/lib/file-hash'
 import { parseShopeeOrdersFile } from '@/lib/importers/shopee-orders-parser'
+import { sanitizeCSVField } from '@/lib/csv'
 
 // ============================================================
 // Types
@@ -84,10 +85,7 @@ function downloadCSV(rows: ParsedSalesRow[], filename: string) {
     headers.join(','),
     ...rows.map((r) => {
       const rec = r as unknown as Record<string, unknown>
-      return headers.map((h) => {
-        const val = String(rec[h] ?? '')
-        return val.includes(',') ? `"${val}"` : val
-      }).join(',')
+      return headers.map((h) => sanitizeCSVField(rec[h])).join(',')
     }),
   ]
   const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' })

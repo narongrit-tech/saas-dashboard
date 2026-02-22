@@ -1,6 +1,7 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { sanitizeCSVField } from '@/lib/csv'
 import { CreateOrderInput, UpdateOrderInput, GroupedSalesOrder, SalesOrder, SalesStoryAggregates, SalesAggregates } from '@/types/sales'
 import { toBangkokTime, formatBangkok, getBangkokNow } from '@/lib/bangkok-time'
 import { unstable_noStore as noStore } from 'next/cache'
@@ -338,15 +339,6 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
         'Cancel Same Day Flag',
       ]
 
-      const escapeCSV = (value: string | number | null | undefined): string => {
-        if (value === null || value === undefined) return ''
-        const str = String(value)
-        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-          return `"${str.replace(/"/g, '""')}"`
-        }
-        return str
-      }
-
       const rows = groupedResult.data.map((order) => {
         // Calculate cancel_same_day_flag (if cancelled_time exists and is same day as created_time)
         let cancelSameDayFlag = 'N'
@@ -365,15 +357,15 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
         const paymentMethod = order.payment_status === 'paid' ? 'Online' : 'COD' // Simplified
 
         return [
-          escapeCSV(order.external_order_id || order.order_id),
-          escapeCSV(order.created_time || order.order_date),
-          escapeCSV(order.paid_time || order.paid_at || ''),
-          escapeCSV(order.cancelled_time || ''),
-          escapeCSV(order.order_amount),
-          escapeCSV(order.total_units),
-          escapeCSV(order.sku_count),
-          escapeCSV(paymentMethod),
-          escapeCSV(cancelSameDayFlag),
+          sanitizeCSVField(order.external_order_id || order.order_id),
+          sanitizeCSVField(order.created_time || order.order_date),
+          sanitizeCSVField(order.paid_time || order.paid_at || ''),
+          sanitizeCSVField(order.cancelled_time || ''),
+          sanitizeCSVField(order.order_amount),
+          sanitizeCSVField(order.total_units),
+          sanitizeCSVField(order.sku_count),
+          sanitizeCSVField(paymentMethod),
+          sanitizeCSVField(cancelSameDayFlag),
         ].join(',')
       })
 
@@ -526,34 +518,23 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
       'Created At',
     ]
 
-    // Escape CSV field (handle commas, quotes, newlines)
-    const escapeCSV = (value: string | number | null | undefined): string => {
-      if (value === null || value === undefined) return ''
-      const str = String(value)
-      // If contains comma, quote, or newline, wrap in quotes and escape quotes
-      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-        return `"${str.replace(/"/g, '""')}"`
-      }
-      return str
-    }
-
     // Build CSV rows (UX v2 with platform status & payment)
     const rows = orders.map((order) => {
       return [
-        escapeCSV(order.order_id),
-        escapeCSV(order.external_order_id || ''),
-        escapeCSV(order.source_platform || order.marketplace),
-        escapeCSV(order.product_name),
-        escapeCSV(order.quantity),
-        escapeCSV(order.unit_price),
-        escapeCSV(order.total_amount),
-        escapeCSV(order.status),
-        escapeCSV(order.platform_status || ''),
-        escapeCSV(order.status_group || ''),
-        escapeCSV(order.payment_status || ''),
-        escapeCSV(order.paid_at || ''),
-        escapeCSV(order.order_date),
-        escapeCSV(order.created_at),
+        sanitizeCSVField(order.order_id),
+        sanitizeCSVField(order.external_order_id || ''),
+        sanitizeCSVField(order.source_platform || order.marketplace),
+        sanitizeCSVField(order.product_name),
+        sanitizeCSVField(order.quantity),
+        sanitizeCSVField(order.unit_price),
+        sanitizeCSVField(order.total_amount),
+        sanitizeCSVField(order.status),
+        sanitizeCSVField(order.platform_status || ''),
+        sanitizeCSVField(order.status_group || ''),
+        sanitizeCSVField(order.payment_status || ''),
+        sanitizeCSVField(order.paid_at || ''),
+        sanitizeCSVField(order.order_date),
+        sanitizeCSVField(order.created_at),
       ].join(',')
     })
 

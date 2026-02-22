@@ -1,6 +1,7 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { sanitizeCSVField } from '@/lib/csv'
 import { CreateExpenseInput, UpdateExpenseInput, ExpenseCategory } from '@/types/expenses'
 import { getBangkokNow, formatBangkok } from '@/lib/bangkok-time'
 
@@ -640,27 +641,16 @@ export async function exportExpenses(filters: ExportFilters): Promise<ExportResu
       'Created At',
     ]
 
-    // Escape CSV field (handle commas, quotes, newlines)
-    const escapeCSV = (value: string | number | null | undefined): string => {
-      if (value === null || value === undefined) return ''
-      const str = String(value)
-      // If contains comma, quote, or newline, wrap in quotes and escape quotes
-      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-        return `"${str.replace(/"/g, '""')}"`
-      }
-      return str
-    }
-
     // Build CSV rows
     const rows = expenses.map((expense) => {
       return [
-        escapeCSV(expense.expense_date),
-        escapeCSV(expense.category),
-        escapeCSV(expense.subcategory || ''),
-        escapeCSV(expense.amount),
-        escapeCSV(expense.description),
-        escapeCSV(expense.notes || ''),
-        escapeCSV(expense.created_at),
+        sanitizeCSVField(expense.expense_date),
+        sanitizeCSVField(expense.category),
+        sanitizeCSVField(expense.subcategory || ''),
+        sanitizeCSVField(expense.amount),
+        sanitizeCSVField(expense.description),
+        sanitizeCSVField(expense.notes || ''),
+        sanitizeCSVField(expense.created_at),
       ].join(',')
     })
 

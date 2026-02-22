@@ -5,6 +5,7 @@
 // Created: 2026-01-25
 
 import { createClient } from '@/lib/supabase/server';
+import { sanitizeCSVField } from '@/lib/csv';
 import { revalidatePath } from 'next/cache';
 import {
   BankAccount,
@@ -403,13 +404,13 @@ export async function exportBankTransactions(
 
       return [
         txn.txn_date,
-        `"${(txn.description || '').replace(/"/g, '""')}"`,
+        sanitizeCSVField(txn.description || ''),
         txn.withdrawal || '0.00',
         txn.deposit || '0.00',
         txn.balance || '',
         runningBalance.toFixed(2),
-        `"${(txn.channel || '').replace(/"/g, '""')}"`,
-        `"${(txn.reference_id || '').replace(/"/g, '""')}"`,
+        sanitizeCSVField(txn.channel || ''),
+        sanitizeCSVField(txn.reference_id || ''),
         formatBangkok(new Date(txn.created_at), 'yyyy-MM-dd HH:mm:ss'),
       ];
     });

@@ -1,6 +1,7 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { sanitizeCSVField } from '@/lib/csv'
 import {
   CreateLedgerInput,
   UpdateLedgerInput,
@@ -473,25 +474,16 @@ export async function exportWalletLedger(filters: ExportFilters): Promise<Export
       'Created At',
     ]
 
-    const escapeCSV = (value: string | number | null | undefined): string => {
-      if (value === null || value === undefined) return ''
-      const str = String(value)
-      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-        return `"${str.replace(/"/g, '""')}"`
-      }
-      return str
-    }
-
     const rows = entries.map((entry) => {
       return [
-        escapeCSV(entry.date),
-        escapeCSV(entry.entry_type),
-        escapeCSV(entry.direction),
-        escapeCSV(entry.amount),
-        escapeCSV(entry.source),
-        escapeCSV(entry.reference_id || ''),
-        escapeCSV(entry.note || ''),
-        escapeCSV(entry.created_at),
+        sanitizeCSVField(entry.date),
+        sanitizeCSVField(entry.entry_type),
+        sanitizeCSVField(entry.direction),
+        sanitizeCSVField(entry.amount),
+        sanitizeCSVField(entry.source),
+        sanitizeCSVField(entry.reference_id || ''),
+        sanitizeCSVField(entry.note || ''),
+        sanitizeCSVField(entry.created_at),
       ].join(',')
     })
 

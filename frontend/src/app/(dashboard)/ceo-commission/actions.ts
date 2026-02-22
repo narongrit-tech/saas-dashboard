@@ -1,6 +1,7 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { sanitizeCSVField } from '@/lib/csv'
 import {
   CommissionReceipt,
   CreateCommissionInput,
@@ -518,7 +519,7 @@ export async function exportCommissionReceipts(filters?: {
     const csv = [
       headers.join(','),
       ...rows.map((row) =>
-        row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')
+        row.map((cell) => sanitizeCSVField(cell)).join(',')
       ),
     ].join('\n')
 
