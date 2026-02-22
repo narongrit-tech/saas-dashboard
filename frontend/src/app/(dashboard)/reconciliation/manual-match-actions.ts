@@ -90,13 +90,19 @@ export async function createExpenseFromBankTransaction(
     // Verify bank transaction exists and belongs to user
     const { data: bankTxn, error: txnError } = await supabase
       .from('bank_transactions')
-      .select('id, txn_date, withdrawal')
+      .select('id, txn_date, withdrawal, deposit')
       .eq('id', bankTransactionId)
       .eq('created_by', user.id)
       .single();
 
     if (txnError || !bankTxn) {
       return { success: false, error: 'Bank transaction not found or unauthorized' };
+    }
+
+    // Validate: client amount must match actual bank transaction amount (source of truth)
+    const bankAmount = Math.abs(Number(bankTxn.withdrawal || bankTxn.deposit || 0));
+    if (Math.round(positiveAmount * 100) !== Math.round(bankAmount * 100)) {
+      return { success: false, error: 'amount_mismatch: ยอดเงินไม่ตรงกับ bank transaction' };
     }
 
     // Check if already reconciled
@@ -117,7 +123,7 @@ export async function createExpenseFromBankTransaction(
         category,
         subcategory: subcategory || null,
         description,
-        amount: positiveAmount,
+        amount: bankAmount,
         expense_date: bankTxn.txn_date,
         created_by: user.id,
         source: 'manual', // Source: manual entry from bank reconciliation (lowercase for expenses)
@@ -145,7 +151,7 @@ export async function createExpenseFromBankTransaction(
         category,
         subcategory: subcategory || null,
         description,
-        amount: positiveAmount,
+        amount: bankAmount,
         expense_date: bankTxn.txn_date,
         source: 'manual',
       },
@@ -175,7 +181,7 @@ export async function createExpenseFromBankTransaction(
         // Old columns (backward compatibility)
         entity_type: 'expense',
         entity_id: expense.id,
-        matched_amount: positiveAmount,
+        matched_amount: bankAmount,
         matching_rule: 'manual',
         matched_by: user.id,
         matched_at: new Date().toISOString(),
@@ -191,7 +197,7 @@ export async function createExpenseFromBankTransaction(
           category,
           subcategory,
           description,
-          amount: positiveAmount,
+          amount: bankAmount,
         },
       })
       .select('id')
@@ -270,13 +276,19 @@ export async function createWalletTopupFromBankTransaction(
     // Verify bank transaction exists
     const { data: bankTxn, error: txnError } = await supabase
       .from('bank_transactions')
-      .select('id, txn_date, withdrawal')
+      .select('id, txn_date, withdrawal, deposit')
       .eq('id', bankTransactionId)
       .eq('created_by', user.id)
       .single();
 
     if (txnError || !bankTxn) {
       return { success: false, error: 'Bank transaction not found or unauthorized' };
+    }
+
+    // Validate: client amount must match actual bank transaction amount (source of truth)
+    const bankAmount = Math.abs(Number(bankTxn.withdrawal || bankTxn.deposit || 0));
+    if (Math.round(positiveAmount * 100) !== Math.round(bankAmount * 100)) {
+      return { success: false, error: 'amount_mismatch: ยอดเงินไม่ตรงกับ bank transaction' };
     }
 
     // Check if already reconciled
@@ -299,7 +311,7 @@ export async function createWalletTopupFromBankTransaction(
       wallet_id: walletId,
       entry_type: 'TOP_UP',
       direction: 'IN',
-      amount: positiveAmount,
+      amount: bankAmount,
       date: dateString,
       source: 'MANUAL', // Source constraint only allows 'manual' or 'IMPORTED'
       reference_id: bankTransactionId,
@@ -313,7 +325,7 @@ export async function createWalletTopupFromBankTransaction(
         wallet_id: walletId,
         entry_type: 'TOP_UP',
         direction: 'IN', // TOP_UP = เงินเข้า wallet (ธนาคารลด, wallet เพิ่ม)
-        amount: positiveAmount,
+        amount: bankAmount,
         date: dateString, // Use DATE string, not TIMESTAMPTZ
         note: notes || `Top-up from bank reconciliation`,
         source: 'MANUAL', // Source constraint only allows 'manual' or 'IMPORTED'
@@ -353,7 +365,7 @@ export async function createWalletTopupFromBankTransaction(
         // Old columns (backward compatibility)
         entity_type: 'wallet_topup',
         entity_id: walletEntry.id,
-        matched_amount: positiveAmount,
+        matched_amount: bankAmount,
         matching_rule: 'manual',
         matched_by: user.id,
         matched_at: new Date().toISOString(),
@@ -368,7 +380,7 @@ export async function createWalletTopupFromBankTransaction(
         metadata: {
           wallet_id: walletId,
           wallet_name: wallet.name,
-          amount: positiveAmount,
+          amount: bankAmount,
         },
       })
       .select('id')
@@ -455,13 +467,19 @@ export async function createWalletSpendFromBankTransaction(
     // Verify bank transaction exists
     const { data: bankTxn, error: txnError } = await supabase
       .from('bank_transactions')
-      .select('id, txn_date, withdrawal')
+      .select('id, txn_date, withdrawal, deposit')
       .eq('id', bankTransactionId)
       .eq('created_by', user.id)
       .single();
 
     if (txnError || !bankTxn) {
       return { success: false, error: 'Bank transaction not found or unauthorized' };
+    }
+
+    // Validate: client amount must match actual bank transaction amount (source of truth)
+    const bankAmount = Math.abs(Number(bankTxn.withdrawal || bankTxn.deposit || 0));
+    if (Math.round(positiveAmount * 100) !== Math.round(bankAmount * 100)) {
+      return { success: false, error: 'amount_mismatch: ยอดเงินไม่ตรงกับ bank transaction' };
     }
 
     // Check if already reconciled
@@ -484,7 +502,7 @@ export async function createWalletSpendFromBankTransaction(
       wallet_id: walletId,
       entry_type: 'SPEND',
       direction: 'OUT',
-      amount: positiveAmount,
+      amount: bankAmount,
       date: dateString,
       source: 'MANUAL', // Source constraint only allows 'manual' or 'IMPORTED'
       reference_id: bankTransactionId,
@@ -498,7 +516,7 @@ export async function createWalletSpendFromBankTransaction(
         wallet_id: walletId,
         entry_type: 'SPEND',
         direction: 'OUT', // SPEND = เงินออก wallet (ธนาคารลด, wallet ลด)
-        amount: positiveAmount,
+        amount: bankAmount,
         date: dateString, // Use DATE string, not TIMESTAMPTZ
         note: notes || `Spend from bank reconciliation`,
         source: 'MANUAL', // Source constraint only allows 'manual' or 'IMPORTED'
@@ -538,7 +556,7 @@ export async function createWalletSpendFromBankTransaction(
         // Old columns (backward compatibility)
         entity_type: 'wallet_spend',
         entity_id: walletEntry.id,
-        matched_amount: positiveAmount,
+        matched_amount: bankAmount,
         matching_rule: 'manual',
         matched_by: user.id,
         matched_at: new Date().toISOString(),
@@ -553,7 +571,7 @@ export async function createWalletSpendFromBankTransaction(
         metadata: {
           wallet_id: walletId,
           wallet_name: wallet.name,
-          amount: positiveAmount,
+          amount: bankAmount,
         },
       })
       .select('id')
