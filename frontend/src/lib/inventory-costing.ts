@@ -294,13 +294,12 @@ export async function getBundleComponents(
 // ============================================
 
 /**
- * Allocate COGS using FIFO method
+ * Allocate COGS using FIFO method (atomic via Postgres RPC)
  *
- * @param sku - SKU internal code
- * @param qty - Quantity to allocate
- * @param order_id - Sales order ID
- * @param shipped_at - Timestamp when shipped
- * @returns Array of allocations, or empty array if insufficient stock
+ * Calls allocate_cogs_fifo() which runs INSERT + UPDATE in one transaction.
+ * If any step fails the entire call is rolled back automatically.
+ *
+ * @returns true if allocation succeeded (or was already done), false on error
  */
 async function allocateFIFO(
   supabase: SupabaseClient,
@@ -308,87 +307,31 @@ async function allocateFIFO(
   qty: number,
   order_id: string,
   shipped_at: string
-): Promise<COGSAllocation[]> {
+): Promise<boolean> {
   try {
     const {
       data: { user },
     } = await supabase.auth.getUser()
-    if (!user) return []
+    if (!user) return false
 
-    // Get available layers (oldest first, with remaining qty > 0, not voided)
-    const { data: layers, error: layersError } = await supabase
-      .from('inventory_receipt_layers')
-      .select('*')
-      .eq('sku_internal', sku)
-      .eq('is_voided', false)
-      .gt('qty_remaining', 0)
-      .order('received_at', { ascending: true })
+    const { data, error } = await supabase.rpc('allocate_cogs_fifo', {
+      p_order_id:   order_id,
+      p_sku:        sku,
+      p_qty:        qty,
+      p_shipped_at: shipped_at,
+      p_user_id:    user.id,
+    })
 
-    if (layersError || !layers || layers.length === 0) {
-      console.error(`FIFO: No layers available for SKU ${sku}`)
-      return []
+    if (error) {
+      console.error('allocate_cogs_fifo RPC error:', error.message)
+      return false
     }
 
-    const allocations: COGSAllocation[] = []
-    let remaining_qty = qty
-
-    // Allocate from layers (FIFO order)
-    for (const layer of layers) {
-      if (remaining_qty <= 0) break
-
-      const qty_to_allocate = Math.min(remaining_qty, layer.qty_remaining)
-      const amount = qty_to_allocate * layer.unit_cost
-
-      // Create allocation record
-      const { data: allocation, error: allocError } = await supabase
-        .from('inventory_cogs_allocations')
-        .insert({
-          order_id,
-          sku_internal: sku,
-          shipped_at,
-          method: 'FIFO',
-          qty: qty_to_allocate,
-          unit_cost_used: layer.unit_cost,
-          amount,
-          layer_id: layer.id,
-          is_reversal: false,
-          created_by: user.id,
-        })
-        .select()
-        .single()
-
-      if (allocError || !allocation) {
-        console.error('Error creating FIFO allocation:', allocError)
-        return [] // Rollback: return empty (transaction will fail)
-      }
-
-      allocations.push(allocation as COGSAllocation)
-
-      // Update layer qty_remaining
-      const new_remaining = layer.qty_remaining - qty_to_allocate
-      const { error: updateError } = await supabase
-        .from('inventory_receipt_layers')
-        .update({ qty_remaining: new_remaining })
-        .eq('id', layer.id)
-
-      if (updateError) {
-        console.error('Error updating layer qty_remaining:', updateError)
-        return [] // Rollback
-      }
-
-      remaining_qty -= qty_to_allocate
-    }
-
-    // Check if we allocated all requested qty
-    if (remaining_qty > 0) {
-      console.error(`FIFO: Insufficient stock for SKU ${sku}. Remaining: ${remaining_qty}`)
-      return [] // Rollback
-    }
-
-    return allocations
+    const status = (data as { status?: string } | null)?.status
+    return status === 'success' || status === 'already_allocated'
   } catch (error) {
     console.error('Unexpected error in allocateFIFO:', error)
-    return []
+    return false
   }
 }
 
@@ -397,13 +340,12 @@ async function allocateFIFO(
 // ============================================
 
 /**
- * Allocate COGS using Moving Average method
+ * Allocate COGS using Moving Average method (atomic via Postgres RPC)
  *
- * @param sku - SKU internal code
- * @param qty - Quantity to allocate
- * @param order_id - Sales order ID
- * @param shipped_at - Timestamp when shipped
- * @returns Allocation record, or null if error
+ * Calls allocate_cogs_avg() which runs INSERT + UPDATE in one transaction.
+ * If any step fails the entire call is rolled back automatically.
+ *
+ * @returns true if allocation succeeded (or was already done), false on error
  */
 async function allocateAVG(
   supabase: SupabaseClient,
@@ -411,85 +353,31 @@ async function allocateAVG(
   qty: number,
   order_id: string,
   shipped_at: string
-): Promise<COGSAllocation | null> {
+): Promise<boolean> {
   try {
     const {
       data: { user },
     } = await supabase.auth.getUser()
-    if (!user) return null
+    if (!user) return false
 
-    // Get latest snapshot before shipped_at
-    const shipped_date = formatBangkok(new Date(shipped_at), 'yyyy-MM-dd')
+    const { data, error } = await supabase.rpc('allocate_cogs_avg', {
+      p_order_id:   order_id,
+      p_sku:        sku,
+      p_qty:        qty,
+      p_shipped_at: shipped_at,
+      p_user_id:    user.id,
+    })
 
-    const { data: snapshot, error: snapshotError } = await supabase
-      .from('inventory_cost_snapshots')
-      .select('*')
-      .eq('sku_internal', sku)
-      .lte('as_of_date', shipped_date)
-      .order('as_of_date', { ascending: false })
-      .limit(1)
-      .single()
-
-    if (snapshotError || !snapshot) {
-      console.error(`AVG: No snapshot found for SKU ${sku}`)
-      return null
+    if (error) {
+      console.error('allocate_cogs_avg RPC error:', error.message)
+      return false
     }
 
-    // Check sufficient qty
-    if (snapshot.on_hand_qty < qty) {
-      console.error(`AVG: Insufficient stock for SKU ${sku}`)
-      return null
-    }
-
-    const unit_cost = snapshot.avg_unit_cost
-    const amount = qty * unit_cost
-
-    // Create allocation record
-    const { data: allocation, error: allocError } = await supabase
-      .from('inventory_cogs_allocations')
-      .insert({
-        order_id,
-        sku_internal: sku,
-        shipped_at,
-        method: 'AVG',
-        qty,
-        unit_cost_used: unit_cost,
-        amount,
-        layer_id: null, // AVG doesn't use layers
-        is_reversal: false,
-        created_by: user.id,
-      })
-      .select()
-      .single()
-
-    if (allocError || !allocation) {
-      console.error('Error creating AVG allocation:', allocError)
-      return null
-    }
-
-    // Update snapshot (reduce qty and value)
-    const new_qty = snapshot.on_hand_qty - qty
-    const new_value = snapshot.on_hand_value - amount
-    const new_avg = new_qty > 0 ? new_value / new_qty : 0
-
-    const { error: updateError } = await supabase
-      .from('inventory_cost_snapshots')
-      .update({
-        on_hand_qty: new_qty,
-        on_hand_value: new_value,
-        avg_unit_cost: new_avg,
-      })
-      .eq('id', snapshot.id)
-
-    if (updateError) {
-      console.error('Error updating snapshot:', updateError)
-      return null
-    }
-
-    return allocation as COGSAllocation
+    const status = (data as { status?: string } | null)?.status
+    return status === 'success' || status === 'already_allocated'
   } catch (error) {
     console.error('Unexpected error in allocateAVG:', error)
-    return null
+    return false
   }
 }
 
@@ -586,14 +474,12 @@ export async function applyCOGSForOrderShipped(
         return { status: 'already_allocated', allocatedSkus: [sku], missingSkus: [] }
       }
 
-      // Allocate
+      // Allocate (atomic via RPC — rolls back on failure)
       let success = false
       if (method === 'FIFO') {
-        const allocations = await allocateFIFO(supabase, sku, qty, order_id, shipped_at)
-        success = allocations.length > 0
+        success = await allocateFIFO(supabase, sku, qty, order_id, shipped_at)
       } else if (method === 'AVG') {
-        const allocation = await allocateAVG(supabase, sku, qty, order_id, shipped_at)
-        success = allocation !== null
+        success = await allocateAVG(supabase, sku, qty, order_id, shipped_at)
       }
 
       if (success) {
@@ -653,11 +539,9 @@ export async function applyCOGSForOrderShipped(
 
       let success = false
       if (method === 'FIFO') {
-        const allocations = await allocateFIFO(supabase, comp.sku, comp.qty, order_id, shipped_at)
-        success = allocations.length > 0
+        success = await allocateFIFO(supabase, comp.sku, comp.qty, order_id, shipped_at)
       } else if (method === 'AVG') {
-        const allocation = await allocateAVG(supabase, comp.sku, comp.qty, order_id, shipped_at)
-        success = allocation !== null
+        success = await allocateAVG(supabase, comp.sku, comp.qty, order_id, shipped_at)
       }
 
       if (success) {
