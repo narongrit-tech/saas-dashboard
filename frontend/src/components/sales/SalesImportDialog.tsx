@@ -19,6 +19,7 @@ import { Input } from '@/components/ui/input'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { FileSpreadsheet, CheckCircle2, AlertCircle, Loader2, Info, ExternalLink, Package } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
+import { MAX_IMPORT_FILE_SIZE_BYTES, MAX_IMPORT_FILE_SIZE_LABEL, REJECTED_MIME_RE } from '@/lib/import-constraints'
 import {
   createImportBatch,
   importSalesChunk,
@@ -116,6 +117,17 @@ export function SalesImportDialog({ open, onOpenChange, onSuccess }: SalesImport
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
     if (!selectedFile) return
+
+    if (selectedFile.size > MAX_IMPORT_FILE_SIZE_BYTES) {
+      toast({ variant: 'destructive', title: 'ไฟล์ใหญ่เกินไป', description: `ขนาดไฟล์ต้องไม่เกิน ${MAX_IMPORT_FILE_SIZE_LABEL}` })
+      e.target.value = ''
+      return
+    }
+    if (selectedFile.type && REJECTED_MIME_RE.test(selectedFile.type)) {
+      toast({ variant: 'destructive', title: 'ประเภทไฟล์ไม่รองรับ', description: 'รองรับเฉพาะไฟล์ CSV และ Excel เท่านั้น' })
+      e.target.value = ''
+      return
+    }
 
     setFile(selectedFile)
     setIsProcessing(true)

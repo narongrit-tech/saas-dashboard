@@ -6,6 +6,7 @@
  */
 
 import { useState, useRef } from 'react'
+import { MAX_IMPORT_FILE_SIZE_BYTES, MAX_IMPORT_FILE_SIZE_LABEL, REJECTED_MIME_RE } from '@/lib/import-constraints'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -197,7 +198,18 @@ export function ShopeeBalanceImportDialog({ open, onOpenChange, onSuccess }: Pro
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0]
-                if (f) { setFile(f); setError(null); setDuplicateInfo(null) }
+                if (!f) return
+                if (f.size > MAX_IMPORT_FILE_SIZE_BYTES) {
+                  setError(`ไฟล์ใหญ่เกินไป — ขนาดต้องไม่เกิน ${MAX_IMPORT_FILE_SIZE_LABEL}`)
+                  e.target.value = ''
+                  return
+                }
+                if (f.type && REJECTED_MIME_RE.test(f.type)) {
+                  setError('ประเภทไฟล์ไม่รองรับ — รองรับเฉพาะไฟล์ CSV และ Excel เท่านั้น')
+                  e.target.value = ''
+                  return
+                }
+                setFile(f); setError(null); setDuplicateInfo(null)
                 e.target.value = ''
               }}
             />

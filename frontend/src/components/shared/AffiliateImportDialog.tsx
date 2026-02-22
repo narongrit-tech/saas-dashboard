@@ -11,6 +11,8 @@
  */
 
 import { useState } from 'react'
+import { useToast } from '@/hooks/use-toast'
+import { MAX_IMPORT_FILE_SIZE_BYTES, MAX_IMPORT_FILE_SIZE_LABEL, REJECTED_MIME_RE } from '@/lib/import-constraints'
 import {
   Dialog,
   DialogContent,
@@ -48,6 +50,7 @@ type Step = 'upload' | 'preview' | 'importing' | 'result'
 
 export function AffiliateImportDialog({ open, onOpenChange, onSuccess }: AffiliateImportDialogProps) {
   const [step, setStep] = useState<Step>('upload')
+  const { toast } = useToast()
   const [file, setFile] = useState<File | null>(null)
   const [fileBuffer, setFileBuffer] = useState<ArrayBuffer | null>(null)
   const [preview, setPreview] = useState<AffiliateImportPreview | null>(null)
@@ -75,6 +78,17 @@ export function AffiliateImportDialog({ open, onOpenChange, onSuccess }: Affilia
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
     if (!selectedFile) return
+
+    if (selectedFile.size > MAX_IMPORT_FILE_SIZE_BYTES) {
+      toast({ variant: 'destructive', title: 'ไฟล์ใหญ่เกินไป', description: `ขนาดไฟล์ต้องไม่เกิน ${MAX_IMPORT_FILE_SIZE_LABEL}` })
+      e.target.value = ''
+      return
+    }
+    if (selectedFile.type && REJECTED_MIME_RE.test(selectedFile.type)) {
+      toast({ variant: 'destructive', title: 'ประเภทไฟล์ไม่รองรับ', description: 'รองรับเฉพาะไฟล์ CSV และ Excel เท่านั้น' })
+      e.target.value = ''
+      return
+    }
 
     setFile(selectedFile)
     setIsProcessing(true)

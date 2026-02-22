@@ -46,6 +46,7 @@ import { ParsedSalesRow, SalesImportResult } from '@/types/sales-import'
 import { calculateFileHash, toPlain } from '@/lib/file-hash'
 import { parseShopeeOrdersFile } from '@/lib/importers/shopee-orders-parser'
 import { sanitizeCSVField } from '@/lib/csv'
+import { MAX_IMPORT_FILE_SIZE_BYTES, MAX_IMPORT_FILE_SIZE_LABEL, REJECTED_MIME_RE } from '@/lib/import-constraints'
 
 // ============================================================
 // Types
@@ -158,6 +159,17 @@ export function ShopeeOrdersImportDialog({
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = e.target.files?.[0]
     if (!selected) return
+
+    if (selected.size > MAX_IMPORT_FILE_SIZE_BYTES) {
+      toast({ variant: 'destructive', title: 'ไฟล์ใหญ่เกินไป', description: `ขนาดไฟล์ต้องไม่เกิน ${MAX_IMPORT_FILE_SIZE_LABEL}` })
+      e.target.value = ''
+      return
+    }
+    if (selected.type && REJECTED_MIME_RE.test(selected.type)) {
+      toast({ variant: 'destructive', title: 'ประเภทไฟล์ไม่รองรับ', description: 'รองรับเฉพาะไฟล์ CSV และ Excel เท่านั้น' })
+      e.target.value = ''
+      return
+    }
 
     const lower = selected.name.toLowerCase()
     const isCSV = lower.endsWith('.csv')
