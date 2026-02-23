@@ -918,12 +918,22 @@ export async function applyCOGSMTD(params: {
         `Checking existing allocations in ${chunks.length} chunks (${nonBundleOrderIds.length} non-bundle orders, chunk size: ${CHUNK_SIZE})`
       )
 
+      // Debug: verify first chunk element is a UUID string
+      if (nonBundleOrderIds.length > 0) {
+        console.log(
+          `[alloc-check] first id = "${nonBundleOrderIds[0]}" (typeof: ${typeof nonBundleOrderIds[0]})`
+        )
+      }
+
       for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
         const chunk = chunks[chunkIndex]
+        // Use order_id::text cast so PostgREST compares text=text, not uuid=varchar.
+        // inventory_cogs_allocations.order_id is VARCHAR; without the cast, PostgREST may
+        // infer the filter value as uuid type causing "character varying = uuid" error.
         const { data: chunkAllocations, error: allocError } = await supabase
           .from('inventory_cogs_allocations')
           .select('order_id')
-          .in('order_id', chunk)
+          .filter('order_id::text', 'in', `(${chunk.join(',')})`)
           .eq('is_reversal', false)
 
         if (allocError) {
@@ -3102,10 +3112,11 @@ export async function applyCOGSForBatch(importBatchId: string): Promise<{
       }
 
       for (const chunk of chunks) {
+        // Use order_id::text cast to avoid "character varying = uuid" type mismatch in PostgREST.
         const { data: chunkAllocs, error: allocError } = await supabase
           .from('inventory_cogs_allocations')
           .select('order_id')
-          .in('order_id', chunk)
+          .filter('order_id::text', 'in', `(${chunk.join(',')})`)
           .eq('is_reversal', false)
 
         if (allocError) {

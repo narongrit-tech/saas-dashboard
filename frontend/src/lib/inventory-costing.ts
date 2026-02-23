@@ -457,10 +457,12 @@ export async function applyCOGSForOrderShipped(
     // ============================================
     if (!item.is_bundle) {
       // Check idempotency: allocation keyed by (order_id, sku_internal)
+      // Use order_id::text cast to prevent "character varying = uuid" type mismatch in PostgREST.
+      // inventory_cogs_allocations.order_id is VARCHAR; order_id here is a UUID string.
       const { data: existing, error: existingError } = await supabase
         .from('inventory_cogs_allocations')
         .select('id')
-        .eq('order_id', order_id)
+        .filter('order_id::text', 'eq', order_id)
         .eq('sku_internal', sku)
         .eq('is_reversal', false)
 
@@ -506,12 +508,13 @@ export async function applyCOGSForOrderShipped(
     }))
 
     // Check existing allocations per component
+    // Use order_id::text cast to avoid "character varying = uuid" type mismatch in PostgREST.
     const alreadyAllocatedSkus = new Set<string>()
     for (const comp of items_to_allocate) {
       const { data: existing } = await supabase
         .from('inventory_cogs_allocations')
         .select('id')
-        .eq('order_id', order_id)
+        .filter('order_id::text', 'eq', order_id)
         .eq('sku_internal', comp.sku)
         .eq('is_reversal', false)
         .limit(1)
