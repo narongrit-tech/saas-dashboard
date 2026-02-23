@@ -827,7 +827,7 @@ export async function applyCOGSMTD(params: {
 
       const { data: pageOrders, error: ordersError } = await supabase
         .from('sales_orders')
-        .select('order_id, seller_sku, quantity, shipped_at, status_group')
+        .select('id, order_id, seller_sku, quantity, shipped_at, status_group')
         .not('shipped_at', 'is', null)
         .neq('status_group', 'ยกเลิกแล้ว')
         .gte('shipped_at', `${startDateISO}T00:00:00+07:00`)
@@ -894,9 +894,10 @@ export async function applyCOGSMTD(params: {
     console.log(`Bundle SKUs: ${bundleSkuSet.size} found`)
 
     // Separate orders into bundle vs non-bundle
+    // Use sales_orders.id (uuid) as the canonical key for allocation checks
     const nonBundleOrderIds = orders
       .filter((o) => o.seller_sku && !bundleSkuSet.has(o.seller_sku))
-      .map((o) => o.order_id)
+      .map((o) => o.id)
 
     // Filter out NON-BUNDLE orders that already have COGS allocations.
     // Bundle orders are NEVER pre-skipped here — their per-component state
@@ -1009,7 +1010,8 @@ export async function applyCOGSMTD(params: {
 
     // Process each order
     for (const order of orders) {
-      const order_id = order.order_id
+      const order_uuid = order.id          // UUID primary key — used for RPC + allocation checks
+      const order_id   = order.order_id   // TikTok/external ID — used for logging only
       const sku = order.seller_sku
       const qty = order.quantity
       const shipped_at = order.shipped_at
@@ -1017,7 +1019,7 @@ export async function applyCOGSMTD(params: {
       // Skip if already allocated (non-bundle orders only).
       // Bundle orders skip based on per-component check inside applyCOGSForOrderShippedCore.
       const isBundle = sku && bundleSkuSet.has(sku)
-      if (!isBundle && allocatedOrderIds.has(order_id)) {
+      if (!isBundle && allocatedOrderIds.has(order_uuid)) {
         summary.skipped++
         summary.errors.push({
           order_id,
@@ -1084,8 +1086,9 @@ export async function applyCOGSMTD(params: {
       summary.eligible++
 
       // Apply COGS (returns COGSApplyResult with status + allocatedSkus + missingSkus)
+      // order_uuid (UUID) is passed to RPC; order_id (TikTok ID) is for logging only
       try {
-        const result = await applyCOGSForOrderShippedCore(order_id, sku, qty, shipped_at, method)
+        const result = await applyCOGSForOrderShippedCore(order_uuid, sku, qty, shipped_at, method)
 
         if (result.status === 'success') {
           summary.successful++
@@ -1095,7 +1098,7 @@ export async function applyCOGSMTD(params: {
             missing_skus: [],
             allocated_skus: result.allocatedSkus,
           })
-          console.log(`✓ Order ${order_id}: COGS applied (SKU: ${sku}, Qty: ${qty})`)
+          console.log(`✓ Order ${order_id} (uuid: ${order_uuid}): COGS applied (SKU: ${sku}, Qty: ${qty})`)
 
         } else if (result.status === 'already_allocated') {
           // Bundle order that was fully allocated in a previous run
@@ -1127,7 +1130,7 @@ export async function applyCOGSMTD(params: {
             missing_skus: result.missingSkus,
             allocated_skus: result.allocatedSkus,
           })
-          console.warn(`~ Order ${order_id}: Partial COGS (allocated: ${result.allocatedSkus.join(',')}, missing: ${result.missingSkus.join(',')})`)
+          console.warn(`~ Order ${order_id} (uuid: ${order_uuid}): Partial COGS (allocated: ${result.allocatedSkus.join(',')}, missing: ${result.missingSkus.join(',')})`)
 
         } else {
           // failed
@@ -1147,7 +1150,7 @@ export async function applyCOGSMTD(params: {
             missing_skus: result.missingSkus,
             allocated_skus: result.allocatedSkus,
           })
-          console.error(`✗ Order ${order_id}: Failed to apply COGS (reason: ${result.reason})`)
+          console.error(`✗ Order ${order_id} (uuid: ${order_uuid}): Failed to apply COGS (reason: ${result.reason})`)
         }
 
       } catch (error) {
@@ -3027,7 +3030,7 @@ export async function applyCOGSForBatch(importBatchId: string): Promise<{
 
       const { data: pageOrders, error: ordersError } = await supabase
         .from('sales_orders')
-        .select('order_id, seller_sku, quantity, shipped_at, status_group')
+        .select('id, order_id, seller_sku, quantity, shipped_at, status_group')
         .eq('import_batch_id', importBatchId)
         .eq('created_by', user.id)
         .neq('status_group', 'ยกเลิกแล้ว')
@@ -3084,9 +3087,10 @@ export async function applyCOGSForBatch(importBatchId: string): Promise<{
     const bundleSkuSet = new Set<string>((bundleItemsData || []).map((i) => i.sku_internal))
 
     // ── Check existing allocations (non-bundle only) ──
+    // Use sales_orders.id (uuid) as the canonical key for inventory_cogs_allocations
     const nonBundleOrderIds = orders
       .filter((o) => o.seller_sku && !bundleSkuSet.has(o.seller_sku))
-      .map((o) => o.order_id)
+      .map((o) => o.id)
 
     const allocatedOrderIds = new Set<string>()
 
@@ -3167,13 +3171,14 @@ export async function applyCOGSForBatch(importBatchId: string): Promise<{
     }
 
     for (const order of orders) {
-      const order_id = order.order_id
+      const order_uuid = order.id          // UUID primary key — used for RPC + allocation checks
+      const order_id   = order.order_id   // TikTok/external ID — used for logging only
       const sku = order.seller_sku
       const qty = order.quantity
       const shipped_at = order.shipped_at
       const isBundle = sku && bundleSkuSet.has(sku)
 
-      if (!isBundle && allocatedOrderIds.has(order_id)) {
+      if (!isBundle && allocatedOrderIds.has(order_uuid)) {
         summary.skipped++
         summary.errors.push({ order_id, reason: 'already_allocated' })
         addSkipReason('ALREADY_ALLOCATED', 'เคย allocate แล้ว (idempotent skip)', order_id, sku)
@@ -3223,8 +3228,9 @@ export async function applyCOGSForBatch(importBatchId: string): Promise<{
 
       summary.eligible++
 
+      // order_uuid (UUID) is passed to RPC; order_id (TikTok ID) is for logging only
       try {
-        const result = await applyCOGSForOrderShippedCore(order_id, sku, qty, shipped_at, method)
+        const result = await applyCOGSForOrderShippedCore(order_uuid, sku, qty, shipped_at, method)
 
         if (result.status === 'success') {
           summary.successful++
