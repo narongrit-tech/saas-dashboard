@@ -27,6 +27,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Loader2, Package } from 'lucide-react'
 import { OrderSearchResult, ReturnType, RETURN_TYPE_LABELS, ReturnSubmitPayload } from '@/types/returns'
 import { submitReturn } from '@/app/(dashboard)/returns/actions'
@@ -204,10 +205,15 @@ export function ReturnDrawer({ open, order, onClose, onSuccess }: ReturnDrawerPr
                       <TableRow key={item.id}>
                         <TableCell>
                           <div>
-                            <div className="font-medium">{item.sku}</div>
-                            {item.seller_sku && item.seller_sku !== item.sku && (
+                            <div className="font-medium text-xs font-mono">{item.sku}</div>
+                            {item.seller_sku && (
                               <div className="text-xs text-muted-foreground">
-                                {item.seller_sku}
+                                → {item.seller_sku}
+                              </div>
+                            )}
+                            {item.sku_internal && item.sku_internal !== item.seller_sku && (
+                              <div className="text-xs text-blue-600 font-medium">
+                                internal: {item.sku_internal}
                               </div>
                             )}
                             <div className="text-xs text-muted-foreground">
@@ -279,6 +285,22 @@ export function ReturnDrawer({ open, order, onClose, onSuccess }: ReturnDrawerPr
               rows={3}
             />
           </div>
+
+          {/* Missing seller_sku warning */}
+          {lineItems.some((item) => {
+            const orderItem = order.line_items.find((i) => i.id === item.line_item_id)
+            return item.qty_to_return > 0 && !orderItem?.seller_sku
+          }) && (
+            <Alert variant="destructive">
+              <AlertDescription>
+                บางรายการไม่มี seller_sku — กรุณาตั้งค่า{' '}
+                <a href="/sku-mappings" className="underline font-medium">
+                  SKU Mapping
+                </a>{' '}
+                หรือ Fix Missing SKU ก่อนรับคืน
+              </AlertDescription>
+            </Alert>
+          )}
 
           {/* Actions */}
           <div className="flex gap-2 pt-4">

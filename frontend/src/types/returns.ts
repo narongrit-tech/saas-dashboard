@@ -20,6 +20,8 @@ export interface OrderLineItem {
   id: string // sales_orders.id (for reference)
   sku: string // sales_orders.sku
   seller_sku?: string | null // sales_orders.seller_sku
+  sku_internal?: string | null // resolved canonical SKU from inventory_sku_mappings
+  marketplace_sku?: string | null // raw marketplace variant ID
   product_name: string
   quantity: number // quantity sold
   qty_returned: number // quantity already returned
@@ -125,4 +127,16 @@ export interface RecentReturn {
  */
 export interface UndoReturnPayload {
   return_id: string
+}
+
+/**
+ * SKU mapping: marketplace_sku → sku_internal
+ */
+export interface SkuMappingRow {
+  id: string
+  channel: string
+  marketplace_sku: string
+  sku_internal: string
+  created_at: string
+  updated_at: string
 }

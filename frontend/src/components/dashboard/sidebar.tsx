@@ -23,6 +23,7 @@ import {
   ChevronDown,
   ChevronRight,
   ArrowLeftCircle,
+  Tags,
 } from 'lucide-react'
 
 interface MenuItem {
@@ -139,6 +140,11 @@ const menuGroups: MenuGroup[] = [
         title: 'Payables',
         href: '/payables',
         icon: CreditCard,
+      },
+      {
+        title: 'SKU Mappings',
+        href: '/sku-mappings',
+        icon: Tags,
       },
     ],
   },

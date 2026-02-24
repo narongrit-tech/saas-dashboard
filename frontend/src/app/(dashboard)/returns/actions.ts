@@ -10,7 +10,31 @@ import {
   QueueItem,
   RecentReturn,
   UndoReturnPayload,
+  SkuMappingRow,
 } from '@/types/returns'
+
+/**
+ * Internal helper: resolve sku_internal from inventory_sku_mappings
+ * given a channel and marketplace_sku.
+ */
+const _resolveSkuInternal = async (
+  supabase: any,
+  userId: string,
+  channel: string,
+  marketplace_sku: string,
+): Promise<{ sku_internal: string | null; error?: string }> => {
+  if (!marketplace_sku) return { sku_internal: null, error: 'marketplace_sku is empty' }
+  const { data, error } = await supabase
+    .from('inventory_sku_mappings')
+    .select('sku_internal')
+    .eq('created_by', userId)
+    .eq('channel', channel)
+    .eq('marketplace_sku', marketplace_sku)
+    .maybeSingle()
+  if (error) return { sku_internal: null, error: error.message }
+  if (!data) return { sku_internal: null, error: `ไม่พบ mapping สำหรับ ${channel} SKU: ${marketplace_sku}` }
+  return { sku_internal: data.sku_internal }
+}
 
 /**
  * Internal helper: for a RETURN_RECEIVED inventory_returns record,
@@ -19,15 +43,15 @@ import {
  * Idempotent: safe to call multiple times (guards via pre-checks + unique index).
  * Returns { success, warning? }
  */
-async function _processReturnReceived(
+const _processReturnReceived = async (
   supabase: any,
   userId: string,
-  returnId: string,     // inventory_returns.id (UUID)
-  orderIdUuid: string,  // sales_orders.id (UUID) = inventory_returns.order_id
-  sku: string,          // inventory_returns.sku
-  qty: number,          // inventory_returns.qty
-  returnedAt: string,   // inventory_returns.returned_at (ISO string)
-): Promise<{ success: boolean; warning?: string; alreadyDone?: boolean }> {
+  returnId: string,       // inventory_returns.id (UUID)
+  orderIdUuid: string,    // sales_orders.id (UUID) = inventory_returns.order_id
+  skuInternal: string,    // canonical sku_internal (not marketplace sku)
+  qty: number,            // inventory_returns.qty
+  returnedAt: string,     // inventory_returns.returned_at (ISO string)
+): Promise<{ success: boolean; warning?: string; alreadyDone?: boolean }> => {
   // 1) Check idempotency: skip if receipt layer already exists
   const { data: existingLayer } = await supabase
     .from('inventory_receipt_layers')
@@ -55,12 +79,12 @@ async function _processReturnReceived(
 
   const soOrderIdStr = soRow.order_id as string
 
-  // 3) Get original COGS allocations for this order+sku (Method B weighted avg)
+  // 3) Get original COGS allocations for this order+skuInternal (Method B weighted avg)
   const { data: allocs, error: allocsError } = await supabase
     .from('inventory_cogs_allocations')
     .select('qty, unit_cost_used, amount, method')
     .eq('order_id', soOrderIdStr)
-    .eq('sku_internal', sku)
+    .eq('sku_internal', skuInternal)
     .eq('is_reversal', false)
 
   let unitCost = 0
@@ -68,7 +92,7 @@ async function _processReturnReceived(
   let warning: string | undefined
 
   if (allocsError || !allocs || allocs.length === 0) {
-    warning = `No COGS allocations found for order ${soOrderIdStr} SKU ${sku} — unit_cost set to 0`
+    warning = `No COGS allocations found for order ${soOrderIdStr} SKU ${skuInternal} — unit_cost set to 0`
     console.warn(`[_processReturnReceived] ${warning}`)
   } else {
     const totalQty  = allocs.reduce((s: number, a: any) => s + Number(a.qty), 0)
@@ -76,7 +100,7 @@ async function _processReturnReceived(
     unitCost   = totalQty > 0 ? totalAmt / totalQty : 0
     cogsMethod = allocs[0].method || 'FIFO'
     if (totalQty === 0) {
-      warning = `COGS qty sum=0 for order ${soOrderIdStr} SKU ${sku} — unit_cost set to 0`
+      warning = `COGS qty sum=0 for order ${soOrderIdStr} SKU ${skuInternal} — unit_cost set to 0`
       console.warn(`[_processReturnReceived] ${warning}`)
     }
   }
@@ -85,7 +109,7 @@ async function _processReturnReceived(
   const { data: newLayer, error: layerError } = await supabase
     .from('inventory_receipt_layers')
     .insert({
-      sku_internal:  sku,
+      sku_internal:  skuInternal,
       received_at:   returnedAt,
       qty_received:  qty,
       qty_remaining: qty,
@@ -123,7 +147,7 @@ async function _processReturnReceived(
       .from('inventory_cogs_allocations')
       .insert({
         order_id:       soOrderIdStr,
-        sku_internal:   sku,
+        sku_internal:   skuInternal,
         shipped_at:     returnedAt,
         method:         cogsMethod,
         qty:            -qty,
@@ -320,11 +344,11 @@ export async function submitReturn(
       return { success: false, error: 'No items to return' }
     }
 
-    // Get line items to validate
+    // Get line items to validate (include source_platform for channel resolution)
     const lineItemIds = payload.items.map((i) => i.line_item_id)
     const { data: lineItems, error: fetchError } = await supabase
       .from('sales_orders')
-      .select('id, sku, seller_sku, quantity, shipped_at, created_by')
+      .select('id, sku, seller_sku, quantity, shipped_at, source_platform, created_by')
       .in('id', lineItemIds)
 
     if (fetchError) {
@@ -359,6 +383,39 @@ export async function submitReturn(
       for (const ret of existingReturns) {
         const key = `${ret.order_id}|${ret.sku}`
         returnsMap.set(key, (returnsMap.get(key) || 0) + ret.qty)
+      }
+    }
+
+    // Resolve sku_internal for each item
+    const skuResolutionMap = new Map<string, string>()  // line_item_id -> sku_internal
+    const skuErrors: string[] = []
+
+    for (const item of payload.items) {
+      const lineItem = lineItems.find((l) => l.id === item.line_item_id)
+      if (!lineItem) continue
+
+      const channel = lineItem.source_platform === 'shopee' ? 'shopee' : 'tiktok'
+      const marketplaceSku = item.sku  // the marketplace variant id
+
+      // If seller_sku exists on the line item, it IS the sku_internal — use it directly
+      if (lineItem.seller_sku) {
+        skuResolutionMap.set(item.line_item_id, lineItem.seller_sku)
+      } else {
+        const { sku_internal, error: resolveError } = await _resolveSkuInternal(
+          supabase, user.id, channel, marketplaceSku,
+        )
+        if (!sku_internal) {
+          skuErrors.push(`SKU ${marketplaceSku}: ${resolveError}`)
+        } else {
+          skuResolutionMap.set(item.line_item_id, sku_internal)
+        }
+      }
+    }
+
+    if (skuErrors.length > 0) {
+      return {
+        success: false,
+        error: `กรุณาตั้งค่า SKU mapping ก่อน:\n${skuErrors.join('\n')}`,
       }
     }
 
@@ -407,6 +464,8 @@ export async function submitReturn(
     const returnRecords = payload.items.map((item) => ({
       order_id: item.line_item_id, // sales_orders.id (UUID)
       sku: item.sku,
+      marketplace_sku: item.sku,  // store marketplace sku
+      sku_internal: skuResolutionMap.get(item.line_item_id) || null,
       qty: item.qty,
       return_type: item.return_type,
       note: payload.note || null,
@@ -418,7 +477,7 @@ export async function submitReturn(
     const { data: insertedReturns, error: insertError } = await supabase
       .from('inventory_returns')
       .insert(returnRecords)
-      .select('id, order_id, sku, qty, return_type, returned_at')
+      .select('id, order_id, sku, marketplace_sku, sku_internal, qty, return_type, returned_at')
 
     if (insertError) {
       console.error('[submitReturn] Insert error:', insertError)
@@ -434,7 +493,7 @@ export async function submitReturn(
           user.id,
           ret.id,
           ret.order_id,
-          ret.sku,
+          ret.sku_internal || ret.sku,  // fallback to old sku if sku_internal not set
           ret.qty,
           ret.returned_at || new Date().toISOString(),
         )
@@ -834,10 +893,10 @@ export async function backfillMissingReturnStock(): Promise<{
       return { success: false, error: 'Admin only', data: null }
     }
 
-    // Fetch all active RETURN_RECEIVED returns
+    // Fetch all active RETURN_RECEIVED returns (include marketplace_sku, sku_internal)
     const { data: allReturns, error: fetchErr } = await supabase
       .from('inventory_returns')
-      .select('id, order_id, sku, qty, return_type, returned_at')
+      .select('id, order_id, sku, marketplace_sku, sku_internal, qty, return_type, returned_at')
       .eq('created_by', user.id)
       .eq('action_type', 'RETURN')
       .is('reversed_return_id', null)
@@ -873,13 +932,50 @@ export async function backfillMissingReturnStock(): Promise<{
       warnings: [] as string[],
     }
 
+    // Pre-fetch source_platform for all order UUIDs (to resolve correct channel)
+    const orderUuids = [...new Set(needsProcessing.map((r: any) => r.order_id))]
+    const channelMap = new Map<string, string>() // order_id UUID -> channel string
+    if (orderUuids.length > 0) {
+      const { data: orderRows } = await supabase
+        .from('sales_orders')
+        .select('id, source_platform')
+        .in('id', orderUuids)
+      for (const row of orderRows || []) {
+        const ch = row.source_platform === 'shopee' ? 'shopee'
+          : row.source_platform === 'lazada' ? 'lazada'
+          : 'tiktok'
+        channelMap.set(row.id, ch)
+      }
+    }
+
     for (const ret of needsProcessing) {
+      let skuInternal = ret.sku_internal
+
+      if (!skuInternal) {
+        const marketplaceSku = ret.marketplace_sku || ret.sku
+        const channel = channelMap.get(ret.order_id) || 'tiktok'
+        const { sku_internal: resolved, error: resolveErr } = await _resolveSkuInternal(
+          supabase, user.id, channel, marketplaceSku,
+        )
+        if (!resolved) {
+          summary.failed++
+          summary.warnings.push(`[${ret.id}] ต้องการ SKU mapping [${channel}] สำหรับ ${marketplaceSku}: ${resolveErr}`)
+          continue
+        }
+        skuInternal = resolved
+        // Update the return record with resolved sku_internal
+        await supabase.from('inventory_returns')
+          .update({ sku_internal: skuInternal, marketplace_sku: marketplaceSku })
+          .eq('id', ret.id)
+          .eq('created_by', user.id)
+      }
+
       const result = await _processReturnReceived(
         supabase,
         user.id,
         ret.id,
         ret.order_id,
-        ret.sku,
+        skuInternal,
         ret.qty,
         ret.returned_at || new Date().toISOString(),
       )
@@ -899,5 +995,164 @@ export async function backfillMissingReturnStock(): Promise<{
   } catch (error) {
     console.error('[backfillMissingReturnStock] Unexpected error:', error)
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error', data: null }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SKU Mappings CRUD
+// ---------------------------------------------------------------------------
+
+/**
+ * List all SKU mappings owned by the current user
+ */
+export async function getSkuMappings(): Promise<{
+  data: SkuMappingRow[] | null
+  error: string | null
+}> {
+  try {
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { data: null, error: 'Not authenticated' }
+
+    const { data, error } = await supabase
+      .from('inventory_sku_mappings')
+      .select('id, channel, marketplace_sku, sku_internal, created_at, updated_at')
+      .eq('created_by', user.id)
+      .order('channel')
+      .order('marketplace_sku')
+
+    if (error) {
+      console.error('[getSkuMappings] error:', error)
+      return { data: null, error: error.message }
+    }
+
+    return { data: data as SkuMappingRow[], error: null }
+  } catch (err) {
+    console.error('[getSkuMappings] unexpected:', err)
+    return { data: null, error: err instanceof Error ? err.message : 'Unknown error' }
+  }
+}
+
+/**
+ * Upsert a SKU mapping (insert or update on conflict channel+marketplace_sku)
+ */
+export async function upsertSkuMapping(payload: {
+  id?: string
+  channel: string
+  marketplace_sku: string
+  sku_internal: string
+}): Promise<{ success: boolean; error: string | null }> {
+  try {
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'Not authenticated' }
+
+    if (!payload.channel || !payload.marketplace_sku || !payload.sku_internal) {
+      return { success: false, error: 'channel, marketplace_sku และ sku_internal จำเป็นต้องระบุ' }
+    }
+
+    const record = {
+      channel: payload.channel.trim(),
+      marketplace_sku: payload.marketplace_sku.trim(),
+      sku_internal: payload.sku_internal.trim(),
+      created_by: user.id,
+      updated_at: new Date().toISOString(),
+    }
+
+    let queryError: any
+
+    if (payload.id) {
+      // Update existing row (owner-check via created_by = user.id in RLS)
+      const { error } = await supabase
+        .from('inventory_sku_mappings')
+        .update({ channel: record.channel, marketplace_sku: record.marketplace_sku, sku_internal: record.sku_internal, updated_at: record.updated_at })
+        .eq('id', payload.id)
+        .eq('created_by', user.id)
+      queryError = error
+    } else {
+      // Insert with upsert on (created_by, channel, marketplace_sku)
+      const { error } = await supabase
+        .from('inventory_sku_mappings')
+        .upsert(record, { onConflict: 'created_by,channel,marketplace_sku' })
+      queryError = error
+    }
+
+    if (queryError) {
+      console.error('[upsertSkuMapping] error:', queryError)
+      return { success: false, error: queryError.message }
+    }
+
+    revalidatePath('/sku-mappings')
+    return { success: true, error: null }
+  } catch (err) {
+    console.error('[upsertSkuMapping] unexpected:', err)
+    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' }
+  }
+}
+
+/**
+ * Delete a SKU mapping by id (owner must match via RLS)
+ */
+export async function deleteSkuMapping(
+  id: string
+): Promise<{ success: boolean; error: string | null }> {
+  try {
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'Not authenticated' }
+
+    const { error } = await supabase
+      .from('inventory_sku_mappings')
+      .delete()
+      .eq('id', id)
+      .eq('created_by', user.id)
+
+    if (error) {
+      console.error('[deleteSkuMapping] error:', error)
+      return { success: false, error: error.message }
+    }
+
+    revalidatePath('/sku-mappings')
+    return { success: true, error: null }
+  } catch (err) {
+    console.error('[deleteSkuMapping] unexpected:', err)
+    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' }
+  }
+}
+
+/**
+ * Get inventory items for SKU mapping dropdown
+ * Returns sku_internal + product_name from inventory_items
+ */
+export async function getInventoryItemsForMapping(): Promise<{
+  data: { sku_internal: string; product_name: string }[] | null
+  error: string | null
+}> {
+  try {
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { data: null, error: 'Not authenticated' }
+
+    const { data, error } = await supabase
+      .from('inventory_items')
+      .select('sku_internal, product_name')
+      .eq('created_by', user.id)
+      .order('sku_internal')
+
+    if (error) {
+      console.error('[getInventoryItemsForMapping] error:', error)
+      return { data: null, error: error.message }
+    }
+
+    return {
+      data: (data || []).map((r: any) => ({
+        sku_internal: r.sku_internal as string,
+        product_name: (r.product_name as string) || '',
+      })),
+      error: null,
+    }
+  } catch (err) {
+    console.error('[getInventoryItemsForMapping] unexpected:', err)
+    return { data: null, error: err instanceof Error ? err.message : 'Unknown error' }
   }
 }
