@@ -2948,6 +2948,478 @@ export async function clearPartialCOGSAllocations(
  * Uses the same processing loop as applyCOGSMTD but scoped to a single batch.
  * Idempotent: safe to run multiple times.
  */
+// ============================================
+// Fix Missing SKU
+// ============================================
+
+/**
+ * Get orders with missing seller_sku in a date range that haven't been allocated yet.
+ * Used by the Fix Missing SKU dialog.
+ */
+export async function getMissingSkuOrders(params: {
+  startDate: string
+  endDate: string
+}): Promise<{
+  success: boolean
+  error?: string
+  data: Array<{
+    order_uuid: string
+    order_id: string
+    quantity: number
+    shipped_at: string
+  }> | null
+}> {
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้', data: null }
+
+    const { startDate, endDate } = params
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/
+    if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
+      return { success: false, error: 'รูปแบบวันที่ไม่ถูกต้อง (ต้องเป็น YYYY-MM-DD)', data: null }
+    }
+
+    // Fetch orders with missing seller_sku (null or empty string) in date range
+    const { data: orders, error: ordersError } = await supabase
+      .from('sales_orders')
+      .select('id, order_id, quantity, shipped_at')
+      .not('shipped_at', 'is', null)
+      .neq('status_group', 'ยกเลิกแล้ว')
+      .gte('shipped_at', `${startDate}T00:00:00+07:00`)
+      .lte('shipped_at', `${endDate}T23:59:59+07:00`)
+      .or('seller_sku.is.null,seller_sku.eq.')
+      .order('shipped_at', { ascending: true })
+      .limit(500)
+
+    if (ordersError) return { success: false, error: ordersError.message, data: null }
+    if (!orders || orders.length === 0) return { success: true, data: [] }
+
+    // Filter out already-allocated orders (check inventory_cogs_allocations by order UUID)
+    const orderUuids = orders.map(o => String(o.id))
+    const allocatedSet = new Set<string>()
+    const CHUNK = 200
+
+    for (let i = 0; i < orderUuids.length; i += CHUNK) {
+      const chunk = orderUuids.slice(i, i + CHUNK)
+      const { data: allocs } = await supabase
+        .from('inventory_cogs_allocations')
+        .select('order_id')
+        .filter('order_id::text', 'in', `(${chunk.join(',')})`)
+        .eq('is_reversal', false)
+
+      if (allocs) {
+        for (const a of allocs) allocatedSet.add(String(a.order_id))
+      }
+    }
+
+    const result = orders
+      .filter(o => !allocatedSet.has(String(o.id)))
+      .map(o => ({
+        order_uuid: String(o.id),
+        order_id: o.order_id as string,
+        quantity: o.quantity as number,
+        shipped_at: o.shipped_at as string,
+      }))
+
+    return { success: true, data: result }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาด',
+      data: null,
+    }
+  }
+}
+
+/**
+ * Get all inventory items for use in SKU selection dropdown.
+ */
+export async function getInventoryItemsForSku(): Promise<{
+  success: boolean
+  data: Array<{ sku_internal: string; product_name: string }> | null
+}> {
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, data: null }
+
+    const { data, error } = await supabase
+      .from('inventory_items')
+      .select('sku_internal, product_name')
+      .order('sku_internal', { ascending: true })
+
+    if (error) return { success: false, data: null }
+    return { success: true, data: data || [] }
+  } catch {
+    return { success: false, data: null }
+  }
+}
+
+/**
+ * Save seller_sku updates for missing-sku orders then immediately run COGS for those orders.
+ * Admin only. Idempotent: already-allocated orders are skipped gracefully.
+ */
+export async function saveSkusAndAllocate(params: {
+  updates: Array<{ order_uuid: string; sku_internal: string }>
+  method?: CostingMethod
+}): Promise<{
+  success: boolean
+  error?: string
+  data: {
+    total: number
+    eligible: number
+    successful: number
+    skipped: number
+    failed: number
+    partial: number
+    errors: Array<{ order_id: string; reason: string }>
+    skip_reasons: Array<{
+      code: string
+      label: string
+      count: number
+      samples: Array<{ order_id: string; sku?: string; detail?: string }>
+    }>
+    run_id: string | null
+    cogs_run_id: string | null
+  } | null
+}> {
+  const method: CostingMethod = params.method || 'FIFO'
+  let run_id: string | null = null
+  let cogs_run_id: string | null = null
+
+  try {
+    const supabase = createClient()
+
+    // Auth check
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้', data: null }
+    }
+
+    // Admin check
+    const { data: roleData, error: roleError } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id)
+      .single()
+
+    if (roleError || roleData?.role !== 'admin') {
+      return { success: false, error: 'ไม่มีสิทธิ์เข้าถึงฟังก์ชันนี้ (Admin only)', data: null }
+    }
+
+    const { updates } = params
+    if (!updates || updates.length === 0) {
+      return { success: false, error: 'ไม่มีข้อมูล updates', data: null }
+    }
+
+    // Validate all sku_internal values exist in inventory_items
+    const skuInternals = [...new Set(updates.map(u => u.sku_internal))]
+    const { data: validSkus, error: skuError } = await supabase
+      .from('inventory_items')
+      .select('sku_internal')
+      .in('sku_internal', skuInternals)
+
+    if (skuError) {
+      return { success: false, error: `ตรวจสอบ SKU ล้มเหลว: ${skuError.message}`, data: null }
+    }
+
+    const validSkuSet = new Set((validSkus || []).map((s: { sku_internal: string }) => s.sku_internal))
+    const invalidSkus = skuInternals.filter(s => !validSkuSet.has(s))
+    if (invalidSkus.length > 0) {
+      return { success: false, error: `SKU ไม่มีในระบบ: ${invalidSkus.join(', ')}`, data: null }
+    }
+
+    // Create cogs_allocation_run (notification tracking)
+    const cogsRunResult = await createCogsRun({ triggerSource: 'DATE_RANGE' })
+    if (cogsRunResult.success && cogsRunResult.runId) {
+      cogs_run_id = cogsRunResult.runId
+    }
+
+    // Create legacy run record
+    const { data: runData, error: runError } = await supabase
+      .from('inventory_cogs_apply_runs')
+      .insert({
+        start_date: null,
+        end_date: null,
+        method,
+        total: 0,
+        eligible: 0,
+        successful: 0,
+        skipped: 0,
+        failed: 0,
+        partial: 0,
+        created_by: user.id,
+      })
+      .select('id')
+      .single()
+
+    if (!runError && runData) {
+      run_id = runData.id
+    }
+
+    // ── UPDATE seller_sku (grouped by SKU to minimise DB round-trips) ──
+    const skuGroups = new Map<string, string[]>()
+    for (const { order_uuid, sku_internal } of updates) {
+      if (!skuGroups.has(sku_internal)) skuGroups.set(sku_internal, [])
+      skuGroups.get(sku_internal)!.push(order_uuid)
+    }
+
+    for (const [sku, uuids] of skuGroups) {
+      const { error: updateError } = await supabase
+        .from('sales_orders')
+        .update({ seller_sku: sku })
+        .in('id', uuids)
+        .eq('created_by', user.id)  // RLS guard
+
+      if (updateError) {
+        console.error(`saveSkusAndAllocate: failed to update seller_sku for SKU ${sku}:`, updateError)
+      }
+    }
+
+    // ── FETCH updated orders ──
+    const orderUuids = updates.map(u => u.order_uuid)
+    const { data: orders, error: ordersError } = await supabase
+      .from('sales_orders')
+      .select('id, order_id, seller_sku, quantity, shipped_at, status_group')
+      .in('id', orderUuids)
+      .eq('created_by', user.id)
+
+    if (ordersError) {
+      if (cogs_run_id) await completeCogsRunFailed(cogs_run_id, ordersError.message)
+      return { success: false, error: ordersError.message, data: null }
+    }
+
+    if (!orders || orders.length === 0) {
+      const emptySummary = {
+        total: 0, eligible: 0, successful: 0, skipped: 0, failed: 0, partial: 0,
+        errors: [], skip_reasons: [], run_id, cogs_run_id,
+      }
+      if (cogs_run_id) {
+        await completeCogsRunSuccess(cogs_run_id, emptySummary)
+        await createNotificationForRun(cogs_run_id, { total: 0, successful: 0, skipped: 0, failed: 0 })
+      }
+      return { success: true, data: emptySummary }
+    }
+
+    // ── FETCH bundle SKUs ──
+    const { data: bundleItemsData } = await supabase
+      .from('inventory_items')
+      .select('sku_internal')
+      .eq('is_bundle', true)
+
+    const bundleSkuSet = new Set<string>((bundleItemsData || []).map((i: { sku_internal: string }) => i.sku_internal))
+
+    // ── CHECK EXISTING ALLOCATIONS (non-bundle only) ──
+    const nonBundleOrderIds = orders
+      .filter((o: { seller_sku: string | null }) => o.seller_sku && !bundleSkuSet.has(o.seller_sku))
+      .map((o: { id: unknown }) => String(o.id))
+
+    const allocatedOrderIds = new Set<string>()
+
+    if (nonBundleOrderIds.length > 0) {
+      const CHUNK_SIZE = 200
+      for (let i = 0; i < nonBundleOrderIds.length; i += CHUNK_SIZE) {
+        const chunk = nonBundleOrderIds.slice(i, i + CHUNK_SIZE)
+        const { data: chunkAllocs } = await supabase
+          .from('inventory_cogs_allocations')
+          .select('order_id')
+          .filter('order_id::text', 'in', `(${chunk.join(',')})`)
+          .eq('is_reversal', false)
+
+        if (chunkAllocs) {
+          for (const row of chunkAllocs) allocatedOrderIds.add(String(row.order_id))
+        }
+      }
+    }
+
+    // ── PROCESS ORDERS (same loop pattern as applyCOGSForBatch) ──
+    const summary = {
+      total: orders.length,
+      eligible: 0,
+      successful: 0,
+      skipped: 0,
+      failed: 0,
+      partial: 0,
+      errors: [] as Array<{ order_id: string; reason: string }>,
+    }
+
+    interface _SkipReason {
+      code: string
+      label: string
+      count: number
+      samples: Array<{ order_id: string; sku?: string; detail?: string }>
+    }
+    const skipReasons = new Map<string, _SkipReason>()
+
+    const addSkipReason = (code: string, label: string, order_id: string, sku?: string, detail?: string) => {
+      if (!skipReasons.has(code)) {
+        skipReasons.set(code, { code, label, count: 0, samples: [] })
+      }
+      const r = skipReasons.get(code)!
+      r.count++
+      if (r.samples.length < 5) r.samples.push({ order_id, sku, detail })
+    }
+
+    const runItems: Array<{
+      order_id: string
+      sku: string | null
+      qty: number | null
+      status: 'successful' | 'skipped' | 'failed' | 'partial'
+      reason: string | null
+      missing_skus: string[]
+      allocated_skus: string[]
+    }> = []
+
+    for (const order of orders) {
+      const order_uuid = String(order.id)
+      const order_id   = order.order_id
+      const sku        = order.seller_sku
+      const qty        = order.quantity
+      const shipped_at = order.shipped_at
+
+      const isBundle = sku && bundleSkuSet.has(sku)
+
+      if (!isBundle && allocatedOrderIds.has(order_uuid)) {
+        summary.skipped++
+        summary.errors.push({ order_id, reason: 'already_allocated' })
+        addSkipReason('ALREADY_ALLOCATED', 'เคย allocate แล้ว (idempotent skip)', order_id, sku)
+        runItems.push({ order_id, sku: sku || null, qty: qty || null, status: 'skipped', reason: 'ALREADY_ALLOCATED', missing_skus: [], allocated_skus: sku ? [sku] : [] })
+        continue
+      }
+
+      if (!sku || sku.trim() === '') {
+        summary.skipped++
+        summary.errors.push({ order_id, reason: 'missing_seller_sku' })
+        addSkipReason('MISSING_SKU', 'ไม่มี seller_sku ใน order', order_id)
+        runItems.push({ order_id, sku: null, qty: qty || null, status: 'skipped', reason: 'MISSING_SKU', missing_skus: [], allocated_skus: [] })
+        continue
+      }
+
+      if (qty == null || !Number.isFinite(qty) || qty <= 0) {
+        summary.skipped++
+        summary.errors.push({ order_id, reason: `invalid_quantity_${qty}` })
+        addSkipReason('INVALID_QUANTITY', 'quantity ไม่ถูกต้อง (null/zero/negative)', order_id, sku, `qty=${qty}`)
+        runItems.push({ order_id, sku: sku || null, qty: qty || null, status: 'skipped', reason: 'INVALID_QUANTITY', missing_skus: [], allocated_skus: [] })
+        continue
+      }
+
+      if (!shipped_at) {
+        summary.skipped++
+        summary.errors.push({ order_id, reason: 'missing_shipped_at' })
+        addSkipReason('NOT_SHIPPED', 'ยังไม่ได้ shipped (ไม่มี shipped_at)', order_id, sku)
+        runItems.push({ order_id, sku: sku || null, qty: qty || null, status: 'skipped', reason: 'NOT_SHIPPED', missing_skus: [], allocated_skus: [] })
+        continue
+      }
+
+      summary.eligible++
+
+      try {
+        const result = await applyCOGSForOrderShippedCore(order_uuid, sku, qty, shipped_at, method)
+
+        if (result.status === 'success') {
+          summary.successful++
+          runItems.push({ order_id, sku: sku || null, qty: qty || null, status: 'successful', reason: null, missing_skus: [], allocated_skus: result.allocatedSkus })
+        } else if (result.status === 'already_allocated') {
+          summary.skipped++
+          summary.errors.push({ order_id, reason: 'already_allocated' })
+          addSkipReason('ALREADY_ALLOCATED', 'เคย allocate แล้ว (idempotent skip)', order_id, sku)
+          runItems.push({ order_id, sku: sku || null, qty: qty || null, status: 'skipped', reason: 'ALREADY_ALLOCATED', missing_skus: [], allocated_skus: result.allocatedSkus })
+        } else if (result.status === 'partial') {
+          summary.partial++
+          summary.errors.push({ order_id, reason: result.reason || 'PARTIAL' })
+          addSkipReason('PARTIAL_ALLOCATION', `bundle allocate ได้บางส่วน (missing: ${result.missingSkus.join(', ')})`, order_id, sku, result.reason)
+          runItems.push({ order_id, sku: sku || null, qty: qty || null, status: 'partial', reason: result.reason || 'PARTIAL_ALLOCATION', missing_skus: result.missingSkus, allocated_skus: result.allocatedSkus })
+        } else {
+          summary.failed++
+          summary.errors.push({ order_id, reason: result.reason || 'applyCOGS_failed' })
+          addSkipReason('ALLOCATION_FAILED', 'ไม่สามารถ allocate ได้ (SKU ไม่มี/stock ไม่พอ/bundle ไม่มี recipe)', order_id, sku, result.reason)
+          runItems.push({ order_id, sku: sku || null, qty: qty || null, status: 'failed', reason: result.reason || 'ALLOCATION_FAILED', missing_skus: result.missingSkus, allocated_skus: result.allocatedSkus })
+        }
+      } catch (loopErr) {
+        summary.failed++
+        const errMsg = loopErr instanceof Error ? loopErr.message : 'unknown_error'
+        summary.errors.push({ order_id, reason: errMsg })
+        addSkipReason('EXCEPTION', 'เกิด exception ระหว่าง allocate', order_id, sku, errMsg)
+        runItems.push({ order_id, sku: sku || null, qty: qty || null, status: 'failed', reason: 'EXCEPTION', missing_skus: [sku], allocated_skus: [] })
+      }
+    }
+
+    const skipReasonsArray = Array.from(skipReasons.values()).sort((a, b) => b.count - a.count)
+
+    // ── SAVE RUN LOG ──
+    if (run_id && runItems.length > 0) {
+      const BATCH_SIZE = 1000
+      for (let i = 0; i < runItems.length; i += BATCH_SIZE) {
+        const batch = runItems.slice(i, i + BATCH_SIZE)
+        await supabase.from('inventory_cogs_apply_run_items').insert(
+          batch.map(item => ({
+            run_id,
+            order_id: item.order_id,
+            sku: item.sku,
+            qty: item.qty,
+            status: item.status,
+            reason: item.reason,
+            missing_skus: item.missing_skus,
+            allocated_skus: item.allocated_skus,
+          }))
+        )
+      }
+
+      await supabase.from('inventory_cogs_apply_runs').update({
+        total: summary.total,
+        eligible: summary.eligible,
+        successful: summary.successful,
+        skipped: summary.skipped,
+        failed: summary.failed,
+        partial: summary.partial,
+      }).eq('id', run_id)
+    }
+
+    revalidatePath('/inventory')
+    revalidatePath('/sales')
+    revalidatePath('/daily-pl')
+
+    // ── COMPLETE COGS_ALLOCATION_RUN ──
+    if (cogs_run_id) {
+      const notifSummary = {
+        total: summary.total,
+        eligible: summary.eligible,
+        successful: summary.successful,
+        skipped: summary.skipped,
+        failed: summary.failed,
+        partial: summary.partial,
+        skip_reasons: skipReasonsArray,
+      }
+      await completeCogsRunSuccess(cogs_run_id, notifSummary)
+      await createNotificationForRun(cogs_run_id, {
+        total: summary.total,
+        successful: summary.successful,
+        skipped: summary.skipped,
+        failed: summary.failed,
+      })
+    }
+
+    return {
+      success: true,
+      data: { ...summary, skip_reasons: skipReasonsArray, run_id, cogs_run_id },
+    }
+  } catch (error) {
+    console.error('Unexpected error in saveSkusAndAllocate:', error)
+    if (typeof cogs_run_id === 'string' && cogs_run_id) {
+      await completeCogsRunFailed(
+        cogs_run_id,
+        error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด'
+      )
+    }
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+      data: null,
+    }
+  }
+}
+
 export async function applyCOGSForBatch(importBatchId: string): Promise<{
   success: boolean
   error?: string

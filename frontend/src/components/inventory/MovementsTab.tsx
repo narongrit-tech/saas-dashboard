@@ -14,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Package, Search } from 'lucide-react'
+import { Package, Search, Wrench } from 'lucide-react'
 import { formatBangkok } from '@/lib/bangkok-time'
 import { getTodayBangkokString, getFirstDayOfMonthBangkokString } from '@/lib/bangkok-date-range'
 import { getReceiptLayers, getCOGSAllocations, checkIsInventoryAdmin } from '@/app/(dashboard)/inventory/actions'
@@ -22,6 +22,7 @@ import { ApplyCOGSMTDModal } from '@/components/inventory/ApplyCOGSMTDModal'
 import { COGSCoveragePanel } from '@/components/inventory/COGSCoveragePanel'
 import { RunHistorySection } from '@/components/inventory/RunHistorySection'
 import { RunDetailsModal } from '@/components/inventory/RunDetailsModal'
+import { FixMissingSkuDialog } from '@/components/inventory/FixMissingSkuDialog'
 
 interface ReceiptLayer {
   id: string
@@ -51,6 +52,7 @@ export function MovementsTab() {
   const [loading, setLoading] = useState(true)
   const [isAdmin, setIsAdmin] = useState(false)
   const [showCOGSMTDModal, setShowCOGSMTDModal] = useState(false)
+  const [showFixMissingSkuDialog, setShowFixMissingSkuDialog] = useState(false)
 
   // Date filter for Coverage Panel (default to MTD)
   const [startDate, setStartDate] = useState(getFirstDayOfMonthBangkokString())
@@ -318,6 +320,16 @@ export function MovementsTab() {
         {isAdmin && (
           <Button
             variant="outline"
+            onClick={() => setShowFixMissingSkuDialog(true)}
+            className="border-orange-300 text-orange-600 hover:bg-orange-50 hover:text-orange-700 dark:border-orange-700 dark:text-orange-400 dark:hover:bg-orange-950"
+          >
+            <Wrench className="mr-2 h-4 w-4" />
+            Fix Missing SKU
+          </Button>
+        )}
+        {isAdmin && (
+          <Button
+            variant="outline"
             onClick={() => setShowCOGSMTDModal(true)}
             className="border-blue-300 text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-950"
           >
@@ -346,6 +358,17 @@ export function MovementsTab() {
         runSummary={selectedRunSummary}
         isAdmin={isAdmin}
       />
+
+      {isAdmin && (
+        <FixMissingSkuDialog
+          open={showFixMissingSkuDialog}
+          onOpenChange={setShowFixMissingSkuDialog}
+          startDate={startDate}
+          endDate={endDate}
+          onSuccess={handleCOGSSuccess}
+          onViewRunDetails={handleViewRunDetails}
+        />
+      )}
     </div>
   )
 }
