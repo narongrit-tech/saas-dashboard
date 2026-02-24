@@ -2233,3 +2233,220 @@ export async function getSalesGMVSummary(
     })
   }
 }
+
+// ============================================================
+// Main SKU Outflow Summary
+// ============================================================
+
+export interface MainSkuOutflowRow {
+  sku: string
+  qty_out: number
+  orders_count: number
+}
+
+/**
+ * Get Main SKU Outflow Summary (Filtered)
+ * Shows qty out per Main SKU, respecting all page filters.
+ * Bundle SKUs are exploded to component SKUs via inventory_bundle_components.
+ * Non-bundle SKUs are counted directly.
+ * Top 20 by qty_out DESC.
+ */
+export async function getMainSkuOutflowSummary(
+  filters: ExportFilters & { dateBasis?: 'order' | 'paid' }
+): Promise<{
+  success: boolean
+  data?: MainSkuOutflowRow[]
+  error?: string
+}> {
+  noStore()
+  try {
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+    }
+
+    const dateBasis = filters.dateBasis || 'order'
+
+    // Build base query (same filter logic as getSalesOrdersGrouped)
+    let baseQuery = supabase
+      .from('sales_orders')
+      .select('order_id, external_order_id, seller_sku, quantity, created_time, order_date, paid_time')
+
+    if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
+      baseQuery = baseQuery.eq('source_platform', filters.sourcePlatform)
+    }
+
+    if (filters.status && filters.status.length > 0) {
+      baseQuery = baseQuery.in('platform_status', filters.status)
+    }
+
+    if (filters.paymentStatus && filters.paymentStatus !== 'all') {
+      baseQuery = baseQuery.eq('payment_status', filters.paymentStatus)
+    }
+
+    if (dateBasis === 'paid') {
+      baseQuery = baseQuery.not('paid_time', 'is', null)
+      if (filters.startDate) {
+        baseQuery = baseQuery.gte('paid_time', filters.startDate)
+      }
+      if (filters.endDate) {
+        const { toZonedTime } = await import('date-fns-tz')
+        const { endOfDay } = await import('date-fns')
+        const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
+        baseQuery = baseQuery.lte('paid_time', endOfDay(bangkokDate).toISOString())
+      }
+    } else {
+      if (filters.startDate) {
+        baseQuery = baseQuery.gte('order_date', filters.startDate)
+      }
+      if (filters.endDate) {
+        const { toZonedTime } = await import('date-fns-tz')
+        const { endOfDay } = await import('date-fns')
+        const bangkokDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
+        baseQuery = baseQuery.lte('order_date', endOfDay(bangkokDate).toISOString())
+      }
+    }
+
+    if (filters.search && filters.search.trim()) {
+      baseQuery = baseQuery.or(
+        `order_id.ilike.%${filters.search}%,product_name.ilike.%${filters.search}%,external_order_id.ilike.%${filters.search}%`
+      )
+    }
+
+    // Fetch all matching lines (paginated to bypass 1000-row limit)
+    let rawLines: Array<{
+      order_id: string
+      external_order_id: string | null
+      seller_sku: string | null
+      quantity: number
+      created_time: string | null
+      order_date: string
+      paid_time: string | null
+    }> = []
+    let from = 0
+    const pageSize = 1000
+    let hasMore = true
+
+    while (hasMore) {
+      const { data, error } = await baseQuery.range(from, from + pageSize - 1)
+      if (error) {
+        console.error('[Sales][getMainSkuOutflowSummary] fetch error:', error)
+        return { success: false, error: 'เกิดข้อผิดพลาดในการดึงข้อมูล' }
+      }
+      if (data && data.length > 0) {
+        rawLines = rawLines.concat(data as typeof rawLines)
+        hasMore = data.length === pageSize
+        from += pageSize
+      } else {
+        hasMore = false
+      }
+    }
+
+    if (rawLines.length === 0) return { success: true, data: [] }
+
+    // Apply client-side COALESCE date filter for order basis (mirrors getSalesOrdersGrouped)
+    const lines =
+      dateBasis === 'paid'
+        ? rawLines
+        : rawLines.filter((line) => {
+            const effectiveDate = line.created_time || line.order_date
+            if (!effectiveDate) return false
+            const bangkokDateStr = toBangkokDateString(new Date(effectiveDate))
+            if (filters.startDate && bangkokDateStr < filters.startDate) return false
+            if (filters.endDate && bangkokDateStr > filters.endDate) return false
+            return true
+          })
+
+    if (lines.length === 0) return { success: true, data: [] }
+
+    // Collect unique seller_skus (non-null)
+    const uniqueSkus = Array.from(new Set(lines.map((l) => l.seller_sku).filter((s): s is string => Boolean(s))))
+    if (uniqueSkus.length === 0) return { success: true, data: [] }
+
+    // Fetch inventory_items to determine which SKUs are bundles
+    const { data: inventoryItems } = await supabase
+      .from('inventory_items')
+      .select('sku_internal, is_bundle')
+      .in('sku_internal', uniqueSkus)
+
+    const bundleFlagMap = new Map<string, boolean>()
+    const bundleSkus: string[] = []
+    for (const item of inventoryItems || []) {
+      bundleFlagMap.set(item.sku_internal, item.is_bundle)
+      if (item.is_bundle) bundleSkus.push(item.sku_internal)
+    }
+
+    // Fetch bundle components for bundle SKUs
+    const bundleComponentMap = new Map<string, Array<{ component_sku: string; quantity: number }>>()
+    if (bundleSkus.length > 0) {
+      const { data: components } = await supabase
+        .from('inventory_bundle_components')
+        .select('bundle_sku, component_sku, quantity')
+        .in('bundle_sku', bundleSkus)
+
+      for (const comp of components || []) {
+        if (!bundleComponentMap.has(comp.bundle_sku)) {
+          bundleComponentMap.set(comp.bundle_sku, [])
+        }
+        bundleComponentMap.get(comp.bundle_sku)!.push({
+          component_sku: comp.component_sku,
+          quantity: Number(comp.quantity),
+        })
+      }
+    }
+
+    // Aggregate: explode bundles → component SKUs, keep main SKUs as-is
+    const skuMap = new Map<string, { qty_out: number; order_ids: Set<string> }>()
+
+    for (const line of lines) {
+      const sku = line.seller_sku
+      if (!sku) continue
+
+      const orderId = line.external_order_id || line.order_id
+      const qty = line.quantity || 0
+      const isBundle = bundleFlagMap.get(sku) === true
+
+      if (isBundle) {
+        for (const comp of bundleComponentMap.get(sku) || []) {
+          let entry = skuMap.get(comp.component_sku)
+          if (!entry) {
+            entry = { qty_out: 0, order_ids: new Set() }
+            skuMap.set(comp.component_sku, entry)
+          }
+          entry.qty_out += qty * comp.quantity
+          entry.order_ids.add(orderId)
+        }
+      } else {
+        let entry = skuMap.get(sku)
+        if (!entry) {
+          entry = { qty_out: 0, order_ids: new Set() }
+          skuMap.set(sku, entry)
+        }
+        entry.qty_out += qty
+        entry.order_ids.add(orderId)
+      }
+    }
+
+    const result: MainSkuOutflowRow[] = Array.from(skuMap.entries())
+      .map(([sku, { qty_out, order_ids }]) => ({
+        sku,
+        qty_out,
+        orders_count: order_ids.size,
+      }))
+      .sort((a, b) => b.qty_out - a.qty_out)
+      .slice(0, 20)
+
+    return { success: true, data: result }
+  } catch (error) {
+    console.error('Unexpected error in getMainSkuOutflowSummary:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
+    }
+  }
+}

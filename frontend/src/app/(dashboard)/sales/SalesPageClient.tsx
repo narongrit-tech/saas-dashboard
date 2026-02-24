@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { DateRangePicker, DateRangeResult } from '@/components/shared/DateRangePicker'
 import { GMVCards } from '@/components/sales/GMVCards'
-import { getSalesOrdersGrouped, getSalesGMVSummary, GMVSummary } from '@/app/(dashboard)/sales/actions'
+import { getSalesOrdersGrouped, getSalesGMVSummary, GMVSummary, getMainSkuOutflowSummary, MainSkuOutflowRow } from '@/app/(dashboard)/sales/actions'
 import { useLatestOnly } from '@/hooks/useLatestOnly'
 import {
   Select,
@@ -29,7 +29,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
-import { ChevronLeft, ChevronRight, Download, FileUp, Plus, Pencil, Trash2, Eye, RotateCcw, Package, Link } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, FileUp, Plus, Pencil, Trash2, Eye, RotateCcw, Package, Link, ChevronDown, ChevronUp } from 'lucide-react'
 import { AddOrderDialog } from '@/components/sales/AddOrderDialog'
 import { EditOrderDialog } from '@/components/sales/EditOrderDialog'
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
@@ -88,6 +88,7 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
   // to avoid cross-cancelling orders vs GMV requests.
   const { runLatest: runLatestOrders } = useLatestOnly()
   const { runLatest: runLatestGmv } = useLatestOnly()
+  const { runLatest: runLatestSkuOutflow } = useLatestOnly()
 
   const [orders, setOrders] = useState<SalesOrder[]>([])
   const [groupedOrders, setGroupedOrders] = useState<GroupedSalesOrder[]>([])
@@ -112,6 +113,11 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
   const [gmvSummary, setGmvSummary] = useState<GMVSummary | null>(null)
   const [gmvSummaryLoading, setGmvSummaryLoading] = useState(true)
   const [gmvSummaryError, setGmvSummaryError] = useState<string | null>(null)
+
+  // Main SKU Outflow state
+  const [mainSkuOutflow, setMainSkuOutflow] = useState<MainSkuOutflowRow[]>([])
+  const [mainSkuOutflowLoading, setMainSkuOutflowLoading] = useState(false)
+  const [mainSkuOutflowCollapsed, setMainSkuOutflowCollapsed] = useState(false)
 
   // Attribution data (batch fetched)
   const [attributions, setAttributions] = useState<Map<string, OrderAttribution>>(new Map())
@@ -253,6 +259,7 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
   useEffect(() => {
     fetchOrders()
     fetchGMVSummary()
+    fetchMainSkuOutflow()
   }, [sourcePlatform, statusString, paymentStatus, startDate, endDate, search, page, perPage, dateBasis, view])
 
   const fetchGMVSummary = async () => {
@@ -302,6 +309,32 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
         if (!signal.isStale) {
           setGmvSummaryLoading(false)
         }
+      }
+    })
+  }
+
+  const fetchMainSkuOutflow = async () => {
+    await runLatestSkuOutflow(async (signal) => {
+      setMainSkuOutflowLoading(true)
+      try {
+        const result = await getMainSkuOutflowSummary({
+          sourcePlatform: filters.sourcePlatform,
+          status: filters.status,
+          paymentStatus: filters.paymentStatus,
+          startDate: filters.startDate,
+          endDate: filters.endDate,
+          search: filters.search,
+          dateBasis: dateBasis,
+        })
+        if (signal.isStale) return
+        if (result.success) {
+          setMainSkuOutflow(result.data || [])
+        }
+      } catch (err) {
+        if (signal.isStale) return
+        console.error('Error fetching main SKU outflow:', err)
+      } finally {
+        if (!signal.isStale) setMainSkuOutflowLoading(false)
       }
     })
   }
@@ -914,6 +947,67 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
             {exportLoading ? 'Exporting...' : 'Export Orders CSV'}
           </Button>
         </div>
+      </div>
+
+      {/* Main SKU Outflow Summary */}
+      <div className="rounded-md border bg-white dark:bg-gray-900">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-800"
+          onClick={() => setMainSkuOutflowCollapsed((v) => !v)}
+        >
+          <div>
+            <span className="font-semibold text-sm">Main SKU Outflow (Filtered)</span>
+            <span className="ml-2 text-xs text-muted-foreground">
+              รวมจำนวนสินค้า Main SKU ที่ออกไป (รวมแตก bundle เป็น component) — Top 20
+            </span>
+          </div>
+          {mainSkuOutflowCollapsed ? (
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          ) : (
+            <ChevronUp className="h-4 w-4 text-muted-foreground" />
+          )}
+        </button>
+        {!mainSkuOutflowCollapsed && (
+          <div className="border-t px-4 py-3">
+            {mainSkuOutflowLoading ? (
+              <div className="space-y-2">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="flex gap-4">
+                    <div className="h-4 w-32 animate-pulse rounded bg-gray-200" />
+                    <div className="h-4 w-16 animate-pulse rounded bg-gray-200" />
+                    <div className="h-4 w-12 animate-pulse rounded bg-gray-200" />
+                  </div>
+                ))}
+              </div>
+            ) : mainSkuOutflow.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">ไม่พบข้อมูล (ตาม filter ที่เลือก)</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-left text-xs text-muted-foreground">
+                      <th className="pb-2 pr-4 font-medium">#</th>
+                      <th className="pb-2 pr-6 font-medium">SKU</th>
+                      <th className="pb-2 pr-4 text-right font-medium">Qty Out</th>
+                      <th className="pb-2 text-right font-medium">Orders</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mainSkuOutflow.map((row, idx) => (
+                      <tr key={row.sku} className="border-b last:border-0 hover:bg-gray-50 dark:hover:bg-gray-800">
+                        <td className="py-1.5 pr-4 text-muted-foreground">{idx + 1}</td>
+                        <td className="py-1.5 pr-6 font-mono font-medium">{row.sku}</td>
+                        <td className="py-1.5 pr-4 text-right tabular-nums">{row.qty_out.toLocaleString()}</td>
+                        <td className="py-1.5 text-right tabular-nums text-muted-foreground">{row.orders_count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Error Message */}
