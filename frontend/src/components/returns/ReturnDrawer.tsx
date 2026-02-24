@@ -49,14 +49,14 @@ interface LineItemState {
 export function ReturnDrawer({ open, order, onClose, onSuccess }: ReturnDrawerProps) {
   const { toast } = useToast()
   const [submitting, setSubmitting] = useState(false)
-  const [note, setNote] = useState('')
+  const [note, setNote] = useState(order.external_order_id || '')
 
   // Initialize line item state
   const [lineItems, setLineItems] = useState<LineItemState[]>(
     order.line_items.map((item) => ({
       line_item_id: item.id,
       sku: item.sku,
-      qty_to_return: 0,
+      qty_to_return: Math.max(0, item.quantity - item.qty_returned),
       return_type: 'RETURN_RECEIVED' as ReturnType,
     }))
   )
@@ -224,15 +224,21 @@ export function ReturnDrawer({ open, order, onClose, onSuccess }: ReturnDrawerPr
                           )}
                         </TableCell>
                         <TableCell className="text-right">
-                          <Input
-                            type="number"
-                            min="0"
-                            max={available}
-                            value={state.qty_to_return || ''}
-                            onChange={(e) => handleQtyChange(item.id, e.target.value)}
-                            className="w-20 text-right"
-                            disabled={submitting || available === 0}
-                          />
+                          {available === 0 ? (
+                            <Badge variant="outline" className="text-xs text-muted-foreground">
+                              คืนครบ
+                            </Badge>
+                          ) : (
+                            <Input
+                              type="number"
+                              min="0"
+                              max={available}
+                              value={state.qty_to_return || ''}
+                              onChange={(e) => handleQtyChange(item.id, e.target.value)}
+                              className="w-20 text-right"
+                              disabled={submitting}
+                            />
+                          )}
                         </TableCell>
                         <TableCell>
                           <Select
@@ -264,9 +270,9 @@ export function ReturnDrawer({ open, order, onClose, onSuccess }: ReturnDrawerPr
 
           {/* Note */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">หมายเหตุ (Optional)</label>
+            <label className="text-sm font-medium">หมายเลข Order Marketplace</label>
             <Textarea
-              placeholder="เหตุผลในการรับคืน หรือรายละเอียดเพิ่มเติม..."
+              placeholder="เลขออร์เดอร์ TikTok/Shopee (ใช้ป้องกันการบันทึกซ้ำ)"
               value={note}
               onChange={(e) => setNote(e.target.value)}
               disabled={submitting}

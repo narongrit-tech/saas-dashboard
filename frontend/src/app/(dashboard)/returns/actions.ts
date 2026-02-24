@@ -13,6 +13,138 @@ import {
 } from '@/types/returns'
 
 /**
+ * Internal helper: for a RETURN_RECEIVED inventory_returns record,
+ * - Insert inventory_receipt_layers with ref_type='RETURN', ref_id=returnId
+ * - Insert COGS reversal using Method B (weighted avg unit_cost from original allocations)
+ * Idempotent: safe to call multiple times (guards via pre-checks + unique index).
+ * Returns { success, warning? }
+ */
+async function _processReturnReceived(
+  supabase: any,
+  userId: string,
+  returnId: string,     // inventory_returns.id (UUID)
+  orderIdUuid: string,  // sales_orders.id (UUID) = inventory_returns.order_id
+  sku: string,          // inventory_returns.sku
+  qty: number,          // inventory_returns.qty
+  returnedAt: string,   // inventory_returns.returned_at (ISO string)
+): Promise<{ success: boolean; warning?: string; alreadyDone?: boolean }> {
+  // 1) Check idempotency: skip if receipt layer already exists
+  const { data: existingLayer } = await supabase
+    .from('inventory_receipt_layers')
+    .select('id')
+    .eq('ref_type', 'RETURN')
+    .eq('ref_id', returnId)
+    .or('is_voided.is.null,is_voided.eq.false')
+    .maybeSingle()
+
+  if (existingLayer) {
+    return { success: true, alreadyDone: true }
+  }
+
+  // 2) Resolve sales_orders.order_id (VARCHAR string) from sales_orders.id (UUID)
+  const { data: soRow, error: soError } = await supabase
+    .from('sales_orders')
+    .select('order_id')
+    .eq('id', orderIdUuid)
+    .single()
+
+  if (soError || !soRow) {
+    console.error(`[_processReturnReceived] Cannot resolve sales_orders for ${orderIdUuid}:`, soError)
+    return { success: false, warning: `sales_order not found for UUID ${orderIdUuid}` }
+  }
+
+  const soOrderIdStr = soRow.order_id as string
+
+  // 3) Get original COGS allocations for this order+sku (Method B weighted avg)
+  const { data: allocs, error: allocsError } = await supabase
+    .from('inventory_cogs_allocations')
+    .select('qty, unit_cost_used, amount, method')
+    .eq('order_id', soOrderIdStr)
+    .eq('sku_internal', sku)
+    .eq('is_reversal', false)
+
+  let unitCost = 0
+  let cogsMethod = 'FIFO'
+  let warning: string | undefined
+
+  if (allocsError || !allocs || allocs.length === 0) {
+    warning = `No COGS allocations found for order ${soOrderIdStr} SKU ${sku} — unit_cost set to 0`
+    console.warn(`[_processReturnReceived] ${warning}`)
+  } else {
+    const totalQty  = allocs.reduce((s: number, a: any) => s + Number(a.qty), 0)
+    const totalAmt  = allocs.reduce((s: number, a: any) => s + Number(a.amount), 0)
+    unitCost   = totalQty > 0 ? totalAmt / totalQty : 0
+    cogsMethod = allocs[0].method || 'FIFO'
+    if (totalQty === 0) {
+      warning = `COGS qty sum=0 for order ${soOrderIdStr} SKU ${sku} — unit_cost set to 0`
+      console.warn(`[_processReturnReceived] ${warning}`)
+    }
+  }
+
+  // 4) Insert receipt layer (return stock inbound)
+  const { data: newLayer, error: layerError } = await supabase
+    .from('inventory_receipt_layers')
+    .insert({
+      sku_internal:  sku,
+      received_at:   returnedAt,
+      qty_received:  qty,
+      qty_remaining: qty,
+      unit_cost:     unitCost,
+      ref_type:      'RETURN',
+      ref_id:        returnId,
+      created_by:    userId,
+      is_voided:     false,
+    })
+    .select('id')
+    .single()
+
+  if (layerError) {
+    // 23505 = unique_violation (already exists — idempotent)
+    if ((layerError as any)?.code === '23505') {
+      return { success: true, alreadyDone: true }
+    }
+    console.error(`[_processReturnReceived] Receipt layer insert failed:`, layerError)
+    return { success: false, warning: layerError.message }
+  }
+
+  const receiptLayerId = newLayer!.id
+
+  // 5) Check idempotency: skip COGS reversal if already exists (linked via layer_id)
+  const { data: existingCOGSReversal } = await supabase
+    .from('inventory_cogs_allocations')
+    .select('id')
+    .eq('layer_id', receiptLayerId)
+    .eq('is_reversal', true)
+    .maybeSingle()
+
+  if (!existingCOGSReversal) {
+    const reversalAmount = -(qty * unitCost)
+    const { error: cogsError } = await supabase
+      .from('inventory_cogs_allocations')
+      .insert({
+        order_id:       soOrderIdStr,
+        sku_internal:   sku,
+        shipped_at:     returnedAt,
+        method:         cogsMethod,
+        qty:            -qty,
+        unit_cost_used: unitCost,
+        amount:         reversalAmount,
+        layer_id:       receiptLayerId,   // links reversal to this return's layer
+        is_reversal:    true,
+        created_by:     userId,
+      })
+
+    if (cogsError) {
+      console.error(`[_processReturnReceived] COGS reversal insert failed:`, cogsError)
+      // Non-fatal: receipt layer was created; log warning
+      warning = (warning ? warning + ' | ' : '') + `COGS reversal failed: ${cogsError.message}`
+    }
+  }
+
+  return { success: true, warning }
+}
+
+/**
  * Search orders for return processing
  * Searches by external_order_id or tracking_number
  * Returns orders with line items and qty_returned
@@ -282,21 +414,38 @@ export async function submitReturn(
       returned_at: new Date().toISOString(),
     }))
 
-    // Insert return records
-    const { error: insertError } = await supabase
+    // Insert return records (get back IDs for receipt layer creation)
+    const { data: insertedReturns, error: insertError } = await supabase
       .from('inventory_returns')
       .insert(returnRecords)
+      .select('id, order_id, sku, qty, return_type, returned_at')
 
     if (insertError) {
       console.error('[submitReturn] Insert error:', insertError)
       return { success: false, error: insertError.message }
     }
 
-    // TODO: For RETURN_RECEIVED type:
-    // - Create inventory movement (RETURN_IN)
-    // - Create COGS reversal in inventory_cogs_allocations
-    // This requires integration with inventory costing engine
-    // For MVP, we just track the return record
+    // For RETURN_RECEIVED: create receipt layer + COGS reversal (Method B)
+    if (insertedReturns && insertedReturns.length > 0) {
+      for (const ret of insertedReturns) {
+        if (ret.return_type !== 'RETURN_RECEIVED') continue
+        const result = await _processReturnReceived(
+          supabase,
+          user.id,
+          ret.id,
+          ret.order_id,
+          ret.sku,
+          ret.qty,
+          ret.returned_at || new Date().toISOString(),
+        )
+        if (!result.success) {
+          console.error(`[submitReturn] Receipt layer/COGS failed for return ${ret.id}:`, result.warning)
+          // Non-fatal: return record was created, backfill can fix this later
+        } else if (result.warning) {
+          console.warn(`[submitReturn] Warning for return ${ret.id}:`, result.warning)
+        }
+      }
+    }
 
     revalidatePath('/returns')
 
@@ -649,5 +798,106 @@ export async function undoReturn(
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
     }
+  }
+}
+
+/**
+ * Backfill: create missing inventory_receipt_layers and COGS reversals
+ * for existing RETURN_RECEIVED records that were created before this fix.
+ * Admin-only. Idempotent (safe to run multiple times).
+ */
+export async function backfillMissingReturnStock(): Promise<{
+  success: boolean
+  error?: string
+  data: {
+    total: number
+    processed: number
+    skipped: number
+    failed: number
+    warnings: string[]
+  } | null
+}> {
+  try {
+    const supabase = await createClient()
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'Not authenticated', data: null }
+
+    // Admin check
+    const { data: roleData } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id)
+      .single()
+
+    if (roleData?.role !== 'admin') {
+      return { success: false, error: 'Admin only', data: null }
+    }
+
+    // Fetch all active RETURN_RECEIVED returns
+    const { data: allReturns, error: fetchErr } = await supabase
+      .from('inventory_returns')
+      .select('id, order_id, sku, qty, return_type, returned_at')
+      .eq('created_by', user.id)
+      .eq('action_type', 'RETURN')
+      .is('reversed_return_id', null)
+      .eq('return_type', 'RETURN_RECEIVED')
+
+    if (fetchErr || !allReturns) {
+      return { success: false, error: fetchErr?.message || 'Fetch failed', data: null }
+    }
+
+    if (allReturns.length === 0) {
+      return { success: true, data: { total: 0, processed: 0, skipped: 0, failed: 0, warnings: [] } }
+    }
+
+    // Fetch existing receipt layers for these returns
+    const returnIds = allReturns.map((r: any) => r.id)
+    const { data: existingLayers } = await supabase
+      .from('inventory_receipt_layers')
+      .select('ref_id')
+      .eq('ref_type', 'RETURN')
+      .in('ref_id', returnIds)
+      .or('is_voided.is.null,is_voided.eq.false')
+
+    const processedSet = new Set<string>((existingLayers || []).map((l: any) => l.ref_id))
+
+    // Find returns that need processing (no receipt layer yet)
+    const needsProcessing = allReturns.filter((r: any) => !processedSet.has(r.id))
+
+    const summary = {
+      total: allReturns.length,
+      processed: 0,
+      skipped: allReturns.length - needsProcessing.length,
+      failed: 0,
+      warnings: [] as string[],
+    }
+
+    for (const ret of needsProcessing) {
+      const result = await _processReturnReceived(
+        supabase,
+        user.id,
+        ret.id,
+        ret.order_id,
+        ret.sku,
+        ret.qty,
+        ret.returned_at || new Date().toISOString(),
+      )
+      if (result.alreadyDone) {
+        summary.skipped++
+      } else if (result.success) {
+        summary.processed++
+        if (result.warning) summary.warnings.push(`[${ret.id}] ${result.warning}`)
+      } else {
+        summary.failed++
+        if (result.warning) summary.warnings.push(`[${ret.id}] FAILED: ${result.warning}`)
+      }
+    }
+
+    console.log('[backfillMissingReturnStock] Summary:', summary)
+    return { success: true, data: summary }
+  } catch (error) {
+    console.error('[backfillMissingReturnStock] Unexpected error:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error', data: null }
   }
 }

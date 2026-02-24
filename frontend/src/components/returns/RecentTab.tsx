@@ -12,10 +12,11 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, History, Undo2 } from 'lucide-react'
+import { Loader2, History, Undo2, Database } from 'lucide-react'
 import { RecentReturn } from '@/types/returns'
-import { getRecentReturns } from '@/app/(dashboard)/returns/actions'
+import { getRecentReturns, backfillMissingReturnStock } from '@/app/(dashboard)/returns/actions'
 import { UndoConfirmModal } from './UndoConfirmModal'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { RETURN_TYPE_LABELS } from '@/types/returns'
 
 interface RecentTabProps {
@@ -28,6 +29,11 @@ export function RecentTab({ onRefresh }: RecentTabProps) {
   const [error, setError] = useState<string | null>(null)
   const [selectedReturn, setSelectedReturn] = useState<RecentReturn | null>(null)
   const [undoModalOpen, setUndoModalOpen] = useState(false)
+  const [backfilling, setBackfilling] = useState(false)
+  const [backfillResult, setBackfillResult] = useState<{
+    processed: number; skipped: number; failed: number; warnings: string[]
+  } | null>(null)
+  const [backfillError, setBackfillError] = useState<string | null>(null)
 
   const fetchRecent = async () => {
     setLoading(true)
@@ -65,6 +71,20 @@ export function RecentTab({ onRefresh }: RecentTabProps) {
   const handleUndoCancel = () => {
     setUndoModalOpen(false)
     setSelectedReturn(null)
+  }
+
+  const handleBackfill = async () => {
+    setBackfilling(true)
+    setBackfillResult(null)
+    setBackfillError(null)
+    const result = await backfillMissingReturnStock()
+    setBackfilling(false)
+    if (!result.success) {
+      setBackfillError(result.error || 'เกิดข้อผิดพลาด')
+    } else if (result.data) {
+      setBackfillResult(result.data)
+      fetchRecent()
+    }
   }
 
   // Check if a return can be undone
@@ -207,6 +227,59 @@ export function RecentTab({ onRefresh }: RecentTabProps) {
           )}
         </CardContent>
       </Card>
+
+    {/* Admin: Backfill Missing Return Stock */}
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <Database className="h-4 w-4" />
+          Backfill Missing Return Stock (Admin)
+        </CardTitle>
+        <CardDescription className="text-xs">
+          สร้าง receipt layer + COGS reversal สำหรับ RETURN_RECEIVED ที่ยังไม่มี inventory layer
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {backfillError && (
+          <Alert variant="destructive">
+            <AlertDescription>{backfillError}</AlertDescription>
+          </Alert>
+        )}
+        {backfillResult && (
+          <Alert>
+            <AlertDescription>
+              เสร็จสิ้น: ประมวลผล {backfillResult.processed} รายการ,
+              ข้าม {backfillResult.skipped} รายการ (ทำแล้ว),
+              ล้มเหลว {backfillResult.failed} รายการ
+              {backfillResult.warnings.length > 0 && (
+                <div className="mt-2 text-xs text-muted-foreground">
+                  คำเตือน: {backfillResult.warnings.slice(0, 3).join(' | ')}
+                </div>
+              )}
+            </AlertDescription>
+          </Alert>
+        )}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleBackfill}
+          disabled={backfilling}
+          className="border-orange-300 text-orange-600 hover:bg-orange-50"
+        >
+          {backfilling ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              กำลัง Backfill...
+            </>
+          ) : (
+            <>
+              <Database className="mr-2 h-4 w-4" />
+              Backfill Missing Return Stock
+            </>
+          )}
+        </Button>
+      </CardContent>
+    </Card>
 
       {/* Undo Confirmation Modal */}
       {selectedReturn && (
