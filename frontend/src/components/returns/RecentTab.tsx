@@ -31,7 +31,10 @@ export function RecentTab({ onRefresh }: RecentTabProps) {
   const [undoModalOpen, setUndoModalOpen] = useState(false)
   const [backfilling, setBackfilling] = useState(false)
   const [backfillResult, setBackfillResult] = useState<{
-    processed: number; skipped: number; failed: number; warnings: string[]
+    processed_receipt: number; processed_reversal: number;
+    skipped_receipt: number; skipped_reversal: number;
+    skipped_cancelled: number;
+    failed: number; warnings: string[]
   } | null>(null)
   const [backfillError, setBackfillError] = useState<string | null>(null)
 
@@ -248,14 +251,34 @@ export function RecentTab({ onRefresh }: RecentTabProps) {
         {backfillResult && (
           <Alert>
             <AlertDescription>
-              เสร็จสิ้น: ประมวลผล {backfillResult.processed} รายการ,
-              ข้าม {backfillResult.skipped} รายการ (ทำแล้ว),
-              ล้มเหลว {backfillResult.failed} รายการ
-              {backfillResult.warnings.length > 0 && (
-                <div className="mt-2 text-xs text-muted-foreground">
-                  คำเตือน: {backfillResult.warnings.slice(0, 3).join(' | ')}
+              <div className="space-y-1">
+                <div className="font-medium">เสร็จสิ้น</div>
+                <div className="text-sm grid grid-cols-2 gap-x-4 gap-y-1">
+                  <span>Receipt layer สร้างใหม่:</span>
+                  <span className="font-medium">{backfillResult.processed_receipt} รายการ</span>
+                  <span>COGS reversal สร้างใหม่:</span>
+                  <span className="font-medium">{backfillResult.processed_reversal} รายการ</span>
+                  <span>Receipt layer ข้าม (ทำแล้ว):</span>
+                  <span className="text-muted-foreground">{backfillResult.skipped_receipt} รายการ</span>
+                  <span>COGS reversal ข้าม (ทำแล้ว):</span>
+                  <span className="text-muted-foreground">{backfillResult.skipped_reversal} รายการ</span>
+                  {backfillResult.skipped_cancelled > 0 && (
+                    <>
+                      <span>ข้าม (order ยกเลิก):</span>
+                      <span className="text-amber-600 font-medium">{backfillResult.skipped_cancelled} รายการ</span>
+                    </>
+                  )}
+                  <span>ล้มเหลว:</span>
+                  <span className={backfillResult.failed > 0 ? 'text-destructive font-medium' : 'text-muted-foreground'}>
+                    {backfillResult.failed} รายการ
+                  </span>
                 </div>
-              )}
+                {backfillResult.warnings.length > 0 && (
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    คำเตือน: {backfillResult.warnings.slice(0, 3).join(' | ')}
+                  </div>
+                )}
+              </div>
             </AlertDescription>
           </Alert>
         )}

@@ -37,6 +37,16 @@ const _resolveSkuInternal = async (
 }
 
 /**
+ * Returns true if the platform_status indicates a cancelled order.
+ * Handles Thai status strings: 'ยกเลิกแล้ว' (exact) or any string containing 'ยกเลิก' (defensive).
+ */
+const isCancelledOrder = (platformStatus: string | null | undefined): boolean => {
+  if (!platformStatus) return false
+  const s = platformStatus.trim()
+  return s === 'ยกเลิกแล้ว' || s.includes('ยกเลิก')
+}
+
+/**
  * Internal helper: given inventory_returns.note (marketplace order number, e.g. "582428313273075353"),
  * resolve the corresponding sales_orders.id (UUID).
  * Tries order_id exact match first, then external_order_id.
@@ -89,7 +99,7 @@ const _processReturnReceived = async (
   skuInternal: string,    // canonical sku_internal (not marketplace sku)
   qty: number,            // inventory_returns.qty
   returnedAt: string,     // inventory_returns.returned_at (ISO string)
-): Promise<{ success: boolean; warning?: string; alreadyDone?: boolean }> => {
+): Promise<{ success: boolean; warning?: string; alreadyDone?: boolean; cancelledSkip?: boolean }> => {
   // 1) Check idempotency: skip if receipt layer already exists
   const { data: existingLayer } = await supabase
     .from('inventory_receipt_layers')
@@ -132,8 +142,10 @@ const _processReturnReceived = async (
 
   let unitCost = 0
   let cogsMethod = 'FIFO'
+  let noOriginalAllocs = false
 
   if (allocsError || !allocs || allocs.length === 0) {
+    noOriginalAllocs = true
     const w = `No COGS allocations found for salesOrderId=${salesOrderId} SKU=${skuInternal} — unit_cost set to 0`
     console.warn(`[_processReturnReceived] ${w}`)
     warning = warning ? `${warning} | ${w}` : w
@@ -186,6 +198,22 @@ const _processReturnReceived = async (
     .maybeSingle()
 
   if (!existingCOGSReversal) {
+    // Cancelled-order guard: if allocator produced no original COGS for this order+sku
+    // (intentional for cancelled orders), skip the reversal rather than writing a zero-cost row.
+    if (noOriginalAllocs) {
+      const { data: orderRow } = await supabase
+        .from('sales_orders')
+        .select('platform_status')
+        .eq('id', salesOrderId)
+        .maybeSingle()
+      if (isCancelledOrder(orderRow?.platform_status)) {
+        const w = `[SKIP_CANCELLED] order_no=${note || salesOrderId} salesOrderId=${salesOrderId} sku=${skuInternal} platform_status=${orderRow?.platform_status} (no original allocations, reversal skipped)`
+        warning = warning ? `${warning} | ${w}` : w
+        console.log(`[_processReturnReceived] ${w}`)
+        return { success: true, warning, cancelledSkip: true }
+      }
+    }
+
     const reversalAmount = -(qty * unitCost)
     const { error: cogsError } = await supabase
       .from('inventory_cogs_allocations')
@@ -905,17 +933,155 @@ export async function undoReturn(
 }
 
 /**
- * Backfill: create missing inventory_receipt_layers and COGS reversals
- * for existing RETURN_RECEIVED records that were created before this fix.
- * Admin-only. Idempotent (safe to run multiple times).
+ * Internal helper: backfill a missing COGS reversal for a RETURN_RECEIVED that
+ * already has a receipt layer.  Independent of _processReturnReceived so it can
+ * run on returns where the layer exists but the reversal was never written.
+ *
+ * Idempotency:
+ *   1) Primary: layer_id match  (allocation.layer_id = layerId AND is_reversal=true)
+ *   2) Fallback: reversed_reason match  (reversed_reason = 'RETURN_RECEIVED:{returnId}')
+ *
+ * reversed_reason format: 'RETURN_RECEIVED:{inventory_returns.id}'
+ */
+const _backfillCogsReversal = async (
+  supabase: any,
+  userId: string,
+  returnId: string,      // inventory_returns.id
+  orderIdUuid: string,   // fallback for sales order resolution
+  note: string | null,   // primary: marketplace order number
+  skuInternal: string,
+  qty: number,
+  returnedAt: string,
+  layerId: string | null, // inventory_receipt_layers.id (may be null if layer missing)
+): Promise<{ done: boolean; alreadyDone?: boolean; warning?: string; cancelledSkip?: boolean }> => {
+  // 1) Resolve sales_orders.id (UUID) for COGS lookup
+  let salesOrderId: string = orderIdUuid
+  let warning: string | undefined
+
+  const { salesOrderId: resolvedId, warning: resolveWarn } = await _resolveSalesOrderByNote(
+    supabase, userId, note,
+  )
+  if (resolvedId) {
+    salesOrderId = resolvedId
+  } else {
+    warning = resolveWarn
+  }
+
+  // 2) Idempotency: check by layer_id first, then by reversed_reason
+  if (layerId) {
+    const { data: byLayer } = await supabase
+      .from('inventory_cogs_allocations')
+      .select('id')
+      .eq('layer_id', layerId)
+      .eq('is_reversal', true)
+      .maybeSingle()
+    if (byLayer) return { done: false, alreadyDone: true }
+  }
+
+  const { data: byReason } = await supabase
+    .from('inventory_cogs_allocations')
+    .select('id')
+    .eq('order_id', salesOrderId)
+    .eq('sku_internal', skuInternal)
+    .eq('is_reversal', true)
+    .like('reversed_reason', `%${returnId}%`)
+    .maybeSingle()
+  if (byReason) return { done: false, alreadyDone: true }
+
+  // 3) Get original allocations for Method B unit_cost
+  const { data: allocs } = await supabase
+    .from('inventory_cogs_allocations')
+    .select('qty, amount, method')
+    .eq('order_id', salesOrderId)
+    .eq('sku_internal', skuInternal)
+    .eq('is_reversal', false)
+
+  let unitCost = 0
+  let cogsMethod = 'FIFO'
+  let noOriginalAllocs = false
+
+  if (!allocs || allocs.length === 0) {
+    noOriginalAllocs = true
+    const w = `No COGS allocations for salesOrderId=${salesOrderId} SKU=${skuInternal} — unit_cost=0`
+    console.warn(`[_backfillCogsReversal] returnId=${returnId}: ${w}`)
+    warning = warning ? `${warning} | ${w}` : w
+  } else {
+    const totalQty = allocs.reduce((s: number, a: any) => s + Number(a.qty), 0)
+    const totalAmt = allocs.reduce((s: number, a: any) => s + Number(a.amount), 0)
+    unitCost   = totalQty > 0 ? totalAmt / totalQty : 0
+    cogsMethod = allocs[0].method || 'FIFO'
+  }
+
+  // 4) Insert COGS reversal
+  // Cancelled-order guard: skip if no original allocations and order is cancelled.
+  if (noOriginalAllocs) {
+    const { data: orderRow } = await supabase
+      .from('sales_orders')
+      .select('platform_status')
+      .eq('id', salesOrderId)
+      .maybeSingle()
+    if (isCancelledOrder(orderRow?.platform_status)) {
+      const w = `[SKIP_CANCELLED] order_no=${note || salesOrderId} salesOrderId=${salesOrderId} sku=${skuInternal} platform_status=${orderRow?.platform_status} (no original allocations, reversal skipped)`
+      console.log(`[_backfillCogsReversal] returnId=${returnId}: ${w}`)
+      return { done: false, alreadyDone: false, warning: w, cancelledSkip: true }
+    }
+  }
+
+  const { error: cogsError } = await supabase
+    .from('inventory_cogs_allocations')
+    .insert({
+      order_id:        salesOrderId,
+      sku_internal:    skuInternal,
+      shipped_at:      returnedAt,
+      method:          cogsMethod,
+      qty:             -qty,
+      unit_cost_used:  unitCost,
+      amount:          -(unitCost * qty),
+      layer_id:        layerId,
+      is_reversal:     true,
+      reversed_reason: `RETURN_RECEIVED:${returnId}`,
+      reversed_at:     new Date().toISOString(),
+      reversed_by:     userId,
+      created_by:      userId,
+    })
+
+  if (cogsError) {
+    if ((cogsError as any)?.code === '23505') return { done: false, alreadyDone: true }
+    console.error(`[_backfillCogsReversal] returnId=${returnId} insert failed:`, cogsError)
+    return { done: false, warning: `COGS reversal insert failed: ${cogsError.message}` }
+  }
+
+  console.log(`[_backfillCogsReversal] returnId=${returnId} → reversal created, unit_cost=${unitCost}`)
+  return { done: true, warning }
+}
+
+/**
+ * Backfill: create missing inventory_receipt_layers and/or COGS reversals
+ * for existing RETURN_RECEIVED records.  Admin-only.  Idempotent.
+ *
+ * Two independent passes:
+ *   Pass A — receipt layer pass: returns missing a receipt layer
+ *            → calls _processReturnReceived (creates layer + reversal together)
+ *   Pass B — COGS reversal pass: returns that have a receipt layer but no
+ *            COGS reversal → calls _backfillCogsReversal
+ *
+ * Summary fields:
+ *   processed_receipt  — newly created receipt layers (Pass A)
+ *   processed_reversal — newly created COGS reversals (Pass B)
+ *   skipped_receipt    — returns that already had a receipt layer (skipped Pass A)
+ *   skipped_reversal   — returns that already had a COGS reversal (skipped Pass B)
+ *   failed             — errors across both passes
  */
 export async function backfillMissingReturnStock(): Promise<{
   success: boolean
   error?: string
   data: {
     total: number
-    processed: number
-    skipped: number
+    processed_receipt: number
+    processed_reversal: number
+    skipped_receipt: number
+    skipped_reversal: number
+    skipped_cancelled: number
     failed: number
     warnings: string[]
   } | null
@@ -951,48 +1117,73 @@ export async function backfillMissingReturnStock(): Promise<{
     }
 
     if (allReturns.length === 0) {
-      return { success: true, data: { total: 0, processed: 0, skipped: 0, failed: 0, warnings: [] } }
+      return {
+        success: true,
+        data: { total: 0, processed_receipt: 0, processed_reversal: 0, skipped_receipt: 0, skipped_reversal: 0, skipped_cancelled: 0, failed: 0, warnings: [] },
+      }
     }
 
-    // Fetch existing receipt layers for these returns
     const returnIds = allReturns.map((r: any) => r.id)
+
+    // ── Batch-fetch existing receipt layers (returnId → layerId) ──────────────
     const { data: existingLayers } = await supabase
       .from('inventory_receipt_layers')
-      .select('ref_id')
+      .select('ref_id, id')
       .eq('ref_type', 'RETURN')
       .in('ref_id', returnIds)
       .or('is_voided.is.null,is_voided.eq.false')
 
-    const processedSet = new Set<string>((existingLayers || []).map((l: any) => l.ref_id))
-
-    // Find returns that need processing (no receipt layer yet)
-    const needsProcessing = allReturns.filter((r: any) => !processedSet.has(r.id))
-
-    const summary = {
-      total: allReturns.length,
-      processed: 0,
-      skipped: allReturns.length - needsProcessing.length,
-      failed: 0,
-      warnings: [] as string[],
+    const layerMap = new Map<string, string>() // returnId → layerId
+    for (const l of existingLayers || []) {
+      layerMap.set(l.ref_id, l.id)
     }
 
-    // Pre-fetch source_platform for all order UUIDs (to resolve correct channel)
-    const orderUuids = [...new Set(needsProcessing.map((r: any) => r.order_id))]
-    const channelMap = new Map<string, string>() // order_id UUID -> channel string
-    if (orderUuids.length > 0) {
-      const { data: orderRows } = await supabase
-        .from('sales_orders')
-        .select('id, source_platform')
-        .in('id', orderUuids)
-      for (const row of orderRows || []) {
-        const ch = row.source_platform === 'shopee' ? 'shopee'
-          : row.source_platform === 'lazada' ? 'lazada'
-          : 'tiktok'
-        channelMap.set(row.id, ch)
+    // ── Batch-fetch existing COGS reversals for known layer IDs ──────────────
+    const knownLayerIds = [...layerMap.values()]
+    const reversedLayerIds = new Set<string>()
+    if (knownLayerIds.length > 0) {
+      const { data: existingReversals } = await supabase
+        .from('inventory_cogs_allocations')
+        .select('layer_id')
+        .in('layer_id', knownLayerIds)
+        .eq('is_reversal', true)
+      for (const rev of existingReversals || []) {
+        if (rev.layer_id) reversedLayerIds.add(rev.layer_id)
       }
     }
 
-    for (const ret of needsProcessing) {
+    // ── Classify returns ──────────────────────────────────────────────────────
+    const needsReceiptLayer  = allReturns.filter((r: any) => !layerMap.has(r.id))
+    const hasLayer           = allReturns.filter((r: any) =>  layerMap.has(r.id))
+    const needsCogsReversal  = hasLayer.filter((r: any) => !reversedLayerIds.has(layerMap.get(r.id)!))
+
+    const summary = {
+      total:              allReturns.length,
+      processed_receipt:  0,
+      processed_reversal: 0,
+      skipped_receipt:    hasLayer.length,
+      skipped_reversal:   hasLayer.length - needsCogsReversal.length,
+      skipped_cancelled:  0,
+      failed:             0,
+      warnings:           [] as string[],
+    }
+
+    // ── Pre-fetch source_platform for channel resolution (Pass A only) ────────
+    const orderUuidsA = [...new Set(needsReceiptLayer.map((r: any) => r.order_id))]
+    const channelMap = new Map<string, string>()
+    if (orderUuidsA.length > 0) {
+      const { data: orderRows } = await supabase
+        .from('sales_orders')
+        .select('id, source_platform')
+        .in('id', orderUuidsA)
+      for (const row of orderRows || []) {
+        channelMap.set(row.id, row.source_platform === 'shopee' ? 'shopee'
+          : row.source_platform === 'lazada' ? 'lazada' : 'tiktok')
+      }
+    }
+
+    // ══ PASS A: receipt layer backfill ════════════════════════════════════════
+    for (const ret of needsReceiptLayer) {
       let skuInternal = ret.sku_internal
 
       if (!skuInternal) {
@@ -1003,11 +1194,10 @@ export async function backfillMissingReturnStock(): Promise<{
         )
         if (!resolved) {
           summary.failed++
-          summary.warnings.push(`[${ret.id}] ต้องการ SKU mapping [${channel}] สำหรับ ${marketplaceSku}: ${resolveErr}`)
+          summary.warnings.push(`[A:${ret.id}] ต้องการ SKU mapping [${channel}] สำหรับ ${marketplaceSku}: ${resolveErr}`)
           continue
         }
         skuInternal = resolved
-        // Update the return record with resolved sku_internal
         await supabase.from('inventory_returns')
           .update({ sku_internal: skuInternal, marketplace_sku: marketplaceSku })
           .eq('id', ret.id)
@@ -1019,19 +1209,56 @@ export async function backfillMissingReturnStock(): Promise<{
         user.id,
         ret.id,
         ret.order_id,
-        ret.note || null,   // marketplace order number for COGS lookup
+        ret.note || null,
         skuInternal,
         ret.qty,
         ret.returned_at || new Date().toISOString(),
       )
       if (result.alreadyDone) {
-        summary.skipped++
+        summary.skipped_receipt++
+        summary.skipped_reversal++
       } else if (result.success) {
-        summary.processed++
-        if (result.warning) summary.warnings.push(`[${ret.id}] ${result.warning}`)
+        summary.processed_receipt++
+        if (result.cancelledSkip) summary.skipped_cancelled++
+        if (result.warning) summary.warnings.push(`[A:${ret.id}] ${result.warning}`)
       } else {
         summary.failed++
-        if (result.warning) summary.warnings.push(`[${ret.id}] FAILED: ${result.warning}`)
+        if (result.warning) summary.warnings.push(`[A:${ret.id}] FAILED: ${result.warning}`)
+      }
+    }
+
+    // ══ PASS B: COGS reversal backfill (for returns that already have a layer) ═
+    for (const ret of needsCogsReversal) {
+      const skuInternal = ret.sku_internal
+      if (!skuInternal) {
+        summary.failed++
+        summary.warnings.push(`[B:${ret.id}] sku_internal ยังไม่ได้ map — ข้าม COGS reversal`)
+        continue
+      }
+
+      const layerId = layerMap.get(ret.id) || null
+      const result = await _backfillCogsReversal(
+        supabase,
+        user.id,
+        ret.id,
+        ret.order_id,
+        ret.note || null,
+        skuInternal,
+        ret.qty,
+        ret.returned_at || new Date().toISOString(),
+        layerId,
+      )
+      if (result.alreadyDone) {
+        summary.skipped_reversal++
+      } else if (result.cancelledSkip) {
+        summary.skipped_cancelled++
+        if (result.warning) summary.warnings.push(`[B:${ret.id}] ${result.warning}`)
+      } else if (result.done) {
+        summary.processed_reversal++
+        if (result.warning) summary.warnings.push(`[B:${ret.id}] ${result.warning}`)
+      } else {
+        summary.failed++
+        if (result.warning) summary.warnings.push(`[B:${ret.id}] FAILED: ${result.warning}`)
       }
     }
 
