@@ -37,17 +37,55 @@ const _resolveSkuInternal = async (
 }
 
 /**
+ * Internal helper: given inventory_returns.note (marketplace order number, e.g. "582428313273075353"),
+ * resolve the corresponding sales_orders.id (UUID).
+ * Tries order_id exact match first, then external_order_id.
+ * Returns { salesOrderId: uuid-string } on success, { salesOrderId: null, warning } on miss.
+ */
+const _resolveSalesOrderByNote = async (
+  supabase: any,
+  userId: string,
+  note: string | null | undefined,
+): Promise<{ salesOrderId: string | null; warning?: string }> => {
+  if (!note || !note.trim()) {
+    return { salesOrderId: null, warning: 'note is empty — cannot resolve sales order by marketplace order number' }
+  }
+  const trimmed = note.trim()
+  const { data, error } = await supabase
+    .from('sales_orders')
+    .select('id')
+    .eq('created_by', userId)
+    .or(`order_id.eq.${trimmed},external_order_id.eq.${trimmed}`)
+    .limit(1)
+    .maybeSingle()
+  if (error) {
+    console.error(`[_resolveSalesOrderByNote] DB error for note="${note}":`, error)
+    return { salesOrderId: null, warning: `DB error resolving note "${note}": ${error.message}` }
+  }
+  if (!data) {
+    return { salesOrderId: null, warning: `Original sales order not found for order_no=${note}` }
+  }
+  console.log(`[_resolveSalesOrderByNote] note="${note}" → sales_orders.id="${data.id}"`)
+  return { salesOrderId: data.id }
+}
+
+/**
  * Internal helper: for a RETURN_RECEIVED inventory_returns record,
  * - Insert inventory_receipt_layers with ref_type='RETURN', ref_id=returnId
  * - Insert COGS reversal using Method B (weighted avg unit_cost from original allocations)
  * Idempotent: safe to call multiple times (guards via pre-checks + unique index).
- * Returns { success, warning? }
+ *
+ * COGS key mapping:
+ *   inventory_cogs_allocations.order_id = sales_orders.id (UUID stored as text per RPC convention).
+ *   We resolve via note (marketplace order number) → sales_orders.id first;
+ *   fall back to orderIdUuid (the FK) if note is empty or not found.
  */
 const _processReturnReceived = async (
   supabase: any,
   userId: string,
   returnId: string,       // inventory_returns.id (UUID)
-  orderIdUuid: string,    // sales_orders.id (UUID) = inventory_returns.order_id
+  orderIdUuid: string,    // inventory_returns.order_id → sales_orders.id (UUID) — fallback
+  note: string | null,    // inventory_returns.note = marketplace order number — primary lookup
   skuInternal: string,    // canonical sku_internal (not marketplace sku)
   qty: number,            // inventory_returns.qty
   returnedAt: string,     // inventory_returns.returned_at (ISO string)
@@ -65,43 +103,49 @@ const _processReturnReceived = async (
     return { success: true, alreadyDone: true }
   }
 
-  // 2) Resolve sales_orders.order_id (VARCHAR string) from sales_orders.id (UUID)
-  const { data: soRow, error: soError } = await supabase
-    .from('sales_orders')
-    .select('order_id')
-    .eq('id', orderIdUuid)
-    .single()
+  // 2) Resolve sales_orders.id (UUID) — primary: via note (marketplace order number),
+  //    fallback: orderIdUuid is already the FK to sales_orders.id.
+  //    inventory_cogs_allocations.order_id stores this UUID (per RPC convention),
+  //    NOT the marketplace order number string.
+  let salesOrderId: string = orderIdUuid
+  let warning: string | undefined
 
-  if (soError || !soRow) {
-    console.error(`[_processReturnReceived] Cannot resolve sales_orders for ${orderIdUuid}:`, soError)
-    return { success: false, warning: `sales_order not found for UUID ${orderIdUuid}` }
+  const { salesOrderId: resolvedId, warning: resolveWarn } = await _resolveSalesOrderByNote(
+    supabase, userId, note,
+  )
+  if (resolvedId) {
+    salesOrderId = resolvedId
+    console.log(`[_processReturnReceived] returnId=${returnId}: note="${note}" → salesOrderId=${salesOrderId}`)
+  } else {
+    console.warn(`[_processReturnReceived] returnId=${returnId}: note resolution failed (${resolveWarn}), using FK orderIdUuid=${orderIdUuid}`)
+    warning = resolveWarn
   }
 
-  const soOrderIdStr = soRow.order_id as string
-
-  // 3) Get original COGS allocations for this order+skuInternal (Method B weighted avg)
+  // 3) Get original COGS allocations for this order+skuInternal (Method B weighted avg).
+  //    inventory_cogs_allocations.order_id = sales_orders.id (UUID string) per allocate_cogs_fifo/avg RPC.
   const { data: allocs, error: allocsError } = await supabase
     .from('inventory_cogs_allocations')
     .select('qty, unit_cost_used, amount, method')
-    .eq('order_id', soOrderIdStr)
+    .eq('order_id', salesOrderId)
     .eq('sku_internal', skuInternal)
     .eq('is_reversal', false)
 
   let unitCost = 0
   let cogsMethod = 'FIFO'
-  let warning: string | undefined
 
   if (allocsError || !allocs || allocs.length === 0) {
-    warning = `No COGS allocations found for order ${soOrderIdStr} SKU ${skuInternal} — unit_cost set to 0`
-    console.warn(`[_processReturnReceived] ${warning}`)
+    const w = `No COGS allocations found for salesOrderId=${salesOrderId} SKU=${skuInternal} — unit_cost set to 0`
+    console.warn(`[_processReturnReceived] ${w}`)
+    warning = warning ? `${warning} | ${w}` : w
   } else {
-    const totalQty  = allocs.reduce((s: number, a: any) => s + Number(a.qty), 0)
-    const totalAmt  = allocs.reduce((s: number, a: any) => s + Number(a.amount), 0)
+    const totalQty = allocs.reduce((s: number, a: any) => s + Number(a.qty), 0)
+    const totalAmt = allocs.reduce((s: number, a: any) => s + Number(a.amount), 0)
     unitCost   = totalQty > 0 ? totalAmt / totalQty : 0
     cogsMethod = allocs[0].method || 'FIFO'
     if (totalQty === 0) {
-      warning = `COGS qty sum=0 for order ${soOrderIdStr} SKU ${skuInternal} — unit_cost set to 0`
-      console.warn(`[_processReturnReceived] ${warning}`)
+      const w = `COGS qty sum=0 for salesOrderId=${salesOrderId} SKU=${skuInternal} — unit_cost set to 0`
+      console.warn(`[_processReturnReceived] ${w}`)
+      warning = warning ? `${warning} | ${w}` : w
     }
   }
 
@@ -133,7 +177,7 @@ const _processReturnReceived = async (
 
   const receiptLayerId = newLayer!.id
 
-  // 5) Check idempotency: skip COGS reversal if already exists (linked via layer_id)
+  // 5) Idempotency: skip COGS reversal if already linked to this receipt layer
   const { data: existingCOGSReversal } = await supabase
     .from('inventory_cogs_allocations')
     .select('id')
@@ -146,21 +190,20 @@ const _processReturnReceived = async (
     const { error: cogsError } = await supabase
       .from('inventory_cogs_allocations')
       .insert({
-        order_id:       soOrderIdStr,
+        order_id:       salesOrderId,   // sales_orders.id UUID string (matches RPC convention)
         sku_internal:   skuInternal,
         shipped_at:     returnedAt,
         method:         cogsMethod,
         qty:            -qty,
         unit_cost_used: unitCost,
         amount:         reversalAmount,
-        layer_id:       receiptLayerId,   // links reversal to this return's layer
+        layer_id:       receiptLayerId, // links reversal to this return's receipt layer
         is_reversal:    true,
         created_by:     userId,
       })
 
     if (cogsError) {
       console.error(`[_processReturnReceived] COGS reversal insert failed:`, cogsError)
-      // Non-fatal: receipt layer was created; log warning
       warning = (warning ? warning + ' | ' : '') + `COGS reversal failed: ${cogsError.message}`
     }
   }
@@ -477,7 +520,7 @@ export async function submitReturn(
     const { data: insertedReturns, error: insertError } = await supabase
       .from('inventory_returns')
       .insert(returnRecords)
-      .select('id, order_id, sku, marketplace_sku, sku_internal, qty, return_type, returned_at')
+      .select('id, order_id, sku, marketplace_sku, sku_internal, qty, return_type, note, returned_at')
 
     if (insertError) {
       console.error('[submitReturn] Insert error:', insertError)
@@ -493,7 +536,8 @@ export async function submitReturn(
           user.id,
           ret.id,
           ret.order_id,
-          ret.sku_internal || ret.sku,  // fallback to old sku if sku_internal not set
+          ret.note || null,             // marketplace order number for COGS lookup
+          ret.sku_internal || ret.sku,  // canonical sku_internal
           ret.qty,
           ret.returned_at || new Date().toISOString(),
         )
@@ -893,10 +937,10 @@ export async function backfillMissingReturnStock(): Promise<{
       return { success: false, error: 'Admin only', data: null }
     }
 
-    // Fetch all active RETURN_RECEIVED returns (include marketplace_sku, sku_internal)
+    // Fetch all active RETURN_RECEIVED returns (include note for COGS order resolution)
     const { data: allReturns, error: fetchErr } = await supabase
       .from('inventory_returns')
-      .select('id, order_id, sku, marketplace_sku, sku_internal, qty, return_type, returned_at')
+      .select('id, order_id, sku, marketplace_sku, sku_internal, qty, return_type, note, returned_at')
       .eq('created_by', user.id)
       .eq('action_type', 'RETURN')
       .is('reversed_return_id', null)
@@ -975,6 +1019,7 @@ export async function backfillMissingReturnStock(): Promise<{
         user.id,
         ret.id,
         ret.order_id,
+        ret.note || null,   // marketplace order number for COGS lookup
         skuInternal,
         ret.qty,
         ret.returned_at || new Date().toISOString(),
