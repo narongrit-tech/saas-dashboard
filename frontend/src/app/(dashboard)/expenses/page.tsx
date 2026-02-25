@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Expense, ExpenseFilters, ExpenseCategory } from '@/types/expenses'
+import { Expense, ExpenseFilters, ExpenseCategory, ExpenseStatus } from '@/types/expenses'
 import { endOfDayBangkok, formatBangkok } from '@/lib/bangkok-time'
 import { toZonedTime } from 'date-fns-tz'
 import { Button } from '@/components/ui/button'
@@ -25,12 +25,24 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Download, FileUp, FileDown, X } from 'lucide-react'
+import {
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Pencil,
+  Trash2,
+  Download,
+  FileUp,
+  FileDown,
+  X,
+  CheckCircle,
+} from 'lucide-react'
 import { AddExpenseDialog } from '@/components/expenses/AddExpenseDialog'
 import { EditExpenseDialog } from '@/components/expenses/EditExpenseDialog'
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
 import { BulkDeleteConfirmDialog } from '@/components/expenses/BulkDeleteConfirmDialog'
 import { ExpensesImportDialog } from '@/components/expenses/ExpensesImportDialog'
+import { ConfirmPaidDialog } from '@/components/expenses/ConfirmPaidDialog'
 import {
   deleteExpense,
   exportExpenses,
@@ -42,22 +54,26 @@ import { downloadExpenseTemplate } from '@/app/(dashboard)/expenses/template-act
 
 const PER_PAGE = 20
 
-/**
- * Get default date range (today in Bangkok timezone)
- */
 function getDefaultRange(): DateRangeResult {
-  // Get current date/time in Bangkok timezone
   const now = toZonedTime(new Date(), 'Asia/Bangkok')
-
-  // Start of today (Bangkok)
   const startOfDay = new Date(now)
   startOfDay.setHours(0, 0, 0, 0)
+  return { startDate: startOfDay, endDate: now, preset: 'today' }
+}
 
-  return {
-    startDate: startOfDay,
-    endDate: now,
-    preset: 'today',
+function StatusBadge({ status }: { status: ExpenseStatus }) {
+  if (status === 'PAID') {
+    return (
+      <Badge className="bg-green-100 text-green-800 border-green-200 hover:bg-green-100">
+        จ่ายแล้ว
+      </Badge>
+    )
   }
+  return (
+    <Badge className="bg-amber-100 text-amber-800 border-amber-200 hover:bg-amber-100">
+      รอยืนยัน
+    </Badge>
+  )
 }
 
 export default function ExpensesPage() {
@@ -69,10 +85,14 @@ export default function ExpensesPage() {
   const [showEditDialog, setShowEditDialog] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showImportDialog, setShowImportDialog] = useState(false)
+  const [showConfirmPaidDialog, setShowConfirmPaidDialog] = useState(false)
   const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
   const [downloadTemplateLoading, setDownloadTemplateLoading] = useState(false)
+
+  // Cash-basis export toggle
+  const [exportCashBasis, setExportCashBasis] = useState(false)
 
   // Bulk selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -89,6 +109,7 @@ export default function ExpensesPage() {
 
   const [filters, setFilters] = useState<ExpenseFilters>({
     category: undefined,
+    status: 'All',
     startDate: undefined,
     endDate: undefined,
     search: undefined,
@@ -96,7 +117,6 @@ export default function ExpensesPage() {
     perPage: PER_PAGE,
   })
 
-  // Subcategory filter state
   const [subcategoryFilter, setSubcategoryFilter] = useState<string>('All')
   const [subcategories, setSubcategories] = useState<string[]>([])
 
@@ -104,15 +124,10 @@ export default function ExpensesPage() {
     fetchExpenses()
   }, [filters])
 
-  // Extract unique subcategories when expenses change
   useEffect(() => {
     if (expenses.length > 0) {
       const unique = Array.from(
-        new Set(
-          expenses
-            .map((e) => e.subcategory)
-            .filter((s): s is string => Boolean(s))
-        )
+        new Set(expenses.map((e) => e.subcategory).filter((s): s is string => Boolean(s)))
       )
       setSubcategories(unique.sort())
     } else {
@@ -131,9 +146,12 @@ export default function ExpensesPage() {
         .select('*', { count: 'exact' })
         .order('expense_date', { ascending: false })
 
-      // Apply filters
       if (filters.category && filters.category !== 'All') {
         query = query.eq('category', filters.category)
+      }
+
+      if (filters.status && filters.status !== 'All') {
+        query = query.eq('expense_status', filters.status)
       }
 
       if (filters.startDate) {
@@ -141,7 +159,6 @@ export default function ExpensesPage() {
       }
 
       if (filters.endDate) {
-        // Use Bangkok timezone for end of day
         const endBangkok = endOfDayBangkok(filters.endDate)
         query = query.lte('expense_date', endBangkok.toISOString())
       }
@@ -152,7 +169,6 @@ export default function ExpensesPage() {
         )
       }
 
-      // Pagination
       const from = (filters.page - 1) * filters.perPage
       const to = from + filters.perPage - 1
       query = query.range(from, to)
@@ -180,7 +196,7 @@ export default function ExpensesPage() {
       ...prev,
       startDate: formatBangkok(range.startDate, 'yyyy-MM-dd'),
       endDate: formatBangkok(range.endDate, 'yyyy-MM-dd'),
-      page: 1
+      page: 1,
     }))
   }
 
@@ -190,43 +206,28 @@ export default function ExpensesPage() {
 
   const getCategoryBadge = (category: ExpenseCategory) => {
     const config: Record<ExpenseCategory, { label: string; className: string }> = {
-      Advertising: {
-        label: 'ค่าโฆษณา',
-        className: 'bg-purple-500 hover:bg-purple-600 text-white',
-      },
-      COGS: {
-        label: 'ต้นทุนขาย',
-        className: 'bg-orange-500 hover:bg-orange-600 text-white',
-      },
-      Operating: {
-        label: 'ดำเนินงาน',
-        className: 'bg-blue-500 hover:bg-blue-600 text-white',
-      },
+      Advertising: { label: 'ค่าโฆษณา', className: 'bg-purple-500 hover:bg-purple-600 text-white' },
+      COGS: { label: 'ต้นทุนขาย', className: 'bg-orange-500 hover:bg-orange-600 text-white' },
+      Operating: { label: 'ดำเนินงาน', className: 'bg-blue-500 hover:bg-blue-600 text-white' },
     }
-
     const { label, className } = config[category]
     return <Badge className={className}>{label}</Badge>
   }
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('th-TH', {
+  const formatDate = (dateString: string) =>
+    new Date(dateString).toLocaleDateString('th-TH', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
     })
-  }
 
-  const formatCurrency = (amount: number) => {
-    return amount.toLocaleString('th-TH', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })
-  }
+  const formatCurrency = (amount: number) =>
+    amount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-  // Apply client-side subcategory filter
-  const displayedExpenses = subcategoryFilter === 'All'
-    ? expenses
-    : expenses.filter((e) => e.subcategory === subcategoryFilter)
+  const displayedExpenses =
+    subcategoryFilter === 'All'
+      ? expenses
+      : expenses.filter((e) => e.subcategory === subcategoryFilter)
 
   const totalPages = Math.ceil(totalCount / PER_PAGE)
 
@@ -240,22 +241,23 @@ export default function ExpensesPage() {
     setShowDeleteDialog(true)
   }
 
+  const handleConfirmPaidClick = (expense: Expense) => {
+    setSelectedExpense(expense)
+    setShowConfirmPaidDialog(true)
+  }
+
   const handleDeleteConfirm = async () => {
     if (!selectedExpense) return
-
     setDeleteLoading(true)
     setError(null)
 
     try {
       const result = await deleteExpense(selectedExpense.id)
-
       if (!result.success) {
         setError(result.error || 'เกิดข้อผิดพลาดในการลบข้อมูล')
         setShowDeleteDialog(false)
         return
       }
-
-      // Success - close dialog and refresh
       setShowDeleteDialog(false)
       setSelectedExpense(null)
       fetchExpenses()
@@ -278,6 +280,8 @@ export default function ExpensesPage() {
         startDate: filters.startDate,
         endDate: filters.endDate,
         search: filters.search,
+        statusFilter: exportCashBasis ? 'PAID' : (filters.status as 'All' | 'DRAFT' | 'PAID' | undefined),
+        dateBasis: exportCashBasis ? 'paid_date' : 'expense_date',
       })
 
       if (!result.success || !result.csv || !result.filename) {
@@ -285,7 +289,6 @@ export default function ExpensesPage() {
         return
       }
 
-      // Create blob and download
       const blob = new Blob([result.csv], { type: 'text/csv;charset=utf-8;' })
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
@@ -309,21 +312,17 @@ export default function ExpensesPage() {
 
     try {
       const result = await downloadExpenseTemplate()
-
       if (!result.success || !result.base64 || !result.filename) {
         setError(result.error || 'เกิดข้อผิดพลาดในการดาวน์โหลด template')
         return
       }
-
-      // Convert base64 to blob
       const binaryString = atob(result.base64)
       const bytes = new Uint8Array(binaryString.length)
       for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i)
       }
-
       const blob = new Blob([bytes], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       })
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
@@ -344,8 +343,7 @@ export default function ExpensesPage() {
   // Bulk selection handlers
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
-      const newSelectedIds = new Set(displayedExpenses.map((e) => e.id))
-      setSelectedIds(newSelectedIds)
+      setSelectedIds(new Set(displayedExpenses.map((e) => e.id)))
       setShowSelectAllBanner(displayedExpenses.length < totalCount)
       setSelectionMode('ids')
     } else {
@@ -361,14 +359,12 @@ export default function ExpensesPage() {
       newSelectedIds.add(expenseId)
     } else {
       newSelectedIds.delete(expenseId)
+      if (selectionMode === 'filtered') {
+        setShowSelectAllBanner(true)
+        setSelectionMode('ids')
+      }
     }
     setSelectedIds(newSelectedIds)
-
-    // Hide banner if user manually unchecks
-    if (!checked && selectionMode === 'filtered') {
-      setShowSelectAllBanner(true)
-      setSelectionMode('ids')
-    }
   }
 
   const handleSelectAllMatching = () => {
@@ -385,13 +381,12 @@ export default function ExpensesPage() {
 
   const handleBulkDeleteClick = async () => {
     setError(null)
-
-    // Get summary before showing dialog
     const result = await getExpensesSelectionSummary(
       selectionMode,
       selectionMode === 'filtered'
         ? {
             category: filters.category,
+            status: filters.status,
             startDate: filters.startDate,
             endDate: filters.endDate,
             search: filters.search,
@@ -399,32 +394,29 @@ export default function ExpensesPage() {
         : undefined,
       selectionMode === 'ids' ? Array.from(selectedIds) : undefined
     )
-
     if (!result.success) {
       setError(result.error || 'เกิดข้อผิดพลาดในการดึงข้อมูล')
       return
     }
-
     setSelectionSummary({
       count: result.deletableCount || 0,
       amount: result.sumAmount || 0,
       blockedCount: result.blockedCount || 0,
       blockedReason: result.blockedReason,
     })
-
     setShowBulkDeleteDialog(true)
   }
 
   const handleBulkDeleteConfirm = async () => {
     setBulkDeleteLoading(true)
     setError(null)
-
     try {
       const result = await deleteExpensesSelected(
         selectionMode,
         selectionMode === 'filtered'
           ? {
               category: filters.category,
+              status: filters.status,
               startDate: filters.startDate,
               endDate: filters.endDate,
               search: filters.search,
@@ -432,14 +424,11 @@ export default function ExpensesPage() {
           : undefined,
         selectionMode === 'ids' ? Array.from(selectedIds) : undefined
       )
-
       if (!result.success) {
         setError(result.error || 'เกิดข้อผิดพลาดในการลบข้อมูล')
         setShowBulkDeleteDialog(false)
         return
       }
-
-      // Success - close dialog, clear selection, refresh
       setShowBulkDeleteDialog(false)
       handleClearSelection()
       fetchExpenses()
@@ -453,8 +442,7 @@ export default function ExpensesPage() {
   }
 
   const isAllPageSelected =
-    displayedExpenses.length > 0 &&
-    displayedExpenses.every((e) => selectedIds.has(e.id))
+    displayedExpenses.length > 0 && displayedExpenses.every((e) => selectedIds.has(e.id))
 
   const hasSelection = selectedIds.size > 0 || selectionMode === 'filtered'
 
@@ -487,6 +475,25 @@ export default function ExpensesPage() {
         </div>
 
         <div className="flex-1 space-y-2">
+          <label className="text-sm font-medium">สถานะ</label>
+          <Select
+            value={filters.status || 'All'}
+            onValueChange={(value) =>
+              handleFilterChange('status', value === 'All' ? undefined : value)
+            }
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="ทุกสถานะ" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="All">ทุกสถานะ</SelectItem>
+              <SelectItem value="DRAFT">DRAFT (รอยืนยัน)</SelectItem>
+              <SelectItem value="PAID">PAID (จ่ายแล้ว)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex-1 space-y-2">
           <label className="text-sm font-medium">หมวดหมู่ย่อย</label>
           <Select
             value={subcategoryFilter}
@@ -514,10 +521,7 @@ export default function ExpensesPage() {
           <DateRangePicker
             value={
               filters.startDate && filters.endDate
-                ? {
-                    startDate: new Date(filters.startDate),
-                    endDate: new Date(filters.endDate),
-                  }
+                ? { startDate: new Date(filters.startDate), endDate: new Date(filters.endDate) }
                 : getDefaultRange()
             }
             onChange={handleDateRangeChange}
@@ -535,7 +539,7 @@ export default function ExpensesPage() {
       </div>
 
       {/* Action Buttons */}
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2 items-center">
         <Button onClick={() => setShowAddDialog(true)}>
           <Plus className="mr-2 h-4 w-4" />
           เพิ่มค่าใช้จ่าย
@@ -552,42 +556,47 @@ export default function ExpensesPage() {
           <FileUp className="mr-2 h-4 w-4" />
           Import
         </Button>
-        <Button
-          variant="outline"
-          onClick={handleExport}
-          disabled={exportLoading || loading || expenses.length === 0}
-        >
-          <Download className="mr-2 h-4 w-4" />
-          {exportLoading ? 'กำลัง Export...' : 'Export CSV'}
-        </Button>
+
+        {/* Export area */}
+        <div className="flex items-center gap-2 ml-auto">
+          <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={exportCashBasis}
+              onChange={(e) => setExportCashBasis(e.target.checked)}
+              className="h-3.5 w-3.5 accent-green-600"
+            />
+            <span className="text-muted-foreground">Cash-basis (PAID เท่านั้น / ใช้วันจ่ายจริง)</span>
+          </label>
+          <Button
+            variant="outline"
+            onClick={handleExport}
+            disabled={exportLoading || loading || expenses.length === 0}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            {exportLoading ? 'กำลัง Export...' : 'Export CSV'}
+          </Button>
+        </div>
       </div>
 
       {/* Error Message */}
       {error && (
-        <div className="rounded-md bg-red-50 p-4 text-sm text-red-600">
-          {error}
-        </div>
+        <div className="rounded-md bg-red-50 p-4 text-sm text-red-600">{error}</div>
       )}
 
       {/* Selection Banner */}
       {showSelectAllBanner && (
         <div className="rounded-md bg-blue-50 border border-blue-200 p-4 flex items-center justify-between">
-          <div>
-            <span className="text-sm text-blue-900">
-              เลือกแล้ว {selectedIds.size} รายการในหน้านี้.{' '}
-              <button
-                onClick={handleSelectAllMatching}
-                className="font-medium text-blue-600 hover:text-blue-700 underline"
-              >
-                เลือกทั้งหมด {totalCount} รายการที่ตรงกับเงื่อนไขปัจจุบัน
-              </button>
-            </span>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleClearSelection}
-          >
+          <span className="text-sm text-blue-900">
+            เลือกแล้ว {selectedIds.size} รายการในหน้านี้.{' '}
+            <button
+              onClick={handleSelectAllMatching}
+              className="font-medium text-blue-600 hover:text-blue-700 underline"
+            >
+              เลือกทั้งหมด {totalCount} รายการที่ตรงกับเงื่อนไขปัจจุบัน
+            </button>
+          </span>
+          <Button variant="ghost" size="sm" onClick={handleClearSelection}>
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -597,28 +606,16 @@ export default function ExpensesPage() {
       {hasSelection && (
         <div className="rounded-md bg-slate-100 border border-slate-200 p-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <span className="text-sm font-medium">
-                {selectionMode === 'filtered' ? (
-                  <>เลือกทั้งหมด {totalCount} รายการที่ตรงกับเงื่อนไข</>
-                ) : (
-                  <>เลือกแล้ว {selectedIds.size} รายการ</>
-                )}
-              </span>
-            </div>
+            <span className="text-sm font-medium">
+              {selectionMode === 'filtered'
+                ? `เลือกทั้งหมด ${totalCount} รายการที่ตรงกับเงื่อนไข`
+                : `เลือกแล้ว ${selectedIds.size} รายการ`}
+            </span>
             <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleClearSelection}
-              >
+              <Button variant="outline" size="sm" onClick={handleClearSelection}>
                 ยกเลิกการเลือก
               </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={handleBulkDeleteClick}
-              >
+              <Button variant="destructive" size="sm" onClick={handleBulkDeleteClick}>
                 <Trash2 className="mr-2 h-4 w-4" />
                 ลบที่เลือก
               </Button>
@@ -640,49 +637,29 @@ export default function ExpensesPage() {
                 />
               </TableHead>
               <TableHead>วันที่</TableHead>
+              <TableHead>สถานะ</TableHead>
               <TableHead>ประเภท</TableHead>
               <TableHead>หมวดหมู่ย่อย</TableHead>
               <TableHead className="text-right">จำนวนเงิน</TableHead>
               <TableHead>รายละเอียด</TableHead>
-              <TableHead>บันทึกเมื่อ</TableHead>
+              <TableHead>วันจ่ายจริง</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
-              // Loading skeleton
               Array.from({ length: 5 }).map((_, index) => (
                 <TableRow key={index}>
-                  <TableCell>
-                    <div className="h-4 w-4 animate-pulse rounded bg-gray-200" />
-                  </TableCell>
-                  <TableCell>
-                    <div className="h-4 w-24 animate-pulse rounded bg-gray-200" />
-                  </TableCell>
-                  <TableCell>
-                    <div className="h-4 w-20 animate-pulse rounded bg-gray-200" />
-                  </TableCell>
-                  <TableCell>
-                    <div className="h-4 w-20 animate-pulse rounded bg-gray-200" />
-                  </TableCell>
-                  <TableCell>
-                    <div className="ml-auto h-4 w-24 animate-pulse rounded bg-gray-200" />
-                  </TableCell>
-                  <TableCell>
-                    <div className="h-4 w-40 animate-pulse rounded bg-gray-200" />
-                  </TableCell>
-                  <TableCell>
-                    <div className="h-4 w-24 animate-pulse rounded bg-gray-200" />
-                  </TableCell>
-                  <TableCell>
-                    <div className="h-4 w-16 animate-pulse rounded bg-gray-200" />
-                  </TableCell>
+                  {Array.from({ length: 9 }).map((__, ci) => (
+                    <TableCell key={ci}>
+                      <div className="h-4 w-full animate-pulse rounded bg-gray-200" />
+                    </TableCell>
+                  ))}
                 </TableRow>
               ))
             ) : displayedExpenses.length === 0 ? (
-              // Empty state
               <TableRow>
-                <TableCell colSpan={8} className="h-32 text-center">
+                <TableCell colSpan={9} className="h-32 text-center">
                   <div className="flex flex-col items-center justify-center text-muted-foreground">
                     <p className="text-lg font-medium">ไม่พบข้อมูล</p>
                     <p className="text-sm">
@@ -694,7 +671,6 @@ export default function ExpensesPage() {
                 </TableCell>
               </TableRow>
             ) : (
-              // Data rows
               displayedExpenses.map((expense) => (
                 <TableRow key={expense.id}>
                   <TableCell>
@@ -708,6 +684,9 @@ export default function ExpensesPage() {
                   <TableCell className="font-medium">
                     {formatDate(expense.expense_date)}
                   </TableCell>
+                  <TableCell>
+                    <StatusBadge status={expense.expense_status ?? 'PAID'} />
+                  </TableCell>
                   <TableCell>{getCategoryBadge(expense.category)}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {expense.subcategory || '-'}
@@ -715,14 +694,25 @@ export default function ExpensesPage() {
                   <TableCell className="text-right font-semibold text-red-600">
                     ฿{formatCurrency(expense.amount)}
                   </TableCell>
-                  <TableCell className="max-w-md truncate">
+                  <TableCell className="max-w-[200px] truncate text-sm">
                     {expense.description || expense.notes || '-'}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
-                    {formatDate(expense.created_at)}
+                    {expense.paid_date ? formatDate(expense.paid_date) : '-'}
                   </TableCell>
                   <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
+                    <div className="flex justify-end gap-1">
+                      {expense.expense_status !== 'PAID' && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleConfirmPaidClick(expense)}
+                          title="ยืนยันการจ่าย"
+                          className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                        >
+                          <CheckCircle className="h-4 w-4" />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="sm"
@@ -754,8 +744,7 @@ export default function ExpensesPage() {
         <div className="flex items-center justify-between">
           <p className="text-sm text-muted-foreground">
             แสดง {(filters.page - 1) * PER_PAGE + 1} ถึง{' '}
-            {Math.min(filters.page * PER_PAGE, totalCount)} จากทั้งหมด {totalCount}{' '}
-            รายการ
+            {Math.min(filters.page * PER_PAGE, totalCount)} จากทั้งหมด {totalCount} รายการ
           </p>
           <div className="flex items-center gap-2">
             <Button
@@ -783,14 +772,13 @@ export default function ExpensesPage() {
         </div>
       )}
 
-      {/* Add Expense Dialog */}
+      {/* Dialogs */}
       <AddExpenseDialog
         open={showAddDialog}
         onOpenChange={setShowAddDialog}
         onSuccess={fetchExpenses}
       />
 
-      {/* Edit Expense Dialog */}
       <EditExpenseDialog
         open={showEditDialog}
         onOpenChange={setShowEditDialog}
@@ -798,24 +786,36 @@ export default function ExpensesPage() {
         expense={selectedExpense}
       />
 
-      {/* Delete Confirmation Dialog */}
+      <ConfirmPaidDialog
+        open={showConfirmPaidDialog}
+        onOpenChange={setShowConfirmPaidDialog}
+        expense={selectedExpense}
+        onSuccess={fetchExpenses}
+      />
+
       <DeleteConfirmDialog
         open={showDeleteDialog}
         onOpenChange={setShowDeleteDialog}
         onConfirm={handleDeleteConfirm}
         loading={deleteLoading}
-        title="ยืนยันการลบรายการค่าใช้จ่าย"
-        description="คุณต้องการลบรายการค่าใช้จ่ายนี้ใช่หรือไม่? การดำเนินการนี้ไม่สามารถย้อนกลับได้"
+        title={
+          selectedExpense?.expense_status === 'PAID'
+            ? 'ยืนยันการลบรายการที่จ่ายแล้ว'
+            : 'ยืนยันการลบรายการค่าใช้จ่าย'
+        }
+        description={
+          selectedExpense?.expense_status === 'PAID'
+            ? 'รายการนี้ยืนยันจ่ายแล้ว คุณต้องการลบใช่หรือไม่? การดำเนินการนี้ไม่สามารถย้อนกลับได้'
+            : 'คุณต้องการลบรายการค่าใช้จ่ายนี้ใช่หรือไม่? การดำเนินการนี้ไม่สามารถย้อนกลับได้'
+        }
       />
 
-      {/* Import Dialog */}
       <ExpensesImportDialog
         open={showImportDialog}
         onOpenChange={setShowImportDialog}
         onSuccess={fetchExpenses}
       />
 
-      {/* Bulk Delete Confirmation Dialog */}
       {selectionSummary && (
         <BulkDeleteConfirmDialog
           open={showBulkDeleteDialog}

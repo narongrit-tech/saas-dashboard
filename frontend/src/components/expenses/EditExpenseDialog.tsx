@@ -21,8 +21,9 @@ import {
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { Expense, UpdateExpenseInput, ExpenseCategory } from '@/types/expenses'
-import { Loader2 } from 'lucide-react'
+import { Lock, Loader2 } from 'lucide-react'
 import { updateExpense } from '@/app/(dashboard)/expenses/actions'
+import { AttachmentsSection } from './AttachmentsSection'
 
 interface EditExpenseDialogProps {
   open: boolean
@@ -42,28 +43,30 @@ export function EditExpenseDialog({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Form state
   const [formData, setFormData] = useState<UpdateExpenseInput>({
     expense_date: '',
     category: 'Advertising',
     subcategory: '',
     amount: 0,
     note: '',
+    vendor: '',
   })
 
-  // Populate form when expense changes
   useEffect(() => {
     if (expense) {
       setFormData({
-        expense_date: expense.expense_date.split('T')[0], // Extract YYYY-MM-DD
+        expense_date: expense.expense_date.split('T')[0],
         category: expense.category,
         subcategory: expense.subcategory || '',
         amount: expense.amount,
         note: expense.description || '',
+        vendor: expense.vendor || '',
       })
       setError(null)
     }
   }, [expense])
+
+  const isPaid = expense?.expense_status === 'PAID'
 
   const handleChange = (field: keyof UpdateExpenseInput, value: string | number | ExpenseCategory) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
@@ -71,12 +74,8 @@ export function EditExpenseDialog({
   }
 
   const validateForm = (): string | null => {
-    if (formData.amount <= 0) {
-      return 'จำนวนเงินต้องมากกว่า 0'
-    }
-    if (!formData.expense_date) {
-      return 'กรุณาระบุวันที่'
-    }
+    if (!isPaid && formData.amount <= 0) return 'จำนวนเงินต้องมากกว่า 0'
+    if (!isPaid && !formData.expense_date) return 'กรุณาระบุวันที่'
     return null
   }
 
@@ -89,7 +88,6 @@ export function EditExpenseDialog({
       return
     }
 
-    // Client-side validation
     const validationError = validateForm()
     if (validationError) {
       setError(validationError)
@@ -106,7 +104,6 @@ export function EditExpenseDialog({
         return
       }
 
-      // Success - close dialog and refresh
       onOpenChange(false)
       onSuccess()
     } catch (err) {
@@ -133,38 +130,50 @@ export function EditExpenseDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[520px] max-h-[90vh] overflow-y-auto">
         <form onSubmit={handleSubmit}>
           <DialogHeader>
             <DialogTitle>แก้ไขรายการค่าใช้จ่าย</DialogTitle>
             <DialogDescription>
-              แก้ไขข้อมูลรายจ่ายที่เลือก
+              {isPaid
+                ? 'รายการนี้ยืนยันจ่ายแล้ว — แก้ไขได้เฉพาะหมายเหตุ ผู้รับเงิน และไฟล์แนบ'
+                : 'แก้ไขข้อมูลรายจ่ายที่เลือก'}
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-4 py-4">
+            {/* PAID lock banner */}
+            {isPaid && (
+              <div className="flex items-center gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
+                <Lock className="h-4 w-4 shrink-0" />
+                <span>จำนวนเงิน ประเภท และวันที่ถูกล็อกหลังจากยืนยันการจ่าย</span>
+              </div>
+            )}
+
             {/* Expense Date */}
             <div className="grid gap-2">
               <Label htmlFor="expense_date">
-                วันที่ <span className="text-red-500">*</span>
+                วันที่ {!isPaid && <span className="text-red-500">*</span>}
               </Label>
               <Input
                 id="expense_date"
                 type="date"
                 value={formData.expense_date}
                 onChange={(e) => handleChange('expense_date', e.target.value)}
-                required
+                disabled={isPaid}
+                required={!isPaid}
               />
             </div>
 
             {/* Category */}
             <div className="grid gap-2">
               <Label htmlFor="category">
-                ประเภท <span className="text-red-500">*</span>
+                ประเภท {!isPaid && <span className="text-red-500">*</span>}
               </Label>
               <Select
                 value={formData.category}
                 onValueChange={(value) => handleChange('category', value as ExpenseCategory)}
+                disabled={isPaid}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -181,25 +190,33 @@ export function EditExpenseDialog({
 
             {/* Subcategory */}
             <div className="grid gap-2">
-              <Label htmlFor="subcategory">
-                หมวดหมู่ย่อย (ถ้ามี)
-              </Label>
+              <Label htmlFor="subcategory">หมวดหมู่ย่อย (ถ้ามี)</Label>
               <Input
                 id="subcategory"
                 type="text"
                 placeholder="เช่น Facebook Ads, Google Ads, Office Rent"
                 value={formData.subcategory || ''}
                 onChange={(e) => handleChange('subcategory', e.target.value)}
+                disabled={isPaid}
               />
-              <p className="text-xs text-muted-foreground">
-                ใช้สำหรับรายงานแยกย่อยเท่านั้น ไม่กระทบการคำนวณ P&L
-              </p>
+            </div>
+
+            {/* Vendor */}
+            <div className="grid gap-2">
+              <Label htmlFor="vendor">ผู้รับเงิน / ร้านค้า (ถ้ามี)</Label>
+              <Input
+                id="vendor"
+                type="text"
+                placeholder="เช่น Meta, Google, ร้านนาย ก"
+                value={formData.vendor || ''}
+                onChange={(e) => handleChange('vendor', e.target.value)}
+              />
             </div>
 
             {/* Amount */}
             <div className="grid gap-2">
               <Label htmlFor="amount">
-                จำนวนเงิน (บาท) <span className="text-red-500">*</span>
+                จำนวนเงิน (บาท) {!isPaid && <span className="text-red-500">*</span>}
               </Label>
               <Input
                 id="amount"
@@ -209,11 +226,12 @@ export function EditExpenseDialog({
                 placeholder="0.00"
                 value={formData.amount || ''}
                 onChange={(e) => handleChange('amount', parseFloat(e.target.value) || 0)}
-                required
+                disabled={isPaid}
+                required={!isPaid}
               />
             </div>
 
-            {/* Note (Optional) */}
+            {/* Note */}
             <div className="grid gap-2">
               <Label htmlFor="note">หมายเหตุ (ถ้ามี)</Label>
               <Textarea
@@ -225,20 +243,31 @@ export function EditExpenseDialog({
               />
             </div>
 
-            {/* Amount Preview */}
-            <div className="rounded-md bg-slate-50 p-3">
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-medium">จำนวนเงินรวม:</span>
-                <span className="text-lg font-bold text-red-600">
-                  -฿{formData.amount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </span>
+            {/* Attachments (always visible) */}
+            {expense && (
+              <div className="rounded-md border p-3">
+                <AttachmentsSection
+                  expenseId={expense.id}
+                  expenseStatus={expense.expense_status}
+                />
               </div>
-              <p className="mt-1 text-xs text-muted-foreground">
-                * ค่าใช้จ่ายจะถูกหักออกจากกำไร
-              </p>
-            </div>
+            )}
 
-            {/* Error Message */}
+            {/* Amount summary (DRAFT only) */}
+            {!isPaid && (
+              <div className="rounded-md bg-slate-50 p-3">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-medium">จำนวนเงินรวม:</span>
+                  <span className="text-lg font-bold text-red-600">
+                    -฿{formData.amount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  * ค่าใช้จ่ายจะถูกหักออกจากกำไร
+                </p>
+              </div>
+            )}
+
             {error && (
               <div className="rounded-md bg-red-50 p-3 text-sm text-red-600">{error}</div>
             )}

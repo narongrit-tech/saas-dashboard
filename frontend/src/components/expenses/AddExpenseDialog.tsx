@@ -37,31 +37,33 @@ function getTodayDate(): string {
   return getTodayBangkokString()
 }
 
+const EMPTY_FORM: CreateExpenseInput = {
+  expense_date: '',
+  category: 'Advertising',
+  subcategory: '',
+  amount: 0,
+  note: '',
+  planned_date: '',
+  vendor: '',
+}
+
 export function AddExpenseDialog({ open, onOpenChange, onSuccess }: AddExpenseDialogProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Form state with defaults
   const [formData, setFormData] = useState<CreateExpenseInput>({
+    ...EMPTY_FORM,
     expense_date: getTodayDate(),
-    category: 'Advertising',
-    subcategory: '',
-    amount: 0,
-    note: '',
   })
 
   const handleChange = (field: keyof CreateExpenseInput, value: string | number | ExpenseCategory) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
-    setError(null) // Clear error when user makes changes
+    setError(null)
   }
 
   const validateForm = (): string | null => {
-    if (formData.amount <= 0) {
-      return 'จำนวนเงินต้องมากกว่า 0'
-    }
-    if (!formData.expense_date) {
-      return 'กรุณาระบุวันที่'
-    }
+    if (formData.amount <= 0) return 'จำนวนเงินต้องมากกว่า 0'
+    if (!formData.expense_date) return 'กรุณาระบุวันที่'
     return null
   }
 
@@ -69,7 +71,6 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess }: AddExpenseDi
     e.preventDefault()
     setError(null)
 
-    // Client-side validation
     const validationError = validateForm()
     if (validationError) {
       setError(validationError)
@@ -79,7 +80,6 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess }: AddExpenseDi
     setLoading(true)
 
     try {
-      // Call Server Action
       const result = await createManualExpense(formData)
 
       if (!result.success) {
@@ -87,15 +87,7 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess }: AddExpenseDi
         return
       }
 
-      // Success - reset form and close dialog
-      setFormData({
-        expense_date: getTodayDate(),
-        category: 'Advertising',
-        subcategory: '',
-        amount: 0,
-        note: '',
-      })
-      onOpenChange(false)
+      resetAndClose()
       onSuccess()
     } catch (err) {
       console.error('Error submitting expense:', err)
@@ -105,15 +97,8 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess }: AddExpenseDi
     }
   }
 
-  const handleCancel = () => {
-    // Reset form when closing
-    setFormData({
-      expense_date: getTodayDate(),
-      category: 'Advertising',
-      subcategory: '',
-      amount: 0,
-      note: '',
-    })
+  const resetAndClose = () => {
+    setFormData({ ...EMPTY_FORM, expense_date: getTodayDate() })
     setError(null)
     onOpenChange(false)
   }
@@ -134,15 +119,15 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess }: AddExpenseDi
           <DialogHeader>
             <DialogTitle>เพิ่มรายการค่าใช้จ่าย</DialogTitle>
             <DialogDescription>
-              บันทึกค่าใช้จ่ายรายวันเพื่อคำนวณ P&L ให้แม่นยำ
+              รายการใหม่จะบันทึกเป็น <strong>DRAFT</strong> — กด &ldquo;ยืนยันจ่าย&rdquo; ภายหลังเมื่อจ่ายจริง
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-4 py-4">
-            {/* Expense Date */}
+            {/* Planned date (= expense_date for planning) */}
             <div className="grid gap-2">
               <Label htmlFor="expense_date">
-                วันที่ <span className="text-red-500">*</span>
+                วันที่วางแผนจ่าย <span className="text-red-500">*</span>
               </Label>
               <Input
                 id="expense_date"
@@ -177,9 +162,7 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess }: AddExpenseDi
 
             {/* Subcategory */}
             <div className="grid gap-2">
-              <Label htmlFor="subcategory">
-                หมวดหมู่ย่อย (ถ้ามี)
-              </Label>
+              <Label htmlFor="subcategory">หมวดหมู่ย่อย (ถ้ามี)</Label>
               <Input
                 id="subcategory"
                 type="text"
@@ -187,9 +170,18 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess }: AddExpenseDi
                 value={formData.subcategory || ''}
                 onChange={(e) => handleChange('subcategory', e.target.value)}
               />
-              <p className="text-xs text-muted-foreground">
-                ใช้สำหรับรายงานแยกย่อยเท่านั้น ไม่กระทบการคำนวณ P&L
-              </p>
+            </div>
+
+            {/* Vendor */}
+            <div className="grid gap-2">
+              <Label htmlFor="vendor">ผู้รับเงิน / ร้านค้า (ถ้ามี)</Label>
+              <Input
+                id="vendor"
+                type="text"
+                placeholder="เช่น Meta, Google, ร้านนาย ก"
+                value={formData.vendor || ''}
+                onChange={(e) => handleChange('vendor', e.target.value)}
+              />
             </div>
 
             {/* Amount */}
@@ -209,7 +201,7 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess }: AddExpenseDi
               />
             </div>
 
-            {/* Note (Optional) */}
+            {/* Note */}
             <div className="grid gap-2">
               <Label htmlFor="note">หมายเหตุ (ถ้ามี)</Label>
               <Textarea
@@ -230,18 +222,17 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess }: AddExpenseDi
                 </span>
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                * ค่าใช้จ่ายจะถูกหักออกจากกำไร
+                * บันทึกเป็น DRAFT — ยังไม่นับใน P&L จนกว่าจะยืนยันจ่าย
               </p>
             </div>
 
-            {/* Error Message */}
             {error && (
               <div className="rounded-md bg-red-50 p-3 text-sm text-red-600">{error}</div>
             )}
           </div>
 
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={handleCancel} disabled={loading}>
+            <Button type="button" variant="outline" onClick={resetAndClose} disabled={loading}>
               ยกเลิก
             </Button>
             <Button type="submit" disabled={loading}>
@@ -251,7 +242,7 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess }: AddExpenseDi
                   กำลังบันทึก...
                 </>
               ) : (
-                'บันทึก'
+                'บันทึก (DRAFT)'
               )}
             </Button>
           </DialogFooter>
