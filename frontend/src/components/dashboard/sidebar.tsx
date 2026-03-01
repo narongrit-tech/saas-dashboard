@@ -24,6 +24,7 @@ import {
   ChevronRight,
   ArrowLeftCircle,
   Tags,
+  FlaskConical,
 } from 'lucide-react'
 
 interface MenuItem {
@@ -52,6 +53,11 @@ const menuGroups: MenuGroup[] = [
         title: 'Daily P&L',
         href: '/daily-pl',
         icon: BarChart3,
+      },
+      {
+        title: 'Analytics Builder',
+        href: '/analytics/builder',
+        icon: FlaskConical,
       },
     ],
   },
