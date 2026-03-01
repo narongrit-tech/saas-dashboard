@@ -1,4 +1,4 @@
-export type ExpenseCategory = 'Advertising' | 'COGS' | 'Operating'
+export type ExpenseCategory = 'Advertising' | 'COGS' | 'Operating' | 'Tax'
 
 export type ExpenseStatus = 'DRAFT' | 'PAID'
 

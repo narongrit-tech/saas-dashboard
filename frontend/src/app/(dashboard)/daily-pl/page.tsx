@@ -112,7 +112,7 @@ export default function DailyPLPage() {
       {!loading && plData && (
         <>
           {/* Revenue & Expenses */}
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
             {/* Revenue */}
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -176,6 +176,22 @@ export default function DailyPLPage() {
                 <p className="text-xs text-muted-foreground mt-1">ค่าดำเนินงาน</p>
               </CardContent>
             </Card>
+
+            {/* Tax Expenses */}
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Tax</CardTitle>
+                <div className="rounded-lg bg-rose-50 p-2 text-rose-600">
+                  <DollarSign className="h-4 w-4" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-rose-600">
+                  -฿{formatCurrency(plData.tax_expenses)}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">ค่าใช้จ่ายภาษี</p>
+              </CardContent>
+            </Card>
           </div>
 
           {/* Net Profit (Highlighted) */}
@@ -189,7 +205,7 @@ export default function DailyPLPage() {
             <CardHeader>
               <CardTitle className="text-lg">Net Profit / Loss</CardTitle>
               <p className="text-sm text-muted-foreground">
-                กำไรสุทธิ = Revenue - Advertising - COGS - Operating
+                กำไรสุทธิ = Revenue - Advertising - COGS - Operating - Tax
               </p>
             </CardHeader>
             <CardContent>
@@ -236,6 +252,12 @@ export default function DailyPLPage() {
                   <span className="font-medium">Less: Operating Expenses</span>
                   <span className="font-mono text-red-600">
                     (฿{formatCurrency(plData.operating_expenses)})
+                  </span>
+                </div>
+                <div className="flex justify-between border-b pb-2">
+                  <span className="font-medium">Less: Tax Expenses</span>
+                  <span className="font-mono text-red-600">
+                    (฿{formatCurrency(plData.tax_expenses)})
                   </span>
                 </div>
                 <div className="flex justify-between border-t-2 pt-3">

@@ -108,7 +108,7 @@ export function ManualMatchModal({
   const [selectedManualExpense, setSelectedManualExpense] = useState<ExpenseSearchResult | null>(null);
 
   // Create expense state
-  const [expenseCategory, setExpenseCategory] = useState<'Advertising' | 'COGS' | 'Operating'>(
+  const [expenseCategory, setExpenseCategory] = useState<'Advertising' | 'COGS' | 'Operating' | 'Tax'>(
     'Advertising'
   );
   const [expenseSubcategory, setExpenseSubcategory] = useState('');
@@ -669,6 +669,7 @@ export function ManualMatchModal({
                             <SelectItem value="Advertising">Advertising</SelectItem>
                             <SelectItem value="COGS">COGS</SelectItem>
                             <SelectItem value="Operating">Operating</SelectItem>
+                            <SelectItem value="Tax">Tax</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>

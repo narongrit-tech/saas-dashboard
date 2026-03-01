@@ -10,7 +10,8 @@
  * - Advertising Cost: Sum of expenses where category = 'Advertising'
  * - COGS: Sum of inventory_cogs_allocations.amount (FIFO/AVG costing)
  * - Operating Expenses: Sum of expenses where category = 'Operating'
- * - Net Profit: Revenue - Advertising Cost - COGS - Operating Expenses
+ * - Tax Expenses: Sum of expenses where category = 'Tax'
+ * - Net Profit: Revenue - Advertising Cost - COGS - Operating Expenses - Tax Expenses
  *
  * AUDIT SAFETY:
  * - All calculations use RLS-protected queries (user authentication required)
@@ -32,6 +33,7 @@ export interface DailyPLData {
   advertising_cost: number
   cogs: number
   operating_expenses: number
+  tax_expenses: number
   net_profit: number
 }
 
@@ -78,13 +80,13 @@ async function getDailyRevenue(
  *
  * @param supabase - Authenticated Supabase client (RLS enforced)
  * @param date - Date in YYYY-MM-DD format
- * @param category - Expense category ('Advertising', 'COGS', 'Operating')
+ * @param category - Expense category ('Advertising', 'COGS', 'Operating', 'Tax')
  * @returns Total expenses for the category and date (0 if no data)
  */
 async function getDailyExpensesByCategory(
   supabase: SupabaseClient,
   date: string,
-  category: 'Advertising' | 'COGS' | 'Operating'
+  category: 'Advertising' | 'COGS' | 'Operating' | 'Tax'
 ): Promise<number> {
   const { data, error } = await supabase
     .from('expenses')
@@ -135,11 +137,12 @@ export async function getDailyPL(date: string): Promise<DailyPLData | null> {
 
     // Fetch all components in parallel for performance
     // NOTE: COGS now comes from inventory_cogs_allocations (FIFO/AVG costing)
-    const [revenue, advertisingCost, cogs, operatingExpenses] = await Promise.all([
+    const [revenue, advertisingCost, cogs, operatingExpenses, taxExpenses] = await Promise.all([
       getDailyRevenue(supabase, date),
       getDailyExpensesByCategory(supabase, date, 'Advertising'),
       computeDailyCOGS(date), // Inventory-based COGS (replaces expenses.COGS)
       getDailyExpensesByCategory(supabase, date, 'Operating'),
+      getDailyExpensesByCategory(supabase, date, 'Tax'),
     ])
 
     // Calculate net profit (with NaN safety and precision rounding)
@@ -148,9 +151,10 @@ export async function getDailyPL(date: string): Promise<DailyPLData | null> {
       Number.isFinite(revenue) &&
       Number.isFinite(advertisingCost) &&
       Number.isFinite(cogs) &&
-      Number.isFinite(operatingExpenses)
+      Number.isFinite(operatingExpenses) &&
+      Number.isFinite(taxExpenses)
     ) {
-      const rawProfit = revenue - advertisingCost - cogs - operatingExpenses
+      const rawProfit = revenue - advertisingCost - cogs - operatingExpenses - taxExpenses
       // Round to 2 decimal places (currency precision)
       netProfit = Math.round(rawProfit * 100) / 100
     }
@@ -161,6 +165,7 @@ export async function getDailyPL(date: string): Promise<DailyPLData | null> {
       advertising_cost: advertisingCost,
       cogs,
       operating_expenses: operatingExpenses,
+      tax_expenses: taxExpenses,
       net_profit: netProfit,
     }
   } catch (error) {

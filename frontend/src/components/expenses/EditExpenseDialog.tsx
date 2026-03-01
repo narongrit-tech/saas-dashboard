@@ -32,7 +32,7 @@ interface EditExpenseDialogProps {
   expense: Expense | null
 }
 
-const CATEGORIES: ExpenseCategory[] = ['Advertising', 'COGS', 'Operating']
+const CATEGORIES: ExpenseCategory[] = ['Advertising', 'COGS', 'Operating', 'Tax']
 
 export function EditExpenseDialog({
   open,
@@ -124,6 +124,7 @@ export function EditExpenseDialog({
       Advertising: 'ค่าโฆษณา',
       COGS: 'ต้นทุนขาย (COGS)',
       Operating: 'ค่าใช้จ่ายดำเนินงาน',
+      Tax: 'ภาษี (Tax)',
     }
     return labels[category]
   }

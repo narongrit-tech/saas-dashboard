@@ -120,7 +120,7 @@ export async function parseExpensesFile(
         importType: 'generic',
         totalRows: 0,
         sampleRows: [],
-        summary: { totalAmount: 0, byCategory: { Advertising: 0, COGS: 0, Operating: 0 } },
+        summary: { totalAmount: 0, byCategory: { Advertising: 0, COGS: 0, Operating: 0, Tax: 0 } },
         errors: [{ message: 'รองรับเฉพาะไฟล์ .xlsx และ .csv เท่านั้น', severity: 'error' }],
         warnings: [],
       }
@@ -135,7 +135,7 @@ export async function parseExpensesFile(
         importType: 'generic',
         totalRows: 0,
         sampleRows: [],
-        summary: { totalAmount: 0, byCategory: { Advertising: 0, COGS: 0, Operating: 0 } },
+        summary: { totalAmount: 0, byCategory: { Advertising: 0, COGS: 0, Operating: 0, Tax: 0 } },
         errors: [{ message: 'ไฟล์ไม่มี sheet ใดๆ', severity: 'error' }],
         warnings: [],
       }
@@ -152,7 +152,7 @@ export async function parseExpensesFile(
         importType: 'generic',
         totalRows: 0,
         sampleRows: [],
-        summary: { totalAmount: 0, byCategory: { Advertising: 0, COGS: 0, Operating: 0 } },
+        summary: { totalAmount: 0, byCategory: { Advertising: 0, COGS: 0, Operating: 0, Tax: 0 } },
         errors: [{
           message: 'ไม่สามารถตรวจจับรูปแบบ Standard Template ได้ (ต้องมี: Date, Category, Amount, Description)',
           severity: 'error'
@@ -170,7 +170,7 @@ export async function parseExpensesFile(
         importType: 'standard_template',
         totalRows: 0,
         sampleRows: [],
-        summary: { totalAmount: 0, byCategory: { Advertising: 0, COGS: 0, Operating: 0 } },
+        summary: { totalAmount: 0, byCategory: { Advertising: 0, COGS: 0, Operating: 0, Tax: 0 } },
         errors: [{ message: 'ไฟล์ว่างเปล่า (ไม่มีข้อมูล)', severity: 'error' }],
         warnings: [],
       }
@@ -182,7 +182,7 @@ export async function parseExpensesFile(
     let minDate: Date | null = null
     let maxDate: Date | null = null
     let totalAmount = 0
-    const byCategory = { Advertising: 0, COGS: 0, Operating: 0 }
+    const byCategory = { Advertising: 0, COGS: 0, Operating: 0, Tax: 0 }
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]
@@ -261,14 +261,14 @@ export async function parseExpensesFile(
         // Parse optional fields
         const vendor = row['Vendor'] || row['vendor']
         const paymentMethod = row['Payment Method'] || row['payment_method']
-        const subCategory = row['Sub Category'] || row['sub_category']
+        const subCategory = row['Sub Category'] || row['sub_category'] || row['subcategory']
         const notes = row['Notes'] || row['notes']
 
         // Add parsed row (plain object)
         parsedRows.push({
           expense_date: expenseDate,
           category,
-          sub_category: subCategory ? String(subCategory).trim() : undefined,
+          subcategory: subCategory ? String(subCategory).trim() : undefined,
           description: String(description).trim(),
           amount,
           vendor: vendor ? String(vendor).trim() : undefined,
@@ -298,7 +298,7 @@ export async function parseExpensesFile(
         importType: 'standard_template',
         totalRows: rows.length,
         sampleRows: [],
-        summary: { totalAmount: 0, byCategory: { Advertising: 0, COGS: 0, Operating: 0 } },
+        summary: { totalAmount: 0, byCategory: { Advertising: 0, COGS: 0, Operating: 0, Tax: 0 } },
         errors: errors.length > 0 ? errors : [{ message: 'ไม่มีแถวที่ valid (ทุกแถวมี error)', severity: 'error' }],
         warnings: [],
       }
@@ -335,7 +335,7 @@ export async function parseExpensesFile(
       importType: 'generic',
       totalRows: 0,
       sampleRows: [],
-      summary: { totalAmount: 0, byCategory: { Advertising: 0, COGS: 0, Operating: 0 } },
+      summary: { totalAmount: 0, byCategory: { Advertising: 0, COGS: 0, Operating: 0, Tax: 0 } },
       errors: [{ message: `Error: ${errorMessage}`, severity: 'error' }],
       warnings: [],
     }

@@ -31,7 +31,7 @@ interface AddExpenseDialogProps {
   onSuccess: () => void
 }
 
-const CATEGORIES: ExpenseCategory[] = ['Advertising', 'COGS', 'Operating']
+const CATEGORIES: ExpenseCategory[] = ['Advertising', 'COGS', 'Operating', 'Tax']
 
 function getTodayDate(): string {
   return getTodayBangkokString()
@@ -108,6 +108,7 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess }: AddExpenseDi
       Advertising: 'ค่าโฆษณา',
       COGS: 'ต้นทุนขาย (COGS)',
       Operating: 'ค่าใช้จ่ายดำเนินงาน',
+      Tax: 'ภาษี (Tax)',
     }
     return labels[category]
   }

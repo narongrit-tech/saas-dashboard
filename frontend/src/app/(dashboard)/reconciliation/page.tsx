@@ -208,6 +208,12 @@ export default function ReconciliationPage() {
                       -฿{formatCurrency(data.accrual_operating)}
                     </span>
                   </div>
+                  <div className="flex justify-between text-sm">
+                    <span>Tax</span>
+                    <span className="font-mono text-red-600">
+                      -฿{formatCurrency(data.accrual_tax)}
+                    </span>
+                  </div>
                   <div className="flex justify-between border-t pt-2 font-bold">
                     <span>Net Profit/Loss</span>
                     <span

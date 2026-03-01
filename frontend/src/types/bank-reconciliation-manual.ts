@@ -43,7 +43,7 @@ export interface ManualMatchFormData {
 
   // For creating expense
   expense?: {
-    category: 'Advertising' | 'COGS' | 'Operating';
+    category: 'Advertising' | 'COGS' | 'Operating' | 'Tax';
     subcategory?: string;
     description: string;
     amount: number;

@@ -11,11 +11,12 @@ interface ActionResult {
   data?: unknown
 }
 
-// BUSINESS RULE: Expenses must be categorized into exactly 3 types
+// BUSINESS RULE: Expenses must be categorized into exactly 4 types
 // - Advertising: ค่าโฆษณา (ads, marketing spend)
 // - COGS: ต้นทุนขาย (cost of goods sold - product cost, packaging)
 // - Operating: ค่าดำเนินงาน (overhead, utilities, salaries, etc.)
-const VALID_CATEGORIES: ExpenseCategory[] = ['Advertising', 'COGS', 'Operating']
+// - Tax: ภาษี (VAT, withholding, and other taxes)
+const VALID_CATEGORIES: ExpenseCategory[] = ['Advertising', 'COGS', 'Operating', 'Tax']
 
 export async function createManualExpense(input: CreateExpenseInput): Promise<ActionResult> {
   try {

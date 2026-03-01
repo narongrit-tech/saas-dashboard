@@ -70,7 +70,7 @@ export async function downloadExpenseTemplate(): Promise<{
       [''],
       ['Required Columns:'],
       ['date', 'วันที่ (YYYY-MM-DD เช่น 2026-01-25)'],
-      ['category', 'หมวดหมู่ (Advertising, COGS, Operating เท่านั้น)'],
+      ['category', 'หมวดหมู่ (Advertising, COGS, Operating, Tax เท่านั้น)'],
       ['description', 'รายละเอียด (ข้อความ)'],
       ['amount', 'จำนวนเงิน (ตัวเลข > 0)'],
       [''],
@@ -85,11 +85,13 @@ export async function downloadExpenseTemplate(): Promise<{
       ['Advertising', 'ค่าโฆษณา (Ads, Marketing)'],
       ['COGS', 'ต้นทุนขาย (Product Cost, Packaging)'],
       ['Operating', 'ค่าดำเนินงาน (Utilities, Salary, Overhead)'],
+      ['Tax', 'ภาษี (VAT, Withholding, Corporate Tax)'],
       [''],
       ['Subcategory Examples (ไม่บังคับ):'],
       ['Advertising → Facebook Ads, Google Ads, TikTok Ads, LINE Ads'],
       ['COGS → Product A, Product B, Packaging Materials, Shipping'],
       ['Operating → Office Rent, Utilities, Salaries, Software Subscriptions'],
+      ['Tax → VAT, Withholding Tax, Corporate Income Tax'],
       [''],
       ['Example (ดูใน expenses_template sheet):'],
       ['Row 2 แสดงตัวอย่างข้อมูลที่กรอกได้'],
@@ -233,8 +235,8 @@ export async function importExpensesFromTemplate(
 
       // Validate category
       const category = String(rowObj.category).trim()
-      if (!['Advertising', 'COGS', 'Operating'].includes(category)) {
-        errors.push(`Row ${idx + 2}: Category ไม่ถูกต้อง (ต้องเป็น Advertising, COGS, หรือ Operating)`)
+      if (!['Advertising', 'COGS', 'Operating', 'Tax'].includes(category)) {
+        errors.push(`Row ${idx + 2}: Category ไม่ถูกต้อง (ต้องเป็น Advertising, COGS, Operating, หรือ Tax)`)
         return
       }
 

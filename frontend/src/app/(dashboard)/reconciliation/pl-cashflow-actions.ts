@@ -32,6 +32,7 @@ export interface ReconciliationReport {
   accrual_ad_spend: number
   accrual_cogs: number
   accrual_operating: number
+  accrual_tax: number
   accrual_net: number
 
   // Company Cashflow (Liquidity)
@@ -74,7 +75,8 @@ export async function getReconciliationReport(
     const accrual_ad_spend = plData.reduce((sum, d) => sum + d.advertising_cost, 0)
     const accrual_cogs = plData.reduce((sum, d) => sum + d.cogs, 0)
     const accrual_operating = plData.reduce((sum, d) => sum + d.operating_expenses, 0)
-    const accrual_net = accrual_revenue - accrual_ad_spend - accrual_cogs - accrual_operating
+    const accrual_tax = plData.reduce((sum, d) => sum + d.tax_expenses, 0)
+    const accrual_net = accrual_revenue - accrual_ad_spend - accrual_cogs - accrual_operating - accrual_tax
 
     // Fetch Company Cashflow
     const cashflowResult = await getCompanyCashflow(startDate, endDate)
@@ -167,6 +169,7 @@ export async function getReconciliationReport(
         accrual_ad_spend,
         accrual_cogs,
         accrual_operating,
+        accrual_tax,
         accrual_net,
         cashflow_in,
         cashflow_out,
@@ -212,6 +215,7 @@ export async function exportReconciliationReport(
     lines.push(`Ad Spend,-${data.accrual_ad_spend.toFixed(2)}`)
     lines.push(`COGS,-${data.accrual_cogs.toFixed(2)}`)
     lines.push(`Operating,-${data.accrual_operating.toFixed(2)}`)
+    lines.push(`Tax,-${data.accrual_tax.toFixed(2)}`)
     lines.push(`Net Profit/Loss,${data.accrual_net.toFixed(2)}`)
     lines.push('')
     lines.push('Company Cashflow (Liquidity)')

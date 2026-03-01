@@ -85,7 +85,7 @@ export function ExpensesImportDialog({ open, onOpenChange, onSuccess }: Expenses
         importType: 'generic',
         totalRows: 0,
         sampleRows: [],
-        summary: { totalAmount: 0, byCategory: { Advertising: 0, COGS: 0, Operating: 0 } },
+        summary: { totalAmount: 0, byCategory: { Advertising: 0, COGS: 0, Operating: 0, Tax: 0 } },
         errors: [{ message: errorMessage, severity: 'error' }],
         warnings: [],
       })
@@ -182,7 +182,7 @@ export function ExpensesImportDialog({ open, onOpenChange, onSuccess }: Expenses
               <AlertDescription>
                 <strong>Required columns:</strong> Date, Category, Amount, Description
                 <br />
-                <strong>Category must be:</strong> Advertising, COGS, หรือ Operating
+                <strong>Category must be:</strong> Advertising, COGS, Operating, หรือ Tax
               </AlertDescription>
             </Alert>
           </div>
@@ -220,6 +220,10 @@ export function ExpensesImportDialog({ open, onOpenChange, onSuccess }: Expenses
                 <div className="flex justify-between">
                   <span>Operating:</span>
                   <span className="font-medium">฿{preview.summary.byCategory.Operating.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Tax:</span>
+                  <span className="font-medium">฿{preview.summary.byCategory.Tax.toLocaleString()}</span>
                 </div>
               </div>
             </div>

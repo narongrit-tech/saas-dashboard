@@ -59,7 +59,7 @@ interface SuggestedWalletEntry {
 
 export async function createExpenseFromBankTransaction(
   bankTransactionId: string,
-  category: 'Advertising' | 'COGS' | 'Operating',
+  category: 'Advertising' | 'COGS' | 'Operating' | 'Tax',
   description: string,
   amount: number,
   subcategory?: string,
@@ -76,7 +76,7 @@ export async function createExpenseFromBankTransaction(
     }
 
     // Validate category
-    const validCategories = ['Advertising', 'COGS', 'Operating'];
+    const validCategories = ['Advertising', 'COGS', 'Operating', 'Tax'];
     if (!validCategories.includes(category)) {
       return { success: false, error: 'Invalid category' };
     }

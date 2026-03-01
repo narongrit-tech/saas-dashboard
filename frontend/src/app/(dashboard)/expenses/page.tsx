@@ -209,6 +209,7 @@ export default function ExpensesPage() {
       Advertising: { label: 'ค่าโฆษณา', className: 'bg-purple-500 hover:bg-purple-600 text-white' },
       COGS: { label: 'ต้นทุนขาย', className: 'bg-orange-500 hover:bg-orange-600 text-white' },
       Operating: { label: 'ดำเนินงาน', className: 'bg-blue-500 hover:bg-blue-600 text-white' },
+      Tax: { label: 'ภาษี', className: 'bg-rose-500 hover:bg-rose-600 text-white' },
     }
     const { label, className } = config[category]
     return <Badge className={className}>{label}</Badge>
@@ -470,6 +471,7 @@ export default function ExpensesPage() {
               <SelectItem value="Advertising">ค่าโฆษณา</SelectItem>
               <SelectItem value="COGS">ต้นทุนขาย (COGS)</SelectItem>
               <SelectItem value="Operating">ค่าใช้จ่ายดำเนินงาน</SelectItem>
+              <SelectItem value="Tax">ภาษี (Tax)</SelectItem>
             </SelectContent>
           </Select>
         </div>

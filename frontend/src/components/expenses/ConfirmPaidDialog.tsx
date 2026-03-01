@@ -103,6 +103,7 @@ export function ConfirmPaidDialog({
       Advertising: 'ค่าโฆษณา',
       COGS: 'ต้นทุนขาย',
       Operating: 'ค่าดำเนินงาน',
+      Tax: 'ภาษี',
     }
     return labels[category] ?? category
   }

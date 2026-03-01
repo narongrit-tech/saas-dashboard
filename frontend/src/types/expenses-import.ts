@@ -10,7 +10,7 @@ export type ExpensesImportSource = 'manual' | 'imported'
 /**
  * Valid expense categories (business rules)
  */
-export const EXPENSE_CATEGORIES = ['Advertising', 'COGS', 'Operating'] as const
+export const EXPENSE_CATEGORIES = ['Advertising', 'COGS', 'Operating', 'Tax'] as const
 export type ExpenseCategory = typeof EXPENSE_CATEGORIES[number]
 
 /**
@@ -37,7 +37,7 @@ export const GENERIC_EXPENSE_FIELDS = {
   description: { label: 'Description', required: true },
   vendor: { label: 'Vendor', required: false },
   payment_method: { label: 'Payment Method', required: false },
-  sub_category: { label: 'Sub Category', required: false },
+  subcategory: { label: 'Sub Category', required: false },
   receipt_url: { label: 'Receipt URL', required: false },
   notes: { label: 'Notes', required: false },
 }
@@ -48,7 +48,7 @@ export const GENERIC_EXPENSE_FIELDS = {
 export interface ParsedExpenseRow {
   expense_date: string // YYYY-MM-DD (Bangkok)
   category: ExpenseCategory
-  sub_category?: string
+  subcategory?: string
   description: string
   amount: number
   vendor?: string
@@ -77,6 +77,7 @@ export interface ExpensesImportPreview {
       Advertising: number
       COGS: number
       Operating: number
+      Tax: number
     }
   }
   errors: Array<{

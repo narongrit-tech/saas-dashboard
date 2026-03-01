@@ -26,7 +26,7 @@ INSERT INTO public.sales_orders (
 -- ============================================
 
 INSERT INTO public.expenses (
-    category, sub_category, description, amount,
+    category, subcategory, description, amount,
     expense_date, payment_method, vendor, notes
 ) VALUES
     ('Marketing', 'Social Media Ads', 'Facebook Ads Campaign - Jan 2024', 5000.00, '2024-01-10', 'Credit Card', 'Facebook', 'Campaign ID: FB-JAN-001'),
