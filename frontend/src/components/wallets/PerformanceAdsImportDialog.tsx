@@ -35,9 +35,10 @@ import { Badge } from '@/components/ui/badge'
 import { format } from 'date-fns'
 import { getBangkokNow } from '@/lib/bangkok-time'
 import {
-  parsePerformanceAdsFile,
-  importPerformanceAdsToSystem,
+  createAdsImportPreview,
+  confirmAdsImport,
 } from '@/app/(dashboard)/wallets/performance-ads-import-actions'
+import { parseTikTokAdsFile } from '@/lib/parsers/tiktok-ads-parser'
 import { ManualMappingWizard } from './ManualMappingWizard'
 import * as XLSX from 'xlsx'
 
@@ -83,6 +84,7 @@ export function PerformanceAdsImportDialog({
   const { toast } = useToast()
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [fileBuffer, setFileBuffer] = useState<Uint8Array | null>(null)
+  const [batchId, setBatchId] = useState<string | null>(null)
   const [preview, setPreview] = useState<PreviewData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -165,6 +167,7 @@ export function PerformanceAdsImportDialog({
     // Reset file selection when changing type
     setSelectedFile(null)
     setFileBuffer(null)
+    setBatchId(null)
     setPreview(null)
     setError(null)
     setReportDate(null)
@@ -211,12 +214,10 @@ export function PerformanceAdsImportDialog({
       setError('กรุณาเลือกไฟล์')
       return
     }
-
     if (!reportDate) {
       setError('กรุณาเลือก Report Date')
       return
     }
-
     if (!campaignType) {
       setError('กรุณาเลือก Ads Type')
       return
@@ -226,18 +227,16 @@ export function PerformanceAdsImportDialog({
     setError(null)
     setWarnings([])
     setSuccess(null)
+    setBatchId(null)
 
     try {
-      // Call parsePerformanceAdsFile with reportDate
-      const result = await parsePerformanceAdsFile(
-        fileBuffer,
-        selectedFile.name,
-        campaignType,
-        format(reportDate, 'yyyy-MM-dd')
-      )
+      const reportDateStr = format(reportDate, 'yyyy-MM-dd')
 
-      if (!result.success) {
-        // Extract Excel headers for manual mapping fallback
+      // ── Step A: Parse XLSX locally (no network, no 20MB limit issue) ──────
+      const parseResult = await parseTikTokAdsFile(fileBuffer, selectedFile.name, reportDateStr)
+
+      if (!parseResult.success || !parseResult.preview) {
+        // Extract Excel headers for ManualMappingWizard fallback
         try {
           const workbook = XLSX.read(fileBuffer, { type: 'array' })
           const sheetName = workbook.SheetNames[0]
@@ -248,29 +247,67 @@ export function PerformanceAdsImportDialog({
               unknown
             >[]
             if (rows.length > 0) {
-              const headers = Object.keys(rows[0])
-              setExcelHeaders(headers)
+              setExcelHeaders(Object.keys(rows[0]))
             }
           }
         } catch (parseErr) {
           console.error('Error extracting headers:', parseErr)
         }
-
-        // Store debug info if available
-        if (result.debug) {
-          setDebugInfo(result.debug)
-        }
-
-        setError(result.error || 'ไม่สามารถอ่านไฟล์ได้')
+        if (parseResult.debug) setDebugInfo(parseResult.debug)
+        setError(parseResult.error || 'ไม่สามารถอ่านไฟล์ได้')
         return
       }
 
-      if (result.preview) {
-        setPreview(result.preview)
-        setWarnings(result.warnings || [])
+      const { preview: parsedPreview } = parseResult
+
+      // ── Step B: Compute file hash client-side via Web Crypto ──────────────
+      const hashBuffer = await crypto.subtle.digest('SHA-256', fileBuffer.buffer as ArrayBuffer)
+      const fileHash = Array.from(new Uint8Array(hashBuffer))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('')
+
+      // ── Step C: Send small JSON payload to server (rows, not binary file) ─
+      const serverResult = await createAdsImportPreview({
+        fileName: selectedFile.name,
+        campaignType,
+        reportDate: reportDateStr,
+        fileHash,
+        currency: parsedPreview.currency,
+        rows: parsedPreview.dailyBreakdown,   // structured JSON — much smaller than binary
+        totalSpend: parsedPreview.totalSpend,
+        totalGMV: parsedPreview.totalGMV,
+        totalOrders: parsedPreview.totalOrders,
+        avgROAS: parsedPreview.avgROAS,
+        rowCount: parsedPreview.rowCount,
+        daysCount: parsedPreview.daysCount,
+        reportDateRange: parsedPreview.reportDateRange,
+      })
+
+      if (!serverResult.success) {
+        setError(serverResult.error || 'ไม่สามารถสร้าง preview ได้')
+        return
       }
+
+      // ── Step D: Store batchId + display preview from local parse ──────────
+      setBatchId(serverResult.batchId!)
+      setPreview({
+        fileName: parsedPreview.fileName,
+        campaignType,
+        reportType: parsedPreview.reportType,
+        reportDateRange: parsedPreview.reportDateRange,
+        totalSpend: parsedPreview.totalSpend,
+        totalGMV: parsedPreview.totalGMV,
+        totalOrders: parsedPreview.totalOrders,
+        avgROAS: parsedPreview.avgROAS,
+        currency: parsedPreview.currency,
+        rowCount: parsedPreview.rowCount,
+        daysCount: parsedPreview.daysCount,
+        detectedColumns: parsedPreview.detectedColumns,
+        missingOptionalColumns: parsedPreview.missingOptionalColumns,
+      })
+      setWarnings(parseResult.warnings || [])
     } catch (err) {
-      console.error('Error parsing file:', err)
+      console.error('Error in handlePreview:', err)
       setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการอ่านไฟล์')
     } finally {
       setLoading(false)
@@ -278,8 +315,8 @@ export function PerformanceAdsImportDialog({
   }
 
   const handleImport = async () => {
-    if (!fileBuffer || !selectedFile || !preview || !reportDate) {
-      setError('กรุณาเลือกไฟล์และ Report Date')
+    if (!batchId || !preview) {
+      setError('ไม่มี batch สำหรับ import — กรุณา Preview ก่อน')
       return
     }
 
@@ -289,13 +326,8 @@ export function PerformanceAdsImportDialog({
     setSuccess(null)
 
     try {
-      const result = await importPerformanceAdsToSystem(
-        fileBuffer,
-        selectedFile.name,
-        campaignType,
-        adsWalletId,
-        format(reportDate, 'yyyy-MM-dd')
-      )
+      // Confirm: send only batchId (no large payload — staging rows read from DB)
+      const result = await confirmAdsImport(batchId, adsWalletId)
 
       if (!result.success) {
         setError(result.error || 'ไม่สามารถ import ได้')
@@ -312,10 +344,9 @@ export function PerformanceAdsImportDialog({
       }
 
       setSuccess(
-        `✅ Import สำเร็จ - ${data.daysCount} วัน, ${data.performanceRecords} records, ROAS: ${data.avgROAS.toFixed(2)}`
+        `✅ Import สำเร็จ - ${data.daysCount} วัน, ${data.performanceRecords} records, ROAS: ${(data.avgROAS as number).toFixed(2)}`
       )
 
-      // Reset and close after success
       setTimeout(() => {
         handleClose()
         onImportSuccess()
@@ -331,6 +362,7 @@ export function PerformanceAdsImportDialog({
   const handleClose = () => {
     setSelectedFile(null)
     setFileBuffer(null)
+    setBatchId(null)
     setPreview(null)
     setError(null)
     setWarnings([])
