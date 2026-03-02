@@ -53,7 +53,7 @@ interface PerformanceAdsPreview extends TikTokAdsPreview {
  * @param reportDate - User-selected report date (YYYY-MM-DD) in Bangkok timezone
  */
 export async function parsePerformanceAdsFile(
-  fileBuffer: ArrayBuffer,
+  fileBuffer: Uint8Array,
   fileName: string,
   campaignType: 'product' | 'live',
   reportDate: string
@@ -116,7 +116,7 @@ export async function parsePerformanceAdsFile(
  * @param reportDate - User-selected report date (YYYY-MM-DD) in Bangkok timezone
  */
 export async function importPerformanceAdsToSystem(
-  fileBuffer: ArrayBuffer,
+  fileBuffer: Uint8Array,
   fileName: string,
   campaignType: 'product' | 'live',
   adsWalletId: string,

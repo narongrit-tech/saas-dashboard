@@ -49,7 +49,7 @@ interface TigerCampaignRow {
  * Returns preview data for user confirmation
  */
 export async function parseTigerReportFile(
-  fileBuffer: ArrayBuffer,
+  fileBuffer: Uint8Array,
   fileName: string
 ): Promise<ActionResult & { preview?: TigerImportPreview }> {
   try {
@@ -229,7 +229,7 @@ export async function parseTigerReportFile(
  * Creates single SPEND entry in wallet_ledger
  */
 export async function importTigerReportToWallet(
-  fileBuffer: ArrayBuffer,
+  fileBuffer: Uint8Array,
   fileName: string,
   adsWalletId: string
 ): Promise<ActionResult> {

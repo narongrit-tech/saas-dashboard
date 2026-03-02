@@ -41,7 +41,7 @@ interface ManualMappingWizardProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   adsWalletId: string
-  fileBuffer: ArrayBuffer
+  fileBuffer: Uint8Array
   fileName: string
   excelHeaders: string[]
   onImportSuccess: () => void

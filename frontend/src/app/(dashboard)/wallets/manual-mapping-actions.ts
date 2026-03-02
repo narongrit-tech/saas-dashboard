@@ -196,7 +196,7 @@ export async function saveUserPreset(
  * Returns preview data for validation
  */
 export async function parseWithCustomMapping(
-  fileBuffer: ArrayBuffer,
+  fileBuffer: Uint8Array,
   fileName: string,
   reportType: ReportType,
   columnMapping: Record<string, string>, // systemField -> excelColumn (with index: "Cost__0")
@@ -459,7 +459,7 @@ async function validateMappedData(
  * Reuses existing import logic from performance-ads-import-actions / tiger-import-actions
  */
 export async function executeManualImport(
-  fileBuffer: ArrayBuffer,
+  fileBuffer: Uint8Array,
   fileName: string,
   reportType: ReportType,
   columnMapping: Record<string, string>,

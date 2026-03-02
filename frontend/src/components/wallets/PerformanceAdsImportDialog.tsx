@@ -82,7 +82,7 @@ export function PerformanceAdsImportDialog({
   const [reportDate, setReportDate] = useState<Date | null>(null)
   const { toast } = useToast()
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [fileBuffer, setFileBuffer] = useState<ArrayBuffer | null>(null)
+  const [fileBuffer, setFileBuffer] = useState<Uint8Array | null>(null)
   const [preview, setPreview] = useState<PreviewData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -196,7 +196,7 @@ export function PerformanceAdsImportDialog({
     // Don't auto-preview yet - wait for user to fill reportDate and click Preview
     // Just read the file buffer and let auto-detection work
     try {
-      const buffer = await file.arrayBuffer()
+      const buffer = new Uint8Array(await file.arrayBuffer())
       setFileBuffer(buffer)
     } catch (err) {
       console.error('Error reading file:', err)

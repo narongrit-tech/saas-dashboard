@@ -57,7 +57,7 @@ export function TigerImportDialog({
 }: TigerImportDialogProps) {
   const { toast } = useToast()
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [fileBuffer, setFileBuffer] = useState<ArrayBuffer | null>(null)
+  const [fileBuffer, setFileBuffer] = useState<Uint8Array | null>(null)
   const [preview, setPreview] = useState<PreviewData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -90,8 +90,8 @@ export function TigerImportDialog({
     setLoading(true)
 
     try {
-      // Read file as ArrayBuffer
-      const buffer = await file.arrayBuffer()
+      // Read file as Uint8Array (required for server action serialization)
+      const buffer = new Uint8Array(await file.arrayBuffer())
       setFileBuffer(buffer)
 
       // Try to parse and validate

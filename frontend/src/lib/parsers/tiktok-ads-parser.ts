@@ -362,7 +362,7 @@ function parseNumeric(value: unknown): number {
 // =============================================
 
 export async function parseTikTokAdsFile(
-  fileBuffer: ArrayBuffer,
+  fileBuffer: Uint8Array,
   fileName: string,
   reportDate?: string // Optional report date (YYYY-MM-DD) - used if file has no date column
 ): Promise<TikTokAdsParseResult> {
