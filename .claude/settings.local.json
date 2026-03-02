@@ -42,7 +42,8 @@
       "Bash(git revert:*)",
       "Bash(timeout:*)",
       "Bash(npx shadcn@latest add sheet:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(python:*)"
     ]
   },
   "approvalMode": "auto",
