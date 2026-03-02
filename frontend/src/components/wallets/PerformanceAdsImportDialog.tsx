@@ -376,7 +376,7 @@ export function PerformanceAdsImportDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[700px]">
+      <DialogContent className="sm:max-w-[700px] max-h-[85vh] flex flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <TrendingUp className="h-5 w-5" />
@@ -409,7 +409,7 @@ export function PerformanceAdsImportDialog({
           </TabsContent>
         </Tabs>
 
-        <div className="space-y-4">
+        <div className="space-y-4 overflow-y-auto flex-1 min-h-0 pr-1">
           {/* Report Date */}
           <div className="space-y-2">
             <label className="text-sm font-medium flex items-center gap-2">

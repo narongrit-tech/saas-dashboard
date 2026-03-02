@@ -1,21 +1,32 @@
 /**
  * TikTok Ads Parser - Semantic Column Mapping
  *
- * Purpose: Parse TikTok Ads export files (Product/Live) with flexible column detection
- * - Supports Thai/English/Mixed column names
- * - Auto-detects report type (Product/Live)
- * - Smart sheet selection (pick sheet with most numeric data)
- * - Flexible validation (warn on missing optional metrics)
+ * Supports both:
+ * - Campaign-level daily reports (1 row per campaign per day)
+ * - Creative-level reports (many rows per campaign, aggregated here by (date, campaignName))
  *
  * Business Rules:
- * - Must have: Date, Campaign, Cost/Spend
+ * - Must have: Campaign, Cost/Spend  (Date optional if reportDate supplied)
  * - Optional but warn: GMV, Orders, ROAS
- * - Product vs Live: Auto-detect based on column presence
+ * - Aggregates by (date, campaignName) so upsert into ad_daily_performance is correct
+ *
+ * Performance:
+ * - XLSX.read uses minimal parse options (no formulas, styles, HTML)
+ * - selectBestSheet uses sheet !ref range (no sheet_to_json scan)
+ * - Guarded timing logs: set DEBUG_ADS_IMPORT=1 (Node) or window.__DEBUG_ADS=1 (browser)
  */
 
 import * as XLSX from 'xlsx'
 import { parse, isValid, format } from 'date-fns'
 import { toZonedTime } from 'date-fns-tz'
+
+// ─── Debug timing helper ──────────────────────────────────────────────────────
+function dbg(msg: string) {
+  const enabled =
+    (typeof process !== 'undefined' && process.env['DEBUG_ADS_IMPORT'] === '1') ||
+    (typeof window !== 'undefined' && (window as unknown as Record<string, unknown>)['__DEBUG_ADS'] === true)
+  if (enabled) console.log(`[ads-parser] ${msg}`)
+}
 
 // =============================================
 // Types
@@ -43,15 +54,15 @@ export interface TikTokAdsPreview {
   totalOrders: number
   avgROAS: number
   currency: string
-  rowCount: number
+  rowCount: number      // raw source rows before aggregation
   daysCount: number
-  dailyBreakdown: DailyAdData[]
+  dailyBreakdown: DailyAdData[]   // aggregated by (date, campaignName)
   detectedColumns: ColumnMapping
   missingOptionalColumns: string[]
 }
 
 export interface DailyAdData {
-  date: string // YYYY-MM-DD
+  date: string       // YYYY-MM-DD
   campaignName: string
   spend: number
   gmv: number
@@ -83,8 +94,8 @@ const COLUMN_TOKENS = {
       'เวลาเริ่มต้น',
       'เวลาเริ่ม',
       '日期',
-      'tarih', // Turkish
-      'fecha', // Spanish
+      'tarih',
+      'fecha',
       'start date',
       'start time',
     ],
@@ -112,8 +123,8 @@ const COLUMN_TOKENS = {
       'cost',
       'spend',
       'ค่าใช้จ่าย',
-      'ต้นทุน',
-      'chi phí', // Vietnamese
+      'ต้นทุน',          // Thai: cost/expense (appears in TikTok creative reports)
+      'chi phí',
       '费用',
       'expense',
       'ad spend',
@@ -126,7 +137,7 @@ const COLUMN_TOKENS = {
       'gmv',
       'revenue',
       'รายได้',
-      'รายได้ขั้นต้น',
+      'รายได้ขั้นต้น',   // Thai: gross revenue (TikTok creative report)
       'มูลค่ายอดขาย',
       'ยอดขาย',
       'รายได้รวม',
@@ -144,6 +155,7 @@ const COLUMN_TOKENS = {
       'order',
       'orders',
       'คำสั่งซื้อ',
+      'คำสั่งซื้อ sku',   // TikTok: "คำสั่งซื้อ SKU" (SKU orders)
       'ยอดการซื้อ',
       'จำนวนคำสั่งซื้อ',
       'ออเดอร์',
@@ -193,40 +205,28 @@ function normalizeText(text: string): string {
 }
 
 function normalizeHeaderText(text: string): string {
-  // Remove BOM, newlines, special chars from Excel headers
   return text
-    .replace(/^\uFEFF/, '') // BOM
-    .replace(/[\n\r]/g, ' ') // newlines
+    .replace(/^\uFEFF/, '')  // BOM
+    .replace(/[\n\r]/g, ' ')
     .toLowerCase()
     .trim()
     .replace(/\s+/g, ' ')
 }
 
-/**
- * Score a header against a set of tokens
- */
 function scoreColumnMatch(header: string, tokens: string[]): number {
   const normalized = normalizeHeaderText(header)
 
   for (const token of tokens) {
     const normalizedToken = normalizeText(token)
 
-    // Exact match = highest score
     if (normalized === normalizedToken) return 100
-
-    // Contains token = medium score
     if (normalized.includes(normalizedToken)) return 50
-
-    // Token contains header = low score (e.g., "date" matches "update date")
     if (normalizedToken.includes(normalized) && normalized.length > 3) return 30
   }
 
   return 0
 }
 
-/**
- * Build semantic column mapping
- */
 function buildColumnMapping(headers: string[]): ColumnMapping {
   const mapping: ColumnMapping = {
     date: null,
@@ -238,7 +238,6 @@ function buildColumnMapping(headers: string[]): ColumnMapping {
     currency: null,
   }
 
-  // For each field, find best matching header
   for (const [field, config] of Object.entries(COLUMN_TOKENS)) {
     let bestScore = 0
     let bestHeader: string | null = null
@@ -251,7 +250,6 @@ function buildColumnMapping(headers: string[]): ColumnMapping {
       }
     }
 
-    // Only assign if score is reasonable (> 25)
     if (bestScore > 25 && bestHeader) {
       mapping[field as keyof ColumnMapping] = bestHeader
     }
@@ -261,49 +259,32 @@ function buildColumnMapping(headers: string[]): ColumnMapping {
 }
 
 /**
- * Select best sheet from workbook
- * Strategy: Pick sheet with most numeric columns (likely data sheet)
+ * Select best sheet by row count (uses !ref range — no sheet_to_json scan)
+ * Falls back to first sheet if all sheets have empty refs.
  */
 function selectBestSheet(workbook: XLSX.WorkBook): string | null {
   if (workbook.SheetNames.length === 0) return null
   if (workbook.SheetNames.length === 1) return workbook.SheetNames[0]
 
-  let bestSheet: string | null = null
-  let maxNumericColumns = 0
+  let bestSheet = workbook.SheetNames[0]
+  let maxRows = 0
 
-  for (const sheetName of workbook.SheetNames) {
-    const sheet = workbook.Sheets[sheetName]
-    const rows = XLSX.utils.sheet_to_json(sheet, { defval: null }) as Record<string, unknown>[]
-
-    if (rows.length === 0) continue
-
-    // Count numeric columns (check first 10 rows)
-    const sampleRows = rows.slice(0, Math.min(10, rows.length))
-    const headers = Object.keys(rows[0])
-    let numericCount = 0
-
-    for (const header of headers) {
-      const values = sampleRows.map((row) => row[header])
-      const numericValues = values.filter(
-        (v) => typeof v === 'number' || !isNaN(parseFloat(String(v || '')))
-      )
-
-      if (numericValues.length >= sampleRows.length * 0.5) {
-        numericCount++
-      }
-    }
-
-    if (numericCount > maxNumericColumns) {
-      maxNumericColumns = numericCount
-      bestSheet = sheetName
+  for (const name of workbook.SheetNames) {
+    const ref = workbook.Sheets[name]?.['!ref']
+    if (!ref) continue
+    const range = XLSX.utils.decode_range(ref)
+    const rowCount = range.e.r - range.s.r + 1
+    if (rowCount > maxRows) {
+      maxRows = rowCount
+      bestSheet = name
     }
   }
 
-  return bestSheet || workbook.SheetNames[0]
+  return bestSheet
 }
 
 /**
- * Parse date from various formats
+ * Parse date from various formats to YYYY-MM-DD (Bangkok timezone)
  */
 function parseDate(value: unknown): Date | null {
   if (!value) return null
@@ -314,7 +295,6 @@ function parseDate(value: unknown): Date | null {
     return new Date(excelEpoch.getTime() + value * 86400000)
   }
 
-  // String date - try multiple formats
   const dateStr = String(value).trim()
   const formats = [
     'yyyy-MM-dd',
@@ -328,29 +308,25 @@ function parseDate(value: unknown): Date | null {
 
   for (const fmt of formats) {
     const parsed = parse(dateStr, fmt, new Date())
-    if (isValid(parsed)) {
-      return parsed
-    }
+    if (isValid(parsed)) return parsed
   }
 
-  // Try native Date parsing as last resort
   const nativeDate = new Date(dateStr)
-  if (isValid(nativeDate)) {
-    return nativeDate
-  }
+  if (isValid(nativeDate)) return nativeDate
 
   return null
 }
 
 /**
- * Parse numeric value (handles currency symbols, commas, etc.)
+ * Parse numeric value — handles string numbers, currency symbols, commas
+ * Examples: "198.430", "1,234.56", "฿1234", null → 0
  */
 function parseNumeric(value: unknown): number {
   if (typeof value === 'number') return value
   if (!value) return 0
 
   const str = String(value)
-    .replace(/[^0-9.-]/g, '') // Remove all non-numeric except . and -
+    .replace(/[^0-9.-]/g, '')
     .trim()
 
   const num = parseFloat(str)
@@ -364,202 +340,236 @@ function parseNumeric(value: unknown): number {
 export async function parseTikTokAdsFile(
   fileBuffer: Uint8Array,
   fileName: string,
-  reportDate?: string // Optional report date (YYYY-MM-DD) - used if file has no date column
+  reportDate?: string   // YYYY-MM-DD — used for all rows if file has no date column
 ): Promise<TikTokAdsParseResult> {
   const warnings: string[] = []
 
   try {
-    // 1. Validate file extension
     if (!fileName.toLowerCase().endsWith('.xlsx')) {
-      return {
-        success: false,
-        error: 'ไฟล์ต้องเป็น .xlsx เท่านั้น (Excel format)',
-      }
+      return { success: false, error: 'ไฟล์ต้องเป็น .xlsx เท่านั้น (Excel format)' }
     }
 
-    // 2. Parse Excel file
-    const workbook = XLSX.read(fileBuffer, { type: 'array' })
+    // ── 1. Parse workbook (minimal options for speed) ─────────────────────
+    let t0 = Date.now()
+    const workbook = XLSX.read(fileBuffer, {
+      type: 'array',
+      cellDates: false,     // keep dates as serial numbers / strings (we parse manually)
+      cellFormula: false,   // skip formula parsing
+      cellStyles: false,    // skip style parsing
+      cellHTML: false,      // skip HTML generation
+      cellNF: false,        // skip number format parsing
+      sheetStubs: false,    // skip empty cell stubs
+    })
+    dbg(`XLSX.read: ${Date.now() - t0}ms`)
 
-    // 3. Select best sheet
+    // ── 2. Select best sheet (by row count, no re-parse) ──────────────────
     const sheetName = selectBestSheet(workbook)
     if (!sheetName) {
-      return {
-        success: false,
-        error: 'ไม่พบ worksheet ที่มีข้อมูลใช้งานได้',
-      }
+      return { success: false, error: 'ไม่พบ worksheet ที่มีข้อมูลใช้งานได้' }
     }
 
+    // ── 3. Convert sheet to rows ───────────────────────────────────────────
+    t0 = Date.now()
     const worksheet = workbook.Sheets[sheetName]
-    const rows = XLSX.utils.sheet_to_json(worksheet, { defval: null }) as Record<string, unknown>[]
+    const rows = XLSX.utils.sheet_to_json(worksheet, {
+      defval: null,
+      raw: true,            // raw cell values (faster, no date conversion)
+    }) as Record<string, unknown>[]
+    dbg(`sheet_to_json (${rows.length} rows): ${Date.now() - t0}ms`)
 
     if (rows.length === 0) {
-      return {
-        success: false,
-        error: 'ไฟล์ว่างเปล่า ไม่มีข้อมูล',
-      }
+      return { success: false, error: 'ไฟล์ว่างเปล่า ไม่มีข้อมูล' }
     }
 
-    // 4. Build column mapping
+    // ── 4. Column mapping ─────────────────────────────────────────────────
     const headers = Object.keys(rows[0])
     const mapping = buildColumnMapping(headers)
 
-    // 5. Validate required columns
     const missingRequired: string[] = []
     const hasDateColumn = !!mapping.date
 
-    // Date is optional if reportDate is provided
     if (!hasDateColumn && !reportDate) {
       missingRequired.push('Date (วันที่) - หรือระบุ Report Date')
     }
     if (!mapping.campaign) missingRequired.push('Campaign (แคมเปญ)')
-    if (!mapping.cost) missingRequired.push('Cost/Spend (ค่าใช้จ่าย)')
+    if (!mapping.cost)     missingRequired.push('Cost/Spend (ค่าใช้จ่าย / ต้นทุน)')
 
     if (missingRequired.length > 0) {
       return {
         success: false,
         error: `ไม่พบ columns ที่จำเป็น: ${missingRequired.join(', ')}\n\nColumns ที่มีในไฟล์: ${headers.join(', ')}`,
-        debug: {
-          selectedSheet: sheetName,
-          headers,
-          mapping,
-          missingFields: missingRequired,
-        },
+        debug: { selectedSheet: sheetName, headers, mapping, missingFields: missingRequired },
       }
     }
 
-    // Warn if no date column but reportDate provided
     if (!hasDateColumn && reportDate) {
-      warnings.push(`⚠️ ไฟล์ไม่มี Date column - จะใช้ Report Date (${reportDate}) สำหรับทุก row`)
+      warnings.push(`⚠️ ไฟล์ไม่มี Date column — ใช้ Report Date (${reportDate}) สำหรับทุก row`)
     }
 
-    // 6. Check optional columns and warn
     const missingOptional: string[] = []
     if (!mapping.gmv) {
       missingOptional.push('GMV/Revenue')
-      warnings.push('⚠️ ไม่พบ GMV/Revenue - จะใช้ค่า 0')
+      warnings.push('⚠️ ไม่พบ GMV/Revenue — จะใช้ค่า 0')
     }
     if (!mapping.orders) {
       missingOptional.push('Orders')
-      warnings.push('⚠️ ไม่พบ Orders - จะใช้ค่า 0')
+      warnings.push('⚠️ ไม่พบ Orders — จะใช้ค่า 0')
     }
     if (!mapping.roas) {
-      warnings.push('ℹ️ ไม่พบ ROAS - จะคำนวณจาก GMV/Cost')
+      warnings.push('ℹ️ ไม่พบ ROAS — จะคำนวณจาก GMV/Cost')
     }
 
-    // 7. Detect report type
-    // If has GMV + Orders → likely Product/Live performance report
-    // If only Cost → might be awareness (should use Tiger import)
+    // ── 5. Auto-detect report type ────────────────────────────────────────
     let reportType: 'product' | 'live' | 'unknown' = 'unknown'
     if (mapping.gmv || mapping.orders) {
-      // Heuristic: Check if campaign names contain "live" or "livestream"
       const sampleCampaigns = rows
         .slice(0, 10)
         .map((row) => String(row[mapping.campaign!] || '').toLowerCase())
-
       const hasLiveKeywords = sampleCampaigns.some(
         (name) => name.includes('live') || name.includes('stream')
       )
-
       reportType = hasLiveKeywords ? 'live' : 'product'
     } else {
-      warnings.push(
-        '⚠️ ไฟล์นี้ไม่มี sales metrics (GMV/Orders) - ถ้าเป็น Awareness Ads ควรใช้ Tiger Import แทน'
-      )
+      warnings.push('⚠️ ไฟล์ไม่มี sales metrics (GMV/Orders) — ถ้าเป็น Awareness Ads ควรใช้ Tiger Import แทน')
     }
 
-    // 8. Parse daily data
-    const dailyData: DailyAdData[] = []
-    let totalSpend = 0
-    let totalGMV = 0
-    let totalOrders = 0
-    let currency = 'THB' // Default
+    // ── 6. Parse & aggregate rows by (date, campaignName) ─────────────────
+    //
+    // IMPORTANT: Files may be creative-level (many rows per campaign × creative × product).
+    // The ad_daily_performance table has a unique constraint on (marketplace, ad_date,
+    // campaign_type, campaign_name, created_by). If we upsert without aggregating, later
+    // rows would overwrite earlier rows for the same campaign → wrong totals.
+    //
+    // Fix: aggregate all rows for the same (date, campaignName) by summing spend/gmv/orders.
+    //
+    t0 = Date.now()
+    const campaignAggregates = new Map<string, {
+      date: string
+      campaignName: string
+      spend: number
+      gmv: number
+      orders: number
+      roasSum: number   // only used if explicit roas column found
+      roasCount: number
+    }>()
+
+    let currency = 'THB'
     const seenDates = new Set<string>()
+    let rawRowCount = 0
 
     for (const row of rows) {
-      // Parse date - use reportDate if no date column in file
+      // Resolve date
       let dateFormatted: string
       if (hasDateColumn && mapping.date) {
-        const dateValue = row[mapping.date]
-        const adDate = parseDate(dateValue)
-
-        if (!adDate || !isValid(adDate)) {
-          continue // Skip invalid dates
-        }
-
+        const adDate = parseDate(row[mapping.date])
+        if (!adDate || !isValid(adDate)) continue
         dateFormatted = format(toZonedTime(adDate, 'Asia/Bangkok'), 'yyyy-MM-dd')
       } else if (reportDate) {
-        // Use provided reportDate for all rows
         dateFormatted = reportDate
       } else {
-        continue // No date available, skip
+        continue
       }
 
-      seenDates.add(dateFormatted)
-
-      // Parse campaign name
-      const campaignName = row[mapping.campaign!]
-      if (!campaignName) continue
+      // Resolve campaign
+      const rawCampaign = row[mapping.campaign!]
+      if (!rawCampaign) continue
+      const campaignName = String(rawCampaign)
 
       // Parse numbers
-      const spend = parseNumeric(row[mapping.cost!])
-      const gmv = mapping.gmv ? parseNumeric(row[mapping.gmv]) : 0
+      const spend  = parseNumeric(row[mapping.cost!])
+      const gmv    = mapping.gmv    ? parseNumeric(row[mapping.gmv])    : 0
       const orders = mapping.orders ? parseNumeric(row[mapping.orders]) : 0
-      let roas = mapping.roas ? parseNumeric(row[mapping.roas]) : 0
+      const roas   = mapping.roas   ? parseNumeric(row[mapping.roas])   : 0
 
-      // Calculate ROAS if not provided
-      if (roas === 0 && spend > 0) {
-        roas = gmv / spend
+      // Aggregate
+      const key = `${dateFormatted}\x00${campaignName}`
+      const existing = campaignAggregates.get(key)
+      if (existing) {
+        existing.spend  += spend
+        existing.gmv    += gmv
+        existing.orders += orders
+        if (mapping.roas && roas > 0) {
+          existing.roasSum   += roas
+          existing.roasCount += 1
+        }
+      } else {
+        seenDates.add(dateFormatted)
+        campaignAggregates.set(key, {
+          date: dateFormatted,
+          campaignName,
+          spend,
+          gmv,
+          orders,
+          roasSum: roas,
+          roasCount: roas > 0 ? 1 : 0,
+        })
       }
 
-      dailyData.push({
-        date: dateFormatted,
-        campaignName: String(campaignName),
-        spend,
-        gmv,
-        orders: Math.round(orders),
-        roas: Math.round(roas * 100) / 100,
-      })
-
-      totalSpend += spend
-      totalGMV += gmv
-      totalOrders += orders
-
-      // Extract currency from first row
-      if (dailyData.length === 1 && mapping.currency && row[mapping.currency]) {
+      // Extract currency once
+      if (rawRowCount === 0 && mapping.currency && row[mapping.currency]) {
         currency = String(row[mapping.currency]).toUpperCase()
       }
-    }
 
-    if (dailyData.length === 0) {
+      rawRowCount++
+    }
+    dbg(`row aggregation (${rawRowCount} raw → ${campaignAggregates.size} aggregated): ${Date.now() - t0}ms`)
+
+    if (campaignAggregates.size === 0) {
       return {
         success: false,
-        error: 'ไม่พบข้อมูลที่ valid ในไฟล์ (ตรวจสอบ date, campaign, cost columns)',
+        error: 'ไม่พบข้อมูลที่ valid ในไฟล์ (ตรวจสอบ campaign, cost columns)',
       }
     }
 
-    // 9. Calculate summary
+    // ── 7. Build DailyAdData[] from aggregates ─────────────────────────────
+    let totalSpend = 0, totalGMV = 0, totalOrders = 0
+
+    const dailyData: DailyAdData[] = Array.from(campaignAggregates.values()).map((entry) => {
+      totalSpend  += entry.spend
+      totalGMV    += entry.gmv
+      totalOrders += entry.orders
+
+      // ROAS: use average of explicit values if available, otherwise calculate
+      let roas: number
+      if (mapping.roas && entry.roasCount > 0) {
+        roas = entry.roasSum / entry.roasCount
+      } else {
+        roas = entry.spend > 0 ? entry.gmv / entry.spend : 0
+      }
+
+      return {
+        date: entry.date,
+        campaignName: entry.campaignName,
+        spend:  Math.round(entry.spend  * 100) / 100,
+        gmv:    Math.round(entry.gmv    * 100) / 100,
+        orders: Math.round(entry.orders),
+        roas:   Math.round(roas * 100) / 100,
+      }
+    })
+
     const avgROAS = totalSpend > 0 ? totalGMV / totalSpend : 0
     const dates = Array.from(seenDates).sort()
-    const reportDateRange =
-      dates.length > 0 ? `${dates[0]} to ${dates[dates.length - 1]}` : 'Unknown'
+    const reportDateRange = dates.length > 0
+      ? `${dates[0]} to ${dates[dates.length - 1]}`
+      : 'Unknown'
 
-    // 10. Build preview
     const preview: TikTokAdsPreview = {
       fileName,
       reportType,
       reportDateRange,
-      totalSpend: Math.round(totalSpend * 100) / 100,
-      totalGMV: Math.round(totalGMV * 100) / 100,
+      totalSpend:  Math.round(totalSpend  * 100) / 100,
+      totalGMV:    Math.round(totalGMV    * 100) / 100,
       totalOrders: Math.round(totalOrders),
-      avgROAS: Math.round(avgROAS * 100) / 100,
+      avgROAS:     Math.round(avgROAS * 100) / 100,
       currency,
-      rowCount: rows.length,
+      rowCount: rawRowCount,           // original source row count
       daysCount: seenDates.size,
-      dailyBreakdown: dailyData,
+      dailyBreakdown: dailyData,       // aggregated (much fewer entries)
       detectedColumns: mapping,
       missingOptionalColumns: missingOptional,
     }
 
+    dbg(`done — ${rawRowCount} raw rows → ${dailyData.length} aggregated entries`)
     return {
       success: true,
       warnings: warnings.length > 0 ? warnings : undefined,
