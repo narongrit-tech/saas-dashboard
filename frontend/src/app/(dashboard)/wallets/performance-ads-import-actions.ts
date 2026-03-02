@@ -59,7 +59,7 @@ export interface AdsImportPreviewResult {
 /**
  * Step 1: Create import preview
  * - Validates inputs + dedup check (file_hash + campaignType + reportDate)
- * - Creates import_batch with status='staging'
+ * - Creates import_batch with status='processing' (existing allowed value)
  * - Inserts parsed rows into ad_import_staging_rows (chunked)
  * - Returns { batchId, sampleRows } — payload stays small (<1 KB)
  */
@@ -110,7 +110,9 @@ export async function createAdsImportPreview(
       }
     }
 
-    // 4. Create import_batch (status='staging' → will become 'success' after confirm)
+    // 4. Create import_batch (status='processing' → becomes 'success' after confirm)
+    //    'processing' is an existing allowed value — no migration needed for status constraint.
+    //    The preview/staging state is tracked by ad_import_staging_rows existence, not by status.
     const { data: batch, error: batchError } = await supabase
       .from('import_batches')
       .insert({
@@ -121,7 +123,7 @@ export async function createAdsImportPreview(
         file_hash: input.fileHash,
         row_count: input.rowCount,
         inserted_count: 0,
-        status: 'staging',
+        status: 'processing',
         metadata: {
           reportDate: input.reportDate,
           adsType: input.campaignType,
@@ -207,17 +209,17 @@ export async function confirmAdsImport(
       return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
     }
 
-    // 2. Fetch batch — verify owner + must be in 'staging' state
+    // 2. Fetch batch — verify owner + must be in 'processing' state (not yet confirmed)
     const { data: batch, error: batchError } = await supabase
       .from('import_batches')
       .select('id, report_type, file_name, metadata')
       .eq('id', batchId)
       .eq('created_by', user.id)
-      .eq('status', 'staging')
+      .eq('status', 'processing')
       .single()
 
     if (batchError || !batch) {
-      return { success: false, error: 'ไม่พบ import batch หรือ batch ไม่อยู่ในสถานะ staging' }
+      return { success: false, error: 'ไม่พบ import batch หรือ batch ไม่อยู่ในสถานะ processing' }
     }
 
     const meta = batch.metadata as Record<string, unknown>

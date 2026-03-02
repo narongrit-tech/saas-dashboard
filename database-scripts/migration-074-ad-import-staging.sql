@@ -4,26 +4,16 @@
 --          Client parses XLSX locally, sends small JSON rows → server stores staging
 --          Confirm step reads staging rows (no large payload from client)
 --
+-- NOTE: import_batches.status constraint is NOT changed.
+--       Code uses existing 'processing' status for preview/staging state.
+--       Staging state is tracked by ad_import_staging_rows existence, not status value.
+--
 -- Changes:
---   1. ALTER import_batches status CHECK → add 'staging'
---   2. CREATE TABLE ad_import_staging_rows (temp holding during preview→confirm window)
---   3. RLS + index
+--   1. CREATE TABLE ad_import_staging_rows (temp holding during preview→confirm window)
+--   2. RLS + index
 
 -- ============================================================================
--- 1. Extend import_batches status constraint to include 'staging'
--- ============================================================================
-ALTER TABLE public.import_batches DROP CONSTRAINT IF EXISTS import_batches_status_check;
-
-ALTER TABLE public.import_batches
-  ADD CONSTRAINT import_batches_status_check
-  CHECK (status IN ('processing', 'success', 'failed', 'rolled_back', 'deleted', 'staging'));
-
-COMMENT ON CONSTRAINT import_batches_status_check ON public.import_batches IS
-'Valid status values: processing (active import), success (completed), failed (error),
-rolled_back (data removed), deleted (hard purged), staging (preview parsed, awaiting confirm)';
-
--- ============================================================================
--- 2. Staging table for ads import rows
+-- 1. Staging table for ads import rows
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS public.ad_import_staging_rows (
   id            UUID          NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -40,7 +30,7 @@ CREATE TABLE IF NOT EXISTS public.ad_import_staging_rows (
 );
 
 -- ============================================================================
--- 3. RLS
+-- 2. RLS
 -- ============================================================================
 ALTER TABLE public.ad_import_staging_rows ENABLE ROW LEVEL SECURITY;
 
@@ -51,14 +41,13 @@ CREATE POLICY "Users own staging rows"
   USING (created_by = auth.uid());
 
 -- ============================================================================
--- 4. Index (batch_id query in confirm step)
+-- 3. Index (batch_id query in confirm step)
 -- ============================================================================
 CREATE INDEX IF NOT EXISTS idx_ad_import_staging_batch
   ON public.ad_import_staging_rows (created_by, batch_id);
 
 -- ============================================================================
--- 5. Verification
+-- 4. Verification
 -- ============================================================================
 -- SELECT COUNT(*) FROM public.ad_import_staging_rows;
--- SELECT constraint_name, check_clause FROM information_schema.check_constraints
---   WHERE constraint_name = 'import_batches_status_check';
+-- SELECT tablename, policyname FROM pg_policies WHERE tablename = 'ad_import_staging_rows';
