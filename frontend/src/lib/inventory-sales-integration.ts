@@ -239,13 +239,14 @@ export async function applyCOGSForSingleOrder(
     }
 
     // Apply COGS
-    const success = await applyCOGSForOrderShipped(
+    const applyResult = await applyCOGSForOrderShipped(
       order.order_id,
       order.seller_sku,
       order.quantity,
       order.shipped_at,
       method
     )
+    const success = applyResult.status === 'success'
 
     if (success) {
       console.log(

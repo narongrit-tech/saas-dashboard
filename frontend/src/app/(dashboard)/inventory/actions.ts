@@ -972,13 +972,13 @@ export async function applyCOGSMTD(params: {
 
     const skipReasons = new Map<string, SkipReason>()
 
-    function addSkipReason(
+    const addSkipReason = (
       code: string,
       label: string,
       order_id: string,
       sku?: string,
       detail?: string
-    ) {
+    ) => {
       if (!skipReasons.has(code)) {
         skipReasons.set(code, {
           code,
@@ -988,17 +988,17 @@ export async function applyCOGSMTD(params: {
         })
       }
 
-      const reason = skipReasons.get(code)!
-      reason.count++
+      const entry = skipReasons.get(code)!
+      entry.count += 1
 
-      // Keep only first 5 samples per reason
-      if (reason.samples.length < 5) {
-        reason.samples.push({ order_id, sku, detail })
+      // เก็บตัวอย่างไม่ให้บวม (ปรับ 20 ได้ตามใจ)
+      if (entry.samples.length < 20) {
+        entry.samples.push({ order_id, sku, detail })
       }
-    }
+    };
 
     // Collect run items for logging
-    const runItems: Array<{
+    type RunItem = {
       order_id: string
       sku: string | null
       qty: number | null
@@ -1006,7 +1006,8 @@ export async function applyCOGSMTD(params: {
       reason: string | null
       missing_skus: string[]
       allocated_skus: string[]
-    }> = []
+    }
+    const runItems: RunItem[] = []
 
     const summary = {
       total: orders.length,
@@ -1686,11 +1687,11 @@ export async function getInventoryAvailabilityMaps(): Promise<{
     // Get all unique SKUs from both maps
     const allSkus = new Set([...Object.keys(on_hand_map), ...Object.keys(reserved_map)])
 
-    for (const sku of allSkus) {
+    allSkus.forEach((sku) => {
       const onHand = on_hand_map[sku] || 0
       const reserved = reserved_map[sku] || 0
       available_map[sku] = onHand - reserved
-    }
+    })
 
     return {
       success: true,
@@ -3114,7 +3115,7 @@ export async function saveSkusAndAllocate(params: {
     }
 
     // Validate all sku_internal values exist in inventory_items
-    const skuInternals = [...new Set(updates.map(u => u.sku_internal))]
+    const skuInternals = Array.from(new Set(updates.map((u) => u.sku_internal)))
     const { data: validSkus, error: skuError } = await supabase
       .from('inventory_items')
       .select('sku_internal')
@@ -3165,7 +3166,8 @@ export async function saveSkusAndAllocate(params: {
       skuGroups.get(sku_internal)!.push(order_uuid)
     }
 
-    for (const [sku, uuids] of skuGroups) {
+    const skuGroupEntries = Array.from(skuGroups.entries())
+    for (const [sku, uuids] of skuGroupEntries) {
       const { error: updateError } = await supabase
         .from('sales_orders')
         .update({ seller_sku: sku })

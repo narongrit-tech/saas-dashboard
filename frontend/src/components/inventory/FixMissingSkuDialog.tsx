@@ -125,7 +125,11 @@ export function FixMissingSkuDialog({
     setSkuMap(prev => ({ ...prev, [order_uuid]: sku }))
     // Auto-select the row when a SKU is assigned
     if (sku) {
-      setSelected(prev => new Set([...prev, order_uuid]))
+      setSelected(prev => {
+        const next = new Set(prev)
+        next.add(order_uuid)
+        return next
+      })
     }
   }
 

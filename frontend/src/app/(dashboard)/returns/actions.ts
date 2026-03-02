@@ -1139,7 +1139,7 @@ export async function backfillMissingReturnStock(): Promise<{
     }
 
     // ── Batch-fetch existing COGS reversals for known layer IDs ──────────────
-    const knownLayerIds = [...layerMap.values()]
+    const knownLayerIds = Array.from(layerMap.values())
     const reversedLayerIds = new Set<string>()
     if (knownLayerIds.length > 0) {
       const { data: existingReversals } = await supabase
@@ -1169,7 +1169,7 @@ export async function backfillMissingReturnStock(): Promise<{
     }
 
     // ── Pre-fetch source_platform for channel resolution (Pass A only) ────────
-    const orderUuidsA = [...new Set(needsReceiptLayer.map((r: any) => r.order_id))]
+    const orderUuidsA = Array.from(new Set(needsReceiptLayer.map((r: any) => r.order_id)))
     const channelMap = new Map<string, string>()
     if (orderUuidsA.length > 0) {
       const { data: orderRows } = await supabase
