@@ -2285,6 +2285,9 @@ export async function getMainSkuOutflowSummary(
       baseQuery = baseQuery.in('platform_status', filters.status)
     }
 
+    // Always exclude cancelled orders from Qty Out
+    baseQuery = baseQuery.neq('status_group', 'ยกเลิกแล้ว')
+
     if (filters.paymentStatus && filters.paymentStatus !== 'all') {
       baseQuery = baseQuery.eq('payment_status', filters.paymentStatus)
     }
