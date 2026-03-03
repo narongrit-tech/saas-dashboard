@@ -5,32 +5,47 @@ import { format, subDays } from 'date-fns'
 import { th } from 'date-fns/locale'
 import { getBangkokNow, startOfDayBangkok } from '@/lib/bangkok-time'
 
-export interface TodayStats {
-  totalSales: number
-  totalExpenses: number
+export interface PerformanceSummary {
+  gmv: number
+  adSpend: number
+  cogs: number
+  operating: number
   netProfit: number
+  roas: number
+  startDate: string
+  endDate: string
 }
 
-export interface TrendData {
-  date: string
-  sales: number
-  expenses: number
+export interface PerformanceTrendDay {
+  date: string      // short label e.g. "จ"
+  dateStr: string   // YYYY-MM-DD
+  gmv: number
+  adSpend: number
+  net: number
 }
 
-export interface DashboardData {
-  todayStats: TodayStats
-  trends: TrendData[]
+export interface PerformanceDashboardData {
+  summary: PerformanceSummary
+  trend: PerformanceTrendDay[]
 }
 
-interface ActionResult {
+/**
+ * Get Performance Dashboard data for last 7 days (Bangkok timezone)
+ *
+ * Formula (Economic P&L):
+ * - GMV      = sales_orders (exclude cancelled)
+ * - Ad Spend = ad_daily_performance.spend
+ * - COGS     = inventory_cogs_allocations.amount
+ * - Operating = expenses WHERE category = 'Operating'
+ * - Net       = GMV - AdSpend - COGS - Operating
+ * - ROAS      = GMV / AdSpend
+ */
+export async function getPerformanceDashboard(): Promise<{
   success: boolean
+  data?: PerformanceDashboardData
   error?: string
-  data?: DashboardData
-}
-
-export async function getDashboardStats(): Promise<ActionResult> {
+}> {
   try {
-    // 1. Create Supabase server client and get user
     const supabase = createClient()
     const {
       data: { user },
@@ -41,151 +56,133 @@ export async function getDashboardStats(): Promise<ActionResult> {
       return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
     }
 
-    // 2. Get today's date in Asia/Bangkok timezone
-    // Using explicit Bangkok timezone to prevent date boundary issues
     const today = getBangkokNow()
-    const todayStr = format(today, 'yyyy-MM-dd')
 
-    // For TIMESTAMP columns, use date range instead of equality
-    const todayStart = `${todayStr}T00:00:00+07:00` // Start of day in Bangkok timezone
-    const todayEnd = `${todayStr}T23:59:59+07:00`   // End of day in Bangkok timezone
-
-    // 3. Query Sales Today (exclude Cancelled)
-    // BUSINESS RULE: Revenue = sum(total_amount) where status != 'cancelled'
-    // Cancelled orders must be excluded from revenue calculations
-    const { data: salesTodayData, error: salesTodayError } = await supabase
-      .from('sales_orders')
-      .select('total_amount')
-      .gte('order_date', todayStart)
-      .lte('order_date', todayEnd)
-      .neq('status', 'cancelled')
-
-    if (salesTodayError) {
-      console.error('Error fetching sales today:', salesTodayError)
-      return { success: false, error: `เกิดข้อผิดพลาด: ${salesTodayError.message}` }
-    }
-
-    // FINANCIAL SAFETY: Ensure non-negative, finite, and properly rounded
-    const totalSalesToday = salesTodayData?.reduce((sum, row) => {
-      const amount = row.total_amount || 0
-      return sum + Math.max(0, amount) // Reject negative amounts
-    }, 0) || 0
-    const roundedSalesToday = Math.round(totalSalesToday * 100) / 100
-
-    // 4. Query Expenses Today
-    const { data: expensesTodayData, error: expensesTodayError } = await supabase
-      .from('expenses')
-      .select('amount')
-      .eq('expense_date', todayStr)
-
-    if (expensesTodayError) {
-      console.error('Error fetching expenses today:', expensesTodayError)
-      return { success: false, error: `เกิดข้อผิดพลาด: ${expensesTodayError.message}` }
-    }
-
-    // FINANCIAL SAFETY: Ensure non-negative, finite, and properly rounded
-    const totalExpensesToday = expensesTodayData?.reduce((sum, row) => {
-      const amount = row.amount || 0
-      return sum + Math.max(0, amount) // Reject negative expenses
-    }, 0) || 0
-    const roundedExpensesToday = Math.round(totalExpensesToday * 100) / 100
-
-    // 5. Calculate Net Profit Today (with NaN safety and precision rounding)
-    let netProfitToday = 0
-    if (Number.isFinite(roundedSalesToday) && Number.isFinite(roundedExpensesToday)) {
-      const rawProfit = roundedSalesToday - roundedExpensesToday
-      netProfitToday = Math.round(rawProfit * 100) / 100
-    }
-
-    // 6. Generate last 7 days array (including today)
+    // Build last 7 days array (day-6 … today)
     const last7Days: Date[] = []
     for (let i = 6; i >= 0; i--) {
       last7Days.push(startOfDayBangkok(subDays(today, i)))
     }
 
-    // 7. Query 7-Day Sales Trend (exclude Cancelled)
-    const startDate = format(last7Days[0], 'yyyy-MM-dd')
-    const endDate = format(last7Days[last7Days.length - 1], 'yyyy-MM-dd')
-    const startDateTimestamp = `${startDate}T00:00:00+07:00`
-    const endDateTimestamp = `${endDate}T23:59:59+07:00`
+    const startDateStr = format(last7Days[0], 'yyyy-MM-dd')
+    const endDateStr = format(today, 'yyyy-MM-dd')
+    const startTimestamp = `${startDateStr}T00:00:00+07:00`
+    const endTimestamp = `${endDateStr}T23:59:59+07:00`
 
-    const { data: salesTrendData, error: salesTrendError } = await supabase
-      .from('sales_orders')
-      .select('order_date, total_amount')
-      .gte('order_date', startDateTimestamp)
-      .lte('order_date', endDateTimestamp)
-      .neq('status', 'cancelled')
+    // --- Fetch all sources in parallel ---
+    const [salesRes, adRes, cogsRes, opRes] = await Promise.all([
+      supabase
+        .from('sales_orders')
+        .select('order_date, total_amount')
+        .gte('order_date', startTimestamp)
+        .lte('order_date', endTimestamp)
+        .neq('status', 'cancelled'),
 
-    if (salesTrendError) {
-      console.error('Error fetching sales trend:', salesTrendError)
-      return { success: false, error: `เกิดข้อผิดพลาด: ${salesTrendError.message}` }
-    }
+      supabase
+        .from('ad_daily_performance')
+        .select('ad_date, spend')
+        .gte('ad_date', startDateStr)
+        .lte('ad_date', endDateStr),
 
-    // Group sales by date (extract date part from TIMESTAMP)
-    // FINANCIAL SAFETY: Reject negative amounts and round per-date totals
-    const salesByDate = new Map<string, number>()
-    salesTrendData?.forEach((row) => {
-      // Extract date part from timestamp (e.g., "2026-01-19T15:30:00+07:00" -> "2026-01-19")
+      supabase
+        .from('inventory_cogs_allocations')
+        .select('shipped_at, amount')
+        .gte('shipped_at', startTimestamp)
+        .lte('shipped_at', endTimestamp),
+
+      supabase
+        .from('expenses')
+        .select('expense_date, amount')
+        .gte('expense_date', startDateStr)
+        .lte('expense_date', endDateStr)
+        .eq('category', 'Operating'),
+    ])
+
+    if (salesRes.error) throw new Error(`Sales query failed: ${salesRes.error.message}`)
+    if (adRes.error) throw new Error(`Ads query failed: ${adRes.error.message}`)
+    if (cogsRes.error) throw new Error(`COGS query failed: ${cogsRes.error.message}`)
+    if (opRes.error) throw new Error(`Operating expenses query failed: ${opRes.error.message}`)
+
+    // --- Aggregate per day ---
+    const gmvByDate = new Map<string, number>()
+    const adByDate = new Map<string, number>()
+    const cogsByDate = new Map<string, number>()
+    const opByDate = new Map<string, number>()
+
+    salesRes.data?.forEach((row) => {
       const date = row.order_date.split('T')[0]
-      const current = salesByDate.get(date) || 0
-      const amount = Math.max(0, row.total_amount || 0)
-      salesByDate.set(date, current + amount)
+      gmvByDate.set(date, (gmvByDate.get(date) || 0) + Math.max(0, row.total_amount || 0))
     })
 
-    // 8. Query 7-Day Expenses Trend
-    const { data: expensesTrendData, error: expensesTrendError } = await supabase
-      .from('expenses')
-      .select('expense_date, amount')
-      .gte('expense_date', startDate)
-      .lte('expense_date', endDate)
+    adRes.data?.forEach((row) => {
+      const date = row.ad_date
+      adByDate.set(date, (adByDate.get(date) || 0) + Math.max(0, row.spend || 0))
+    })
 
-    if (expensesTrendError) {
-      console.error('Error fetching expenses trend:', expensesTrendError)
-      return { success: false, error: `เกิดข้อผิดพลาด: ${expensesTrendError.message}` }
-    }
+    cogsRes.data?.forEach((row) => {
+      const date = row.shipped_at.split('T')[0]
+      // COGS allocations can include reversals (negative), sum them as-is
+      cogsByDate.set(date, (cogsByDate.get(date) || 0) + (row.amount || 0))
+    })
 
-    // Group expenses by date
-    // FINANCIAL SAFETY: Reject negative amounts and round per-date totals
-    const expensesByDate = new Map<string, number>()
-    expensesTrendData?.forEach((row) => {
+    opRes.data?.forEach((row) => {
       const date = row.expense_date
-      const current = expensesByDate.get(date) || 0
-      const amount = Math.max(0, row.amount || 0)
-      expensesByDate.set(date, current + amount)
+      opByDate.set(date, (opByDate.get(date) || 0) + Math.max(0, row.amount || 0))
     })
 
-    // 9. Merge with generated dates and format (with NaN safety and precision rounding)
-    const trends: TrendData[] = last7Days.map((date) => {
-      const dateStr = format(date, 'yyyy-MM-dd')
-      const dayLabel = format(date, 'EEE', { locale: th })
-
-      const sales = salesByDate.get(dateStr) || 0
-      const expenses = expensesByDate.get(dateStr) || 0
-
-      // Round to 2 decimal places (currency precision)
-      const roundedSales = Math.round(sales * 100) / 100
-      const roundedExpenses = Math.round(expenses * 100) / 100
-
-      return {
-        date: dayLabel,
-        sales: Number.isFinite(roundedSales) && roundedSales >= 0 ? roundedSales : 0,
-        expenses: Number.isFinite(roundedExpenses) && roundedExpenses >= 0 ? roundedExpenses : 0,
-      }
+    // --- Build trend array ---
+    const trend: PerformanceTrendDay[] = last7Days.map((d) => {
+      const dateStr = format(d, 'yyyy-MM-dd')
+      const dayLabel = format(d, 'EEE', { locale: th })
+      const gmv = Math.round((gmvByDate.get(dateStr) || 0) * 100) / 100
+      const adSpend = Math.round((adByDate.get(dateStr) || 0) * 100) / 100
+      const cogs = Math.round(Math.max(0, cogsByDate.get(dateStr) || 0) * 100) / 100
+      const op = Math.round((opByDate.get(dateStr) || 0) * 100) / 100
+      const net = Math.round((gmv - adSpend - cogs - op) * 100) / 100
+      return { date: dayLabel, dateStr, gmv, adSpend, net }
     })
 
-    // 10. Build result (using rounded values for financial accuracy)
-    const dashboardData: DashboardData = {
-      todayStats: {
-        totalSales: roundedSalesToday,
-        totalExpenses: roundedExpensesToday,
-        netProfit: netProfitToday,
+    // --- Summary totals ---
+    const totalGMV = last7Days.reduce(
+      (s, d) => s + Math.max(0, gmvByDate.get(format(d, 'yyyy-MM-dd')) || 0),
+      0
+    )
+    const totalAdSpend = last7Days.reduce(
+      (s, d) => s + Math.max(0, adByDate.get(format(d, 'yyyy-MM-dd')) || 0),
+      0
+    )
+    const totalCOGS = last7Days.reduce((s, d) => {
+      const raw = cogsByDate.get(format(d, 'yyyy-MM-dd')) || 0
+      return s + Math.max(0, raw)
+    }, 0)
+    const totalOp = last7Days.reduce(
+      (s, d) => s + Math.max(0, opByDate.get(format(d, 'yyyy-MM-dd')) || 0),
+      0
+    )
+
+    const round2 = (n: number) => Math.round(n * 100) / 100
+
+    const netProfit = round2(totalGMV - totalAdSpend - totalCOGS - totalOp)
+    const roas = totalAdSpend > 0 ? round2(totalGMV / totalAdSpend) : 0
+
+    return {
+      success: true,
+      data: {
+        summary: {
+          gmv: round2(totalGMV),
+          adSpend: round2(totalAdSpend),
+          cogs: round2(totalCOGS),
+          operating: round2(totalOp),
+          netProfit,
+          roas,
+          startDate: startDateStr,
+          endDate: endDateStr,
+        },
+        trend,
       },
-      trends,
     }
-
-    return { success: true, data: dashboardData }
   } catch (error) {
-    console.error('Unexpected error in getDashboardStats:', error)
+    console.error('[getPerformanceDashboard] error:', error)
     return {
       success: false,
       error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
