@@ -10,7 +10,6 @@ import {
   Receipt,
   Package,
   CreditCard,
-  BarChart3,
   Wallet,
   TrendingUp,
   Settings,
@@ -24,6 +23,7 @@ import {
   ChevronRight,
   ArrowLeftCircle,
   Tags,
+  Banknote,
 } from 'lucide-react'
 
 interface MenuItem {
@@ -44,14 +44,14 @@ const menuGroups: MenuGroup[] = [
     defaultExpanded: true,
     items: [
       {
-        title: 'Dashboard',
+        title: 'Performance',
         href: '/',
         icon: LayoutDashboard,
       },
       {
-        title: 'Daily P&L',
-        href: '/daily-pl',
-        icon: BarChart3,
+        title: 'Cash P&L',
+        href: '/reports/cash-pl',
+        icon: Banknote,
       },
     ],
   },
