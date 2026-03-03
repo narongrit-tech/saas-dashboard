@@ -481,6 +481,11 @@ export async function parseTikTokAdsFile(
       const orders = mapping.orders ? parseNumeric(row[mapping.orders]) : 0
       const roas   = mapping.roas   ? parseNumeric(row[mapping.roas])   : 0
 
+      // Skip rows with no activity (spend=0, gmv=0, orders=0)
+      // This filters out inactive creatives/campaigns that appear in creative-level
+      // reports but had no delivery on this day — keeps DB clean and totals accurate.
+      if (spend === 0 && gmv === 0 && orders === 0) continue
+
       // Aggregate
       const key = `${dateFormatted}\x00${campaignName}`
       const existing = campaignAggregates.get(key)
