@@ -144,6 +144,11 @@ export async function parseTigerReportFile(
         continue // Skip empty rows
       }
 
+      // Skip TikTok summary footer rows (e.g. "Total of 33 results")
+      if (/^total\s+of\s+\d+/i.test(String(campaignName))) {
+        continue
+      }
+
       const cost = parseFloat(String(costValue).replace(/[^0-9.-]/g, ''))
       if (isNaN(cost)) {
         continue // Skip invalid cost

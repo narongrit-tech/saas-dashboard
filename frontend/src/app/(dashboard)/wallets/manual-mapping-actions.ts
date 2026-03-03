@@ -318,9 +318,15 @@ export async function parseWithCustomMapping(
         parsed.roi = Math.round(parsed.roi * 100) / 100
       }
 
+      // Skip TikTok summary footer rows (e.g. "Total of 33 results")
+      const isSummaryRow = /^total\s+of\s+\d+/i.test(parsed.campaignName)
+
       // Only add rows with campaign name and spend
-      if (hasData && parsed.campaignName && parsed.spend > 0) {
+      if (hasData && parsed.campaignName && parsed.spend > 0 && !isSummaryRow) {
         parsedRows.push(parsed)
+      } else if (isSummaryRow) {
+        // Subtract summary row cost that was already added to totalSpend above
+        totalSpend -= parsed.spend
       }
     }
 
