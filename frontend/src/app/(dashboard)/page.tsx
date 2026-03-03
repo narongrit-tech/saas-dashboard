@@ -1,7 +1,13 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { TrendingUp, TrendingDown, DollarSign, Megaphone, Package, AlertCircle } from 'lucide-react'
+import { format, subDays, parseISO, isValid } from 'date-fns'
 import { getPerformanceDashboard } from './actions'
+import type { GmvBasis, CogsBasis } from './actions'
+import { getBangkokNow } from '@/lib/bangkok-time'
 import { PerformanceTrendChart } from '@/components/dashboard/PerformanceTrendChart'
+import { AdsBreakdownSection } from '@/components/dashboard/AdsBreakdownSection'
+import { DateRangePickerClient } from '@/components/dashboard/DateRangePickerClient'
+import { BasisToggleClient } from '@/components/dashboard/BasisToggleClient'
 
 export const dynamic = 'force-dynamic'
 
@@ -12,16 +18,33 @@ function formatCurrency(amount: number): string {
   })
 }
 
-function formatDateRange(startDate: string, endDate: string): string {
-  const fmt = (d: string) => {
-    const [, m, day] = d.split('-')
-    return `${parseInt(day)}/${parseInt(m)}`
-  }
-  return `${fmt(startDate)} – ${fmt(endDate)}`
+function isValidDateParam(s: string | undefined): s is string {
+  if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false
+  const d = parseISO(s)
+  if (!isValid(d)) return false
+  if (d.getFullYear() < 2020) return false
+  const today = getBangkokNow()
+  today.setHours(23, 59, 59, 999)
+  return d <= today
 }
 
-export default async function PerformanceDashboardPage() {
-  const result = await getPerformanceDashboard()
+export default async function PerformanceDashboardPage({
+  searchParams,
+}: {
+  searchParams: { from?: string; to?: string; gmvBasis?: string; cogsBasis?: string }
+}) {
+  // Resolve date range — fall back to last 7 days (Bangkok) if params missing/invalid
+  const today = getBangkokNow()
+  const defaultFrom = format(subDays(today, 6), 'yyyy-MM-dd')
+  const defaultTo = format(today, 'yyyy-MM-dd')
+  const from = isValidDateParam(searchParams.from) ? searchParams.from : defaultFrom
+  const to   = isValidDateParam(searchParams.to)   ? searchParams.to   : defaultTo
+
+  // Resolve basis params — strict whitelist, default to canonical values
+  const gmvBasis:  GmvBasis  = searchParams.gmvBasis  === 'paid'    ? 'paid'    : 'created'
+  const cogsBasis: CogsBasis = searchParams.cogsBasis === 'created' ? 'created' : 'shipped'
+
+  const result = await getPerformanceDashboard(from, to, gmvBasis, cogsBasis)
 
   if (!result.success || !result.data) {
     return (
@@ -43,11 +66,17 @@ export default async function PerformanceDashboardPage() {
   return (
     <div className="space-y-6">
       {/* Page Header */}
-      <div>
-        <h1 className="text-3xl font-bold">Performance Dashboard</h1>
-        <p className="text-muted-foreground">
-          7 วันที่ผ่านมา ({formatDateRange(summary.startDate, summary.endDate)}) · Asia/Bangkok
-        </p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-3xl font-bold">Performance Dashboard</h1>
+          <p className="text-muted-foreground">
+            {summary.startDate} – {summary.endDate} · Asia/Bangkok
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-2">
+          <DateRangePickerClient from={from} to={to} />
+          <BasisToggleClient gmvBasis={gmvBasis} cogsBasis={cogsBasis} />
+        </div>
       </div>
 
       {/* Summary Cards */}
@@ -55,7 +84,7 @@ export default async function PerformanceDashboardPage() {
         {/* GMV */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">GMV (7 วัน)</CardTitle>
+            <CardTitle className="text-sm font-medium">GMV {gmvBasis === 'paid' ? '(Paid Date)' : '(Order Date)'}</CardTitle>
             <div className="rounded-lg bg-green-50 p-2 text-green-600">
               <TrendingUp className="h-4 w-4" />
             </div>
@@ -64,14 +93,16 @@ export default async function PerformanceDashboardPage() {
             <div className="text-2xl font-bold text-green-600">
               ฿{formatCurrency(summary.gmv)}
             </div>
-            <p className="text-xs text-muted-foreground mt-1">ยอดขายรวม (ไม่รวมยกเลิก)</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {gmvBasis === 'created' ? 'ยอดขายตามวันสร้างออเดอร์' : 'ยอดขายตามวันชำระเงิน'}
+            </p>
           </CardContent>
         </Card>
 
         {/* Ad Spend */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Ad Spend (7 วัน)</CardTitle>
+            <CardTitle className="text-sm font-medium">Ad Spend (ช่วงที่เลือก)</CardTitle>
             <div className="rounded-lg bg-purple-50 p-2 text-purple-600">
               <Megaphone className="h-4 w-4" />
             </div>
@@ -87,7 +118,7 @@ export default async function PerformanceDashboardPage() {
         {/* COGS */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">COGS (7 วัน)</CardTitle>
+            <CardTitle className="text-sm font-medium">COGS {cogsBasis === 'created' ? '(Order Date)' : '(Shipped Date)'}</CardTitle>
             <div className="rounded-lg bg-orange-50 p-2 text-orange-600">
               <Package className="h-4 w-4" />
             </div>
@@ -96,14 +127,16 @@ export default async function PerformanceDashboardPage() {
             <div className="text-2xl font-bold text-orange-600">
               ฿{formatCurrency(summary.cogs)}
             </div>
-            <p className="text-xs text-muted-foreground mt-1">ต้นทุนขาย (FIFO/AVG)</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {cogsBasis === 'shipped' ? 'ต้นทุนตามวันจัดส่ง (FIFO/AVG)' : 'ต้นทุนตามวันสร้างออเดอร์ · มุมมองวิเคราะห์'}
+            </p>
           </CardContent>
         </Card>
 
         {/* Operating */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Operating (7 วัน)</CardTitle>
+            <CardTitle className="text-sm font-medium">Operating (ช่วงที่เลือก)</CardTitle>
             <div className="rounded-lg bg-blue-50 p-2 text-blue-600">
               <DollarSign className="h-4 w-4" />
             </div>
@@ -119,7 +152,7 @@ export default async function PerformanceDashboardPage() {
         {/* Net Profit */}
         <Card className={isProfit ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Net Profit (7 วัน)</CardTitle>
+            <CardTitle className="text-sm font-medium">Net Profit (ช่วงที่เลือก)</CardTitle>
             <div className={`rounded-lg p-2 ${isProfit ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
               {isProfit ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
             </div>
@@ -137,7 +170,7 @@ export default async function PerformanceDashboardPage() {
         {/* ROAS */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">ROAS (7 วัน)</CardTitle>
+            <CardTitle className="text-sm font-medium">ROAS (ช่วงที่เลือก)</CardTitle>
             <div className="rounded-lg bg-yellow-50 p-2 text-yellow-600">
               <TrendingUp className="h-4 w-4" />
             </div>
@@ -154,22 +187,39 @@ export default async function PerformanceDashboardPage() {
       {/* Trend Chart */}
       <Card>
         <CardHeader>
-          <CardTitle>Trend: GMV vs Ad Spend vs Net Profit (7 วัน)</CardTitle>
+          <CardTitle>
+            Trend: GMV{gmvBasis === 'paid' ? ' (Paid)' : ''} vs Ad Spend vs Net Profit
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <PerformanceTrendChart data={trend} />
         </CardContent>
       </Card>
 
+      {/* Ads Breakdown */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Ads Breakdown (Performance)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <AdsBreakdownSection from={from} to={to} />
+        </CardContent>
+      </Card>
+
       {/* P&L Breakdown */}
       <Card>
         <CardHeader>
-          <CardTitle>P&L Breakdown (7 วัน)</CardTitle>
+          <CardTitle>
+            P&L Breakdown
+            {(gmvBasis !== 'created' || cogsBasis !== 'shipped') && (
+              <span className="ml-2 text-sm font-normal text-amber-600">· Mixed basis</span>
+            )}
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
             <div className="flex justify-between border-b pb-2">
-              <span className="font-medium">GMV (Revenue)</span>
+              <span className="font-medium">GMV ({gmvBasis === 'paid' ? 'Paid Date' : 'Order Date'})</span>
               <span className="font-mono text-green-600">
                 ฿{formatCurrency(summary.gmv)}
               </span>
@@ -181,7 +231,7 @@ export default async function PerformanceDashboardPage() {
               </span>
             </div>
             <div className="flex justify-between border-b pb-2">
-              <span className="font-medium">Less: COGS</span>
+              <span className="font-medium">Less: COGS ({cogsBasis === 'created' ? 'Order Date' : 'Shipped'})</span>
               <span className="font-mono text-red-600">
                 (฿{formatCurrency(summary.cogs)})
               </span>
