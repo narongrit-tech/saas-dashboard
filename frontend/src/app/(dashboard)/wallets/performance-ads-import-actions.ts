@@ -350,3 +350,66 @@ export async function confirmAdsImport(
     }
   }
 }
+
+// ─── Notification: Multi-file import complete ──────────────────────────────────
+
+/**
+ * Create a bell notification after a background multi-file ads import completes.
+ * Called when the dialog was closed before processing finished.
+ */
+export async function createAdsImportNotification(
+  results: Array<{
+    fileName: string
+    status: 'done' | 'error'
+    spend?: number
+    gmv?: number
+    orders?: number
+    batchId?: string
+    error?: string
+  }>
+): Promise<void> {
+  try {
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+    if (authError || !user) return
+
+    const done = results.filter((r) => r.status === 'done')
+    const failed = results.filter((r) => r.status === 'error')
+    const totalSpend = done.reduce((s, r) => s + (r.spend ?? 0), 0)
+    const totalGMV = done.reduce((s, r) => s + (r.gmv ?? 0), 0)
+    const totalOrders = done.reduce((s, r) => s + (r.orders ?? 0), 0)
+
+    const fmt = (n: number) =>
+      new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)
+
+    const title = `Import Ads เสร็จสิ้น — ${done.length}/${results.length} ไฟล์`
+    const bodyParts = [
+      `Spend: ${fmt(totalSpend)} THB`,
+      `GMV: ${fmt(totalGMV)} THB`,
+      `Orders: ${totalOrders}`,
+      failed.length > 0 ? `${failed.length} ไฟล์ล้มเหลว` : null,
+    ].filter(Boolean)
+    const body = bodyParts.join(' | ')
+
+    const firstBatchId = done.find((r) => r.batchId)?.batchId ?? user.id
+
+    const { error } = await supabase.from('notifications').insert({
+      created_by: user.id,
+      type: 'ads_import',
+      title,
+      body,
+      entity_type: 'ads_import',
+      entity_id: firstBatchId,
+      is_read: false,
+    })
+
+    if (error) {
+      console.error('createAdsImportNotification error:', error)
+    }
+  } catch (err) {
+    console.error('Unexpected error in createAdsImportNotification:', err)
+  }
+}
