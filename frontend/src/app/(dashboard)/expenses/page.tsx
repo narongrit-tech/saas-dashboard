@@ -43,11 +43,13 @@ import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
 import { BulkDeleteConfirmDialog } from '@/components/expenses/BulkDeleteConfirmDialog'
 import { ExpensesImportDialog } from '@/components/expenses/ExpensesImportDialog'
 import { ConfirmPaidDialog } from '@/components/expenses/ConfirmPaidDialog'
+import { BulkConfirmPaidDialog } from '@/components/expenses/BulkConfirmPaidDialog'
 import {
   deleteExpense,
   exportExpenses,
   getExpensesSelectionSummary,
   deleteExpensesSelected,
+  getIsAdmin,
   SelectionMode,
 } from '@/app/(dashboard)/expenses/actions'
 import { downloadExpenseTemplate } from '@/app/(dashboard)/expenses/template-actions'
@@ -94,6 +96,10 @@ export default function ExpensesPage() {
   // Cash-basis export toggle
   const [exportCashBasis, setExportCashBasis] = useState(false)
 
+  // Admin + bulk confirm
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [showBulkConfirmDialog, setShowBulkConfirmDialog] = useState(false)
+
   // Bulk selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('ids')
@@ -119,6 +125,10 @@ export default function ExpensesPage() {
 
   const [subcategoryFilter, setSubcategoryFilter] = useState<string>('All')
   const [subcategories, setSubcategories] = useState<string[]>([])
+
+  useEffect(() => {
+    getIsAdmin().then((r) => setIsAdmin(r.isAdmin))
+  }, [])
 
   useEffect(() => {
     fetchExpenses()
@@ -617,6 +627,17 @@ export default function ExpensesPage() {
               <Button variant="outline" size="sm" onClick={handleClearSelection}>
                 ยกเลิกการเลือก
               </Button>
+              {isAdmin && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  className="bg-green-600 hover:bg-green-700 text-white"
+                  onClick={() => setShowBulkConfirmDialog(true)}
+                >
+                  <CheckCircle className="mr-2 h-4 w-4" />
+                  ยืนยันจ่ายแล้ว ({selectionMode === 'filtered' ? totalCount : selectedIds.size} รายการ)
+                </Button>
+              )}
               <Button variant="destructive" size="sm" onClick={handleBulkDeleteClick}>
                 <Trash2 className="mr-2 h-4 w-4" />
                 ลบที่เลือก
@@ -793,6 +814,17 @@ export default function ExpensesPage() {
         onOpenChange={setShowConfirmPaidDialog}
         expense={selectedExpense}
         onSuccess={fetchExpenses}
+      />
+
+      <BulkConfirmPaidDialog
+        open={showBulkConfirmDialog}
+        onOpenChange={setShowBulkConfirmDialog}
+        selectedIds={Array.from(selectedIds)}
+        onSuccess={() => {
+          setShowBulkConfirmDialog(false)
+          handleClearSelection()
+          fetchExpenses()
+        }}
       />
 
       <DeleteConfirmDialog

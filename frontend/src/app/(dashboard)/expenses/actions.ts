@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { sanitizeCSVField } from '@/lib/csv'
 import { CreateExpenseInput, UpdateExpenseInput, ExpenseCategory, ExpenseAttachment } from '@/types/expenses'
 import { getBangkokNow, formatBangkok } from '@/lib/bangkok-time'
+import type { SupabaseClient } from '@supabase/supabase-js'
 
 interface ActionResult {
   success: boolean
@@ -352,9 +353,9 @@ export async function confirmExpensePaid(
       return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
     }
 
-    if (!paidDate || paidDate.trim() === '') {
-      return { success: false, error: 'กรุณาระบุวันที่จ่ายเงิน' }
-    }
+    const effectivePaidDate =
+      paidDate?.trim() ||
+      new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' }) // YYYY-MM-DD in BKK
 
     // 1. Fetch expense and verify ownership + status
     const { data: expense, error: fetchError } = await supabase
@@ -375,27 +376,13 @@ export async function confirmExpensePaid(
       return { success: false, error: 'รายการนี้ยืนยันจ่ายแล้ว' }
     }
 
-    // 2. Require at least 1 attachment (slip)
-    const { count: attachmentCount, error: countError } = await supabase
-      .from('expense_attachments')
-      .select('id', { count: 'exact', head: true })
-      .eq('expense_id', expenseId)
-
-    if (countError) {
-      return { success: false, error: 'เกิดข้อผิดพลาดในการตรวจสอบสลิป' }
-    }
-
-    if (!attachmentCount || attachmentCount === 0) {
-      return { success: false, error: 'กรุณาแนบสลิปการจ่ายเงินก่อนยืนยัน' }
-    }
-
-    // 3. Update expense to PAID
+    // 2. Update expense to PAID
     const now = new Date().toISOString()
     const { data: updatedExpense, error: updateError } = await supabase
       .from('expenses')
       .update({
         expense_status: 'PAID',
-        paid_date: paidDate,
+        paid_date: effectivePaidDate,
         paid_confirmed_at: now,
         paid_confirmed_by: user.id,
         updated_at: now,
@@ -415,7 +402,7 @@ export async function confirmExpensePaid(
       p_performed_by: user.id,
       p_changes: {
         before: { expense_status: 'DRAFT' },
-        after: { expense_status: 'PAID', paid_date: paidDate, paid_confirmed_at: now },
+        after: { expense_status: 'PAID', paid_date: effectivePaidDate, paid_confirmed_at: now },
       },
     })
 
@@ -1031,5 +1018,72 @@ export async function exportExpenses(filters: ExportFilters): Promise<ExportResu
       success: false,
       error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
     }
+  }
+}
+
+// ============================================================
+// ADMIN HELPERS + BULK CONFIRM PAID
+// ============================================================
+
+async function checkIsAdmin(supabase: SupabaseClient, userId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', userId)
+    .single()
+  return data?.role === 'admin'
+}
+
+export async function getIsAdmin(): Promise<{ isAdmin: boolean }> {
+  const supabase = createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { isAdmin: false }
+  return { isAdmin: await checkIsAdmin(supabase, user.id) }
+}
+
+export async function bulkConfirmExpensesPaid(
+  expenseIds: string[],
+  paidDate: string
+): Promise<{ success: boolean; error?: string; confirmedCount?: number; skippedCount?: number }> {
+  try {
+    if (!expenseIds?.length) return { success: false, error: 'ไม่มีรายการที่เลือก' }
+
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้' }
+
+    const isAdmin = await checkIsAdmin(supabase, user.id)
+    if (!isAdmin) return { success: false, error: 'เฉพาะผู้ดูแลระบบเท่านั้น' }
+
+    const effectivePaidDate =
+      paidDate?.trim() ||
+      new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' })
+
+    const now = new Date().toISOString()
+    const { data: updated, error: updateError } = await supabase
+      .from('expenses')
+      .update({
+        expense_status: 'PAID',
+        paid_date: effectivePaidDate,
+        paid_confirmed_at: now,
+        paid_confirmed_by: user.id,
+        updated_at: now,
+      })
+      .in('id', expenseIds)
+      .eq('expense_status', 'DRAFT') // skip already-PAID
+      .select('id')
+
+    if (updateError) return { success: false, error: updateError.message }
+
+    const confirmedCount = updated?.length ?? 0
+    const skippedCount = expenseIds.length - confirmedCount
+    return { success: true, confirmedCount, skippedCount }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'เกิดข้อผิดพลาด' }
   }
 }

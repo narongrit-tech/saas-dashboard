@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Expense } from '@/types/expenses'
-import { Loader2, CheckCircle, AlertCircle } from 'lucide-react'
+import { Loader2, CheckCircle } from 'lucide-react'
 import { confirmExpensePaid, getExpenseAttachments } from '@/app/(dashboard)/expenses/actions'
 import { AttachmentsSection } from './AttachmentsSection'
 import { getTodayBangkokString } from '@/lib/bangkok-date-range'
@@ -64,11 +64,6 @@ export function ConfirmPaidDialog({
 
     if (!paidDate) {
       setError('กรุณาระบุวันที่จ่ายเงิน')
-      return
-    }
-
-    if (attachmentCount === 0) {
-      setError('กรุณาแนบสลิปการจ่ายเงินก่อนยืนยัน')
       return
     }
 
@@ -184,12 +179,6 @@ export function ConfirmPaidDialog({
                 expenseStatus={expense.expense_status}
                 onUpdate={handleAttachmentUpdate}
               />
-              {attachmentCount === 0 && (
-                <div className="flex items-center gap-1.5 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
-                  <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                  ต้องแนบสลิปอย่างน้อย 1 ไฟล์ก่อนยืนยัน
-                </div>
-              )}
             </div>
 
             {/* Error */}
@@ -210,7 +199,7 @@ export function ConfirmPaidDialog({
               <Button
                 type="button"
                 onClick={handleConfirm}
-                disabled={confirming || attachmentCount === 0}
+                disabled={confirming}
                 className="bg-green-600 hover:bg-green-700 text-white"
               >
                 {confirming ? (
