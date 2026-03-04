@@ -1,5 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { TrendingUp, Megaphone, Package, AlertCircle } from 'lucide-react'
+import { TrendingUp, Megaphone, AlertCircle } from 'lucide-react'
 import { format, subDays, parseISO, isValid } from 'date-fns'
 import { getPerformanceDashboard, getExpensePickerTotal } from './actions'
 import type { GmvBasis, CogsBasis } from './actions'
@@ -9,6 +9,7 @@ import { AdsBreakdownSection } from '@/components/dashboard/AdsBreakdownSection'
 import { DateRangePickerClient } from '@/components/dashboard/DateRangePickerClient'
 import { BasisToggleClient } from '@/components/dashboard/BasisToggleClient'
 import { OperatingNetCards } from '@/components/dashboard/OperatingNetCards'
+import { CogsCard } from '@/components/dashboard/CogsCard'
 import { parsePickerState } from '@/lib/expense-picker'
 
 export const dynamic = 'force-dynamic'
@@ -142,23 +143,13 @@ export default async function PerformanceDashboardPage({
           </CardContent>
         </Card>
 
-        {/* COGS */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">COGS {cogsBasis === 'created' ? '(Order Date)' : '(Shipped Date)'}</CardTitle>
-            <div className="rounded-lg bg-orange-50 p-2 text-orange-600">
-              <Package className="h-4 w-4" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-orange-600">
-              ฿{formatCurrency(summary.cogs)}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {cogsBasis === 'shipped' ? 'ต้นทุนตามวันจัดส่ง (FIFO/AVG)' : 'ต้นทุนตามวันสร้างออเดอร์ · มุมมองวิเคราะห์'}
-            </p>
-          </CardContent>
-        </Card>
+        {/* COGS — clickable, opens drilldown modal */}
+        <CogsCard
+          amount={summary.cogs}
+          cogsBasis={cogsBasis}
+          from={from}
+          to={to}
+        />
 
         {/* Operating + Tax + Net Profit — client component (both cards open picker modals) */}
         <OperatingNetCards

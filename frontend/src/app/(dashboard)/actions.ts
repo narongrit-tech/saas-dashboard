@@ -841,3 +841,182 @@ export async function getExpensePickerCategories(
     return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
   }
 }
+
+// ─── COGS Drilldown ────────────────────────────────────────────────────────────
+
+/** Per-SKU allocation summary row (aggregated from inventory_cogs_allocations). */
+export interface CogsAllocationRow {
+  sku_internal: string
+  qty_total: number       // net qty (Math.max(0,...) per row → excludes reversals, consistent with dashboard)
+  total_cost: number      // net cost
+  avg_unit_cost: number   // total_cost / qty_total
+}
+
+/** Per-subcategory COGS expense summary. */
+export interface CogsExpensesBreakdownRow {
+  subcategory: string     // '(ไม่ระบุ)' when null
+  total: number
+}
+
+/**
+ * Aggregate inventory_cogs_allocations by sku_internal for the given date range + basis.
+ *
+ * basis='shipped'  → filter by shipped_at timestamp in [from, to] (Bangkok)
+ * basis='created'  → resolve sales_orders in [from, to] by COALESCE(created_time, order_date),
+ *                    then chunk-query allocations by order UUID (mirrors fetchCOGSByCreatedDate)
+ *
+ * Uses Math.max(0, amount/qty) to match the dashboard COGS total exactly
+ * (reversals are clamped to 0, not deducted).
+ */
+export async function getCogsAllocationBreakdown(params: {
+  from: string
+  to: string
+  basis: CogsBasis  // 'shipped' | 'created'
+}): Promise<{
+  success: boolean
+  data?: { rows: CogsAllocationRow[]; totalCost: number; totalQty: number }
+  error?: string
+}> {
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+
+    const { from, to, basis } = params
+    const skuMap = new Map<string, { qty: number; cost: number }>()
+
+    const accumulate = (sku: string, qty: number, cost: number) => {
+      const cur = skuMap.get(sku) ?? { qty: 0, cost: 0 }
+      cur.qty  += Math.max(0, qty)
+      cur.cost += Math.max(0, cost)
+      skuMap.set(sku, cur)
+    }
+
+    if (basis === 'shipped') {
+      // ── Shipped basis: direct filter by shipped_at ──────────────────────
+      const startTs = `${from}T00:00:00+07:00`
+      const endTs   = `${to}T23:59:59+07:00`
+
+      const { data, error } = await supabase
+        .from('inventory_cogs_allocations')
+        .select('sku_internal, qty, amount')
+        .gte('shipped_at', startTs)
+        .lte('shipped_at', endTs)
+        .range(0, 9999)
+
+      if (error) throw new Error(`COGS allocation (shipped) failed: ${error.message}`)
+
+      for (const row of data ?? []) {
+        accumulate(row.sku_internal as string, Number(row.qty) || 0, Number(row.amount) || 0)
+      }
+    } else {
+      // ── Order (created) basis: resolve orders first, then chunk-query allocations ──
+      const PAGE_SIZE = 1000
+      const allOrderIds: string[] = []
+      let offset = 0
+      let hasMore = true
+
+      while (hasMore) {
+        const { data: orders, error } = await supabase
+          .from('sales_orders')
+          .select('id, created_time, order_date')
+          .gte('order_date', `${from}T00:00:00+07:00`)
+          .lte('order_date', `${to}T23:59:59.999+07:00`)
+          .range(offset, offset + PAGE_SIZE - 1)
+
+        if (error) throw new Error(`COGS (order basis) order query failed: ${error.message}`)
+        if (!orders || orders.length === 0) { hasMore = false; break }
+
+        for (const o of orders) {
+          const effective = o.created_time || o.order_date
+          if (!effective) continue
+          const dateStr = toBangkokDateString(new Date(effective))
+          if (dateStr >= from && dateStr <= to) allOrderIds.push(o.id)
+        }
+
+        hasMore = orders.length === PAGE_SIZE
+        offset += PAGE_SIZE
+      }
+
+      if (allOrderIds.length > 0) {
+        const CHUNK = 200
+        for (let i = 0; i < allOrderIds.length; i += CHUNK) {
+          const chunk = allOrderIds.slice(i, i + CHUNK)
+          const { data: allocs, error } = await supabase
+            .from('inventory_cogs_allocations')
+            .select('sku_internal, qty, amount')
+            .filter('order_id::text', 'in', `(${chunk.join(',')})`)
+
+          if (error) throw new Error(`COGS allocation (order) chunk query failed: ${error.message}`)
+
+          for (const row of allocs ?? []) {
+            accumulate(row.sku_internal as string, Number(row.qty) || 0, Number(row.amount) || 0)
+          }
+        }
+      }
+    }
+
+    // Build output rows sorted by total_cost desc
+    const rows: CogsAllocationRow[] = Array.from(skuMap.entries())
+      .map(([sku_internal, { qty, cost }]) => ({
+        sku_internal,
+        qty_total:     Math.round(qty  * 10000) / 10000,
+        total_cost:    round2(cost),
+        avg_unit_cost: qty > 0 ? round2(cost / qty) : 0,
+      }))
+      .sort((a, b) => b.total_cost - a.total_cost)
+
+    const totalCost = round2(rows.reduce((s, r) => s + r.total_cost, 0))
+    const totalQty  = Math.round(rows.reduce((s, r) => s + r.qty_total, 0) * 10000) / 10000
+
+    return { success: true, data: { rows, totalCost, totalQty } }
+  } catch (error) {
+    console.error('[getCogsAllocationBreakdown] error:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
+  }
+}
+
+/**
+ * Group expenses WHERE category='COGS' by subcategory for the given date range.
+ * Used for the mini breakdown header in the COGS drilldown modal Tab 2.
+ */
+export async function getCogsExpensesBreakdown(params: {
+  from: string
+  to: string
+}): Promise<{
+  success: boolean
+  data?: { rows: CogsExpensesBreakdownRow[]; total: number }
+  error?: string
+}> {
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+
+    const { data, error } = await supabase
+      .from('expenses')
+      .select('subcategory, amount')
+      .eq('category', 'COGS')
+      .gte('expense_date', params.from)
+      .lte('expense_date', params.to)
+      .range(0, 4999)
+
+    if (error) throw new Error(`COGS expenses breakdown failed: ${error.message}`)
+
+    const subMap = new Map<string, number>()
+    for (const row of data ?? []) {
+      const sub = (row.subcategory as string | null) ?? '(ไม่ระบุ)'
+      subMap.set(sub, (subMap.get(sub) || 0) + Math.max(0, Number(row.amount) || 0))
+    }
+
+    const rows: CogsExpensesBreakdownRow[] = Array.from(subMap.entries())
+      .map(([subcategory, total]) => ({ subcategory, total: round2(total) }))
+      .sort((a, b) => b.total - a.total)
+
+    const total = round2(rows.reduce((s, r) => s + r.total, 0))
+    return { success: true, data: { rows, total } }
+  } catch (error) {
+    console.error('[getCogsExpensesBreakdown] error:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
+  }
+}
