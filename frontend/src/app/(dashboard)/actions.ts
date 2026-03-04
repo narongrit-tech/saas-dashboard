@@ -55,11 +55,6 @@ export interface PerformanceDashboardData {
   trend: PerformanceTrendDay[]
 }
 
-export interface OperatingOption {
-  subcategory: string  // '' represents null/uncategorized
-  label: string        // display label shown in modal
-  amount: number
-}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -208,8 +203,7 @@ export async function getPerformanceDashboard(
   fromDate?: string,
   toDate?: string,
   gmvBasis: GmvBasis  = 'created',
-  cogsBasis: CogsBasis = 'shipped',
-  operatingSubcategories?: string[]  // undefined / [] = all; non-empty = filter to these subcategories
+  cogsBasis: CogsBasis = 'shipped'
 ): Promise<{ success: boolean; data?: PerformanceDashboardData; error?: string }> {
   try {
     const supabase = createClient()
@@ -273,7 +267,7 @@ export async function getPerformanceDashboard(
 
       supabase
         .from('expenses')
-        .select('expense_date, amount, subcategory')
+        .select('expense_date, amount')
         .gte('expense_date', startDateStr)
         .lte('expense_date', endDateStr)
         .eq('category', 'Operating'),
@@ -290,12 +284,7 @@ export async function getPerformanceDashboard(
     adRes.data?.forEach((row) => {
       adByDate.set(row.date, (adByDate.get(row.date) || 0) + Math.max(0, row.amount || 0))
     })
-    const opFilter = operatingSubcategories && operatingSubcategories.length > 0
-      ? new Set(operatingSubcategories)
-      : null  // null = include all
     opRes.data?.forEach((row) => {
-      const key = (row as { subcategory?: string | null }).subcategory ?? ''
-      if (opFilter && !opFilter.has(key)) return
       opByDate.set(row.expense_date, (opByDate.get(row.expense_date) || 0) + Math.max(0, row.amount || 0))
     })
 
@@ -470,86 +459,109 @@ export async function getAdsBreakdown(
   }
 }
 
-// ─── Operating Filter ──────────────────────────────────────────────────────────
+// ─── Operating Filter (row-level picker) ─────────────────────────────────────
+
+/** Single Operating expense row returned to the picker modal. */
+export interface OperatingExpenseRow {
+  id: string
+  expense_date: string
+  subcategory: string | null
+  amount: number
+  description: string | null
+  expense_status: 'DRAFT' | 'PAID'
+  paid_date: string | null
+  vendor: string | null
+}
 
 /**
- * Return distinct subcategory options for Operating expenses in [from, to],
- * sorted by total amount descending. Used to populate the filter modal.
- * Subcategory '' represents rows where expenses.subcategory IS NULL.
+ * Fetch Operating expense rows for the picker modal.
+ * Always constrains to category = 'Operating' and [from, to] date range.
+ * Returns up to pageSize rows (max 200) plus total count.
  */
-export async function getOperatingOptions(
-  from: string,
+export async function getOperatingExpenseRows(params: {
+  from: string
   to: string
-): Promise<{ success: boolean; data?: OperatingOption[]; error?: string }> {
+  status?: 'All' | 'DRAFT' | 'PAID'
+  subcategory?: string       // exact match; omit / '' = all
+  q?: string                 // search in description + notes
+  page?: number              // 1-based, default 1
+  pageSize?: number          // default 50, capped at 200
+}): Promise<{ success: boolean; data?: { rows: OperatingExpenseRow[]; total: number }; error?: string }> {
   try {
     const supabase = createClient()
     const { data: { user }, error: authError } = await supabase.auth.getUser()
     if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
 
-    const { data, error } = await supabase
+    const { from, to, status, subcategory, q, page = 1, pageSize = 50 } = params
+    const safePgSz = Math.min(Math.max(pageSize, 1), 200)
+
+    let query = supabase
       .from('expenses')
-      .select('subcategory, amount')
+      .select('id, expense_date, subcategory, amount, description, expense_status, paid_date, vendor', { count: 'exact' })
+      .eq('category', 'Operating')
       .gte('expense_date', from)
       .lte('expense_date', to)
-      .eq('category', 'Operating')
+      .order('expense_date', { ascending: false })
+      .order('created_at', { ascending: false })
 
-    if (error) throw new Error(`Operating options query failed: ${error.message}`)
-
-    // Group by subcategory client-side (data is small)
-    const grouped = new Map<string, number>()
-    for (const row of data ?? []) {
-      const key: string = (row.subcategory as string | null) ?? ''
-      grouped.set(key, (grouped.get(key) || 0) + Math.max(0, (row.amount as number) || 0))
+    if (status && status !== 'All') {
+      query = query.eq('expense_status', status)
+    }
+    if (subcategory && subcategory !== '' && subcategory !== 'All') {
+      query = query.eq('subcategory', subcategory)
+    }
+    if (q && q.trim()) {
+      query = query.or(`description.ilike.%${q.trim()}%,notes.ilike.%${q.trim()}%`)
     }
 
-    const options: OperatingOption[] = Array.from(grouped.entries())
-      .map(([subcategory, amount]) => ({
-        subcategory,
-        label: subcategory === '' ? '(ไม่ระบุหมวดย่อย)' : subcategory,
-        amount: round2(amount),
-      }))
-      .sort((a, b) => b.amount - a.amount)
+    const fromIdx = (page - 1) * safePgSz
+    query = query.range(fromIdx, fromIdx + safePgSz - 1)
 
-    return { success: true, data: options }
+    const { data, error, count } = await query
+    if (error) throw new Error(`Operating rows query failed: ${error.message}`)
+
+    return {
+      success: true,
+      data: {
+        rows: (data ?? []) as OperatingExpenseRow[],
+        total: count ?? 0,
+      },
+    }
   } catch (error) {
-    console.error('[getOperatingOptions] error:', error)
+    console.error('[getOperatingExpenseRows] error:', error)
     return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
   }
 }
 
 /**
- * Compute the filtered Operating total for selected subcategories.
- * subcategories: [] = all (no filter); non-empty = include only those keys
- * ('' in the array means "include null-subcategory rows").
+ * Compute Operating total for a specific set of expense IDs.
+ * expenseIds: [] = all Operating expenses in [from, to] (no filter)
+ * non-empty = sum only those IDs (RLS enforced by Supabase auth)
  */
 export async function getOperatingFiltered(
   from: string,
   to: string,
-  subcategories: string[]
+  expenseIds: string[]
 ): Promise<{ success: boolean; data?: { total: number }; error?: string }> {
   try {
     const supabase = createClient()
     const { data: { user }, error: authError } = await supabase.auth.getUser()
     if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
 
-    const { data, error } = await supabase
-      .from('expenses')
-      .select('amount, subcategory')
-      .gte('expense_date', from)
-      .lte('expense_date', to)
-      .eq('category', 'Operating')
+    let query = supabase.from('expenses').select('amount').eq('category', 'Operating')
 
+    if (expenseIds.length > 0) {
+      // Sum specific IDs — date range not needed; RLS + ID list is sufficient
+      query = query.in('id', expenseIds)
+    } else {
+      // Sum all operating in range
+      query = query.gte('expense_date', from).lte('expense_date', to)
+    }
+
+    const { data, error } = await query
     if (error) throw new Error(`Operating filtered query failed: ${error.message}`)
 
-    const filter = subcategories.length > 0 ? new Set(subcategories) : null
-    const total = (data ?? []).reduce((s, row) => {
-      if (filter) {
-        const key: string = (row.subcategory as string | null) ?? ''
-        if (!filter.has(key)) return s
-      }
-      return s + Math.max(0, (row.amount as number) || 0)
-    }, 0)
-
+    const total = (data ?? []).reduce((s, row) => s + Math.max(0, (row.amount as number) || 0), 0)
     return { success: true, data: { total: round2(total) } }
   } catch (error) {
     console.error('[getOperatingFiltered] error:', error)

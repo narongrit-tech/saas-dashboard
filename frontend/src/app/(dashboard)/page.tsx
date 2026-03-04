@@ -32,7 +32,7 @@ function isValidDateParam(s: string | undefined): s is string {
 export default async function PerformanceDashboardPage({
   searchParams,
 }: {
-  searchParams: { from?: string; to?: string; gmvBasis?: string; cogsBasis?: string; opSubcats?: string }
+  searchParams: { from?: string; to?: string; gmvBasis?: string; cogsBasis?: string }
 }) {
   // Resolve date range — fall back to last 7 days (Bangkok) if params missing/invalid
   const today = getBangkokNow()
@@ -45,16 +45,7 @@ export default async function PerformanceDashboardPage({
   const gmvBasis:  GmvBasis  = searchParams.gmvBasis  === 'paid'    ? 'paid'    : 'created'
   const cogsBasis: CogsBasis = searchParams.cogsBasis === 'created' ? 'created' : 'shipped'
 
-  // Parse operating subcategory filter from URL (?opSubcats=a,b,c)
-  // undefined = all; string[] = specific subcategories ('' element = null subcategory)
-  const operatingSubcategories: string[] | undefined = searchParams.opSubcats
-    ? searchParams.opSubcats.split(',').map(decodeURIComponent)
-    : undefined
-
-  // initialSelectedSubcats: null means "all" (no filter in URL)
-  const initialSelectedSubcats: string[] | null = operatingSubcategories ?? null
-
-  const result = await getPerformanceDashboard(from, to, gmvBasis, cogsBasis, operatingSubcategories)
+  const result = await getPerformanceDashboard(from, to, gmvBasis, cogsBasis)
 
   if (!result.success || !result.data) {
     return (
@@ -152,7 +143,7 @@ export default async function PerformanceDashboardPage({
           cogs={summary.cogs}
           from={from}
           to={to}
-          initialSelectedSubcats={initialSelectedSubcats}
+          initialSelectedSubcats={null}
         />
 
         {/* ROAS */}
