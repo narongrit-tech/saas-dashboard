@@ -16,6 +16,7 @@ export interface PerformanceSummary {
   adSpend: number
   cogs: number
   operating: number
+  tax: number
   netProfit: number
   roas: number
   startDate: string
@@ -193,7 +194,8 @@ async function getAdsWalletIds(supabase: ReturnType<typeof createClient>): Promi
  * - Ad Spend = wallet_ledger SPEND/OUT from ADS wallets
  * - COGS     = inventory_cogs_allocations.amount
  * - Operating = expenses WHERE category = 'Operating'
- * - Net       = GMV - AdSpend - COGS - Operating
+ * - Tax       = expenses WHERE category = 'Tax'
+ * - Net       = GMV - AdSpend - COGS - Operating - Tax
  * - ROAS      = GMV / AdSpend
  *
  * @param fromDate YYYY-MM-DD (Bangkok). Defaults to 6 days ago.
@@ -247,7 +249,7 @@ export async function getPerformanceDashboard(
 
     // Fetch all sources in parallel
     // GMV branches on gmvBasis; COGS branches on cogsBasis (both already Promises)
-    const [gmvByDate, cogsByDate, adRes, opRes] = await Promise.all([
+    const [gmvByDate, cogsByDate, adRes, opRes, taxRes] = await Promise.all([
       gmvBasis === 'paid'
         ? fetchGMVByDayPaid(supabase, startDateStr, endDateStr)
         : fetchGMVByDay(supabase, startDateStr, endDateStr),
@@ -271,21 +273,33 @@ export async function getPerformanceDashboard(
         .gte('expense_date', startDateStr)
         .lte('expense_date', endDateStr)
         .eq('category', 'Operating'),
+
+      supabase
+        .from('expenses')
+        .select('expense_date, amount')
+        .gte('expense_date', startDateStr)
+        .lte('expense_date', endDateStr)
+        .eq('category', 'Tax'),
     ])
 
     if (adRes.error) throw new Error(`Wallet spend query failed: ${adRes.error.message}`)
     if (opRes.error) throw new Error(`Operating expenses query failed: ${opRes.error.message}`)
+    if (taxRes.error) throw new Error(`Tax expenses query failed: ${taxRes.error.message}`)
 
-    // Aggregate ad spend + operating per day
+    // Aggregate ad spend, operating, and tax per day
     // (GMV and COGS are already Maps from their respective fetch functions)
-    const adByDate = new Map<string, number>()
-    const opByDate = new Map<string, number>()
+    const adByDate  = new Map<string, number>()
+    const opByDate  = new Map<string, number>()
+    const taxByDate = new Map<string, number>()
 
     adRes.data?.forEach((row) => {
       adByDate.set(row.date, (adByDate.get(row.date) || 0) + Math.max(0, row.amount || 0))
     })
     opRes.data?.forEach((row) => {
       opByDate.set(row.expense_date, (opByDate.get(row.expense_date) || 0) + Math.max(0, row.amount || 0))
+    })
+    taxRes.data?.forEach((row) => {
+      taxByDate.set(row.expense_date, (taxByDate.get(row.expense_date) || 0) + Math.max(0, row.amount || 0))
     })
 
     // Build trend array
@@ -295,15 +309,17 @@ export async function getPerformanceDashboard(
       const adSpend  = round2(adByDate.get(dateStr) || 0)
       const cogs     = round2(Math.max(0, cogsByDate.get(dateStr) || 0))
       const op       = round2(opByDate.get(dateStr) || 0)
-      const net      = round2(gmv - adSpend - cogs - op)
+      const tax      = round2(taxByDate.get(dateStr) || 0)
+      const net      = round2(gmv - adSpend - cogs - op - tax)
       return { date: format(d, 'dd/MM'), dateStr, gmv, adSpend, net }
     })
 
     // Summary totals
-    const totalGMV     = safeDays.reduce((s, d) => s + Math.max(0, gmvByDate.get(format(d, 'yyyy-MM-dd'))  || 0), 0)
-    const totalAdSpend = safeDays.reduce((s, d) => s + Math.max(0, adByDate.get(format(d, 'yyyy-MM-dd'))   || 0), 0)
-    const totalCOGS    = safeDays.reduce((s, d) => s + Math.max(0, cogsByDate.get(format(d, 'yyyy-MM-dd')) || 0), 0)
-    const totalOp      = safeDays.reduce((s, d) => s + Math.max(0, opByDate.get(format(d, 'yyyy-MM-dd'))   || 0), 0)
+    const totalGMV     = safeDays.reduce((s, d) => s + Math.max(0, gmvByDate.get(format(d, 'yyyy-MM-dd'))   || 0), 0)
+    const totalAdSpend = safeDays.reduce((s, d) => s + Math.max(0, adByDate.get(format(d, 'yyyy-MM-dd'))    || 0), 0)
+    const totalCOGS    = safeDays.reduce((s, d) => s + Math.max(0, cogsByDate.get(format(d, 'yyyy-MM-dd'))  || 0), 0)
+    const totalOp      = safeDays.reduce((s, d) => s + Math.max(0, opByDate.get(format(d, 'yyyy-MM-dd'))    || 0), 0)
+    const totalTax     = safeDays.reduce((s, d) => s + Math.max(0, taxByDate.get(format(d, 'yyyy-MM-dd'))   || 0), 0)
 
     return {
       success: true,
@@ -313,7 +329,8 @@ export async function getPerformanceDashboard(
           adSpend:    round2(totalAdSpend),
           cogs:       round2(totalCOGS),
           operating:  round2(totalOp),
-          netProfit:  round2(totalGMV - totalAdSpend - totalCOGS - totalOp),
+          tax:        round2(totalTax),
+          netProfit:  round2(totalGMV - totalAdSpend - totalCOGS - totalOp - totalTax),
           roas:       totalAdSpend > 0 ? round2(totalGMV / totalAdSpend) : 0,
           startDate:  startDateStr,
           endDate:    endDateStr,
@@ -622,6 +639,205 @@ export async function getOperatingSubcategories(
     return { success: true, data: unique }
   } catch (error) {
     console.error('[getOperatingSubcategories] error:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
+  }
+}
+
+// ─── Expense Picker — Generalized (all categories) ────────────────────────────
+
+/** Single expense row returned to the generic expense picker modal. */
+export interface ExpensePickerRow {
+  id: string
+  expense_date: string
+  category: string
+  subcategory: string | null
+  amount: number
+  description: string | null
+  expense_status: 'DRAFT' | 'PAID'
+  paid_date: string | null
+  vendor: string | null
+}
+
+/**
+ * Fetch paginated expense rows for the picker modal.
+ * category='ALL' (or omitted) means no category filter → all categories.
+ */
+export async function getExpensePickerRows(params: {
+  from: string
+  to: string
+  category?: string            // 'ALL' or specific; omit/ALL = no filter
+  status?: 'All' | 'DRAFT' | 'PAID'
+  subcategory?: string         // 'ALL' or specific; omit/ALL = no filter
+  q?: string
+  page?: number                // 1-based
+  pageSize?: number            // 10 | 25 | 50 | 100
+}): Promise<{ success: boolean; data?: { rows: ExpensePickerRow[]; total: number }; error?: string }> {
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+
+    const { from, to, category, status, subcategory, q, page = 1, pageSize = 25 } = params
+    const safePgSz = ([10, 25, 50, 100] as number[]).includes(pageSize) ? pageSize : 25
+
+    let query = supabase
+      .from('expenses')
+      .select(
+        'id, expense_date, category, subcategory, amount, description, expense_status, paid_date, vendor',
+        { count: 'exact' },
+      )
+      .gte('expense_date', from)
+      .lte('expense_date', to)
+      .order('expense_date', { ascending: false })
+      .order('created_at', { ascending: false })
+
+    if (category && category !== 'ALL') query = query.eq('category', category)
+    if (status && status !== 'All') query = query.eq('expense_status', status)
+    if (subcategory && subcategory !== 'ALL') query = query.eq('subcategory', subcategory)
+    if (q?.trim()) query = query.or(`description.ilike.%${q.trim()}%,notes.ilike.%${q.trim()}%`)
+
+    const fromIdx = (page - 1) * safePgSz
+    query = query.range(fromIdx, fromIdx + safePgSz - 1)
+
+    const { data, error, count } = await query
+    if (error) throw new Error(`Expense picker rows query failed: ${error.message}`)
+
+    return { success: true, data: { rows: (data ?? []) as ExpensePickerRow[], total: count ?? 0 } }
+  } catch (error) {
+    console.error('[getExpensePickerRows] error:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
+  }
+}
+
+/**
+ * Compute a filtered expense total server-side.
+ * mode='all':  sum all rows matching [from,to] + filters, minus excludedIds
+ * mode='some': sum exactly the given selectedIds (date range enforced for RLS safety)
+ *
+ * Uses range(0, 9999) — safe for a small-business dashboard (< 10,000 expenses in range).
+ */
+export async function getExpensePickerTotal(
+  from: string,
+  to: string,
+  state: {
+    mode: 'all' | 'some'
+    category?: string
+    status?: 'All' | 'DRAFT' | 'PAID'
+    subcategory?: string
+    q?: string
+    selectedIds?: string[]
+    excludedIds?: string[]
+  },
+): Promise<{ success: boolean; data?: { total: number }; error?: string }> {
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+
+    if (state.mode === 'some') {
+      const ids = state.selectedIds ?? []
+      if (ids.length === 0) return { success: true, data: { total: 0 } }
+      const { data, error } = await supabase
+        .from('expenses')
+        .select('amount')
+        .in('id', ids)
+        .gte('expense_date', from)
+        .lte('expense_date', to)
+        .range(0, Math.min(ids.length + 99, 4999))
+      if (error) throw new Error(`Expense picker total (ids) failed: ${error.message}`)
+      const total = (data ?? []).reduce((s, r) => s + Math.max(0, (r.amount as number) || 0), 0)
+      return { success: true, data: { total: round2(total) } }
+    }
+
+    // mode = 'all'
+    let query = supabase
+      .from('expenses')
+      .select('amount')
+      .gte('expense_date', from)
+      .lte('expense_date', to)
+
+    if (state.category && state.category !== 'ALL') query = query.eq('category', state.category)
+    if (state.status && state.status !== 'All') query = query.eq('expense_status', state.status)
+    if (state.subcategory && state.subcategory !== 'ALL') query = query.eq('subcategory', state.subcategory)
+    if (state.q?.trim()) query = query.or(`description.ilike.%${state.q.trim()}%,notes.ilike.%${state.q.trim()}%`)
+    if ((state.excludedIds ?? []).length > 0) {
+      query = query.filter('id', 'not.in', `(${state.excludedIds!.join(',')})`)
+    }
+    query = query.range(0, 9999)
+
+    const { data, error } = await query
+    if (error) throw new Error(`Expense picker total (all) failed: ${error.message}`)
+
+    const total = (data ?? []).reduce((s, r) => s + Math.max(0, (r.amount as number) || 0), 0)
+    return { success: true, data: { total: round2(total) } }
+  } catch (error) {
+    console.error('[getExpensePickerTotal] error:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
+  }
+}
+
+/**
+ * Distinct subcategory values in [from,to], optionally filtered by category.
+ * Used to populate the subcategory dropdown in the picker modal.
+ */
+export async function getExpensePickerSubcategories(
+  from: string,
+  to: string,
+  category?: string,
+): Promise<{ success: boolean; data?: string[]; error?: string }> {
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+
+    let query = supabase
+      .from('expenses')
+      .select('subcategory')
+      .gte('expense_date', from)
+      .lte('expense_date', to)
+      .not('subcategory', 'is', null)
+      .range(0, 999)
+
+    if (category && category !== 'ALL') query = query.eq('category', category)
+
+    const { data, error } = await query
+    if (error) throw new Error(`Expense picker subcategories query failed: ${error.message}`)
+
+    const unique = Array.from(new Set((data ?? []).map((r) => r.subcategory as string))).sort()
+    return { success: true, data: unique }
+  } catch (error) {
+    console.error('[getExpensePickerSubcategories] error:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
+  }
+}
+
+/**
+ * Distinct category values for expenses in [from,to].
+ * Used to populate the category dropdown in the picker modal.
+ */
+export async function getExpensePickerCategories(
+  from: string,
+  to: string,
+): Promise<{ success: boolean; data?: string[]; error?: string }> {
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+
+    const { data, error } = await supabase
+      .from('expenses')
+      .select('category')
+      .gte('expense_date', from)
+      .lte('expense_date', to)
+      .not('category', 'is', null)
+      .range(0, 999)
+
+    if (error) throw new Error(`Expense picker categories query failed: ${error.message}`)
+
+    const unique = Array.from(new Set((data ?? []).map((r) => r.category as string))).sort()
+    return { success: true, data: unique }
+  } catch (error) {
+    console.error('[getExpensePickerCategories] error:', error)
     return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
   }
 }

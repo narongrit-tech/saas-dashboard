@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { TrendingUp, Megaphone, Package, AlertCircle } from 'lucide-react'
 import { format, subDays, parseISO, isValid } from 'date-fns'
-import { getPerformanceDashboard } from './actions'
+import { getPerformanceDashboard, getExpensePickerTotal } from './actions'
 import type { GmvBasis, CogsBasis } from './actions'
 import { getBangkokNow } from '@/lib/bangkok-time'
 import { PerformanceTrendChart } from '@/components/dashboard/PerformanceTrendChart'
@@ -9,6 +9,7 @@ import { AdsBreakdownSection } from '@/components/dashboard/AdsBreakdownSection'
 import { DateRangePickerClient } from '@/components/dashboard/DateRangePickerClient'
 import { BasisToggleClient } from '@/components/dashboard/BasisToggleClient'
 import { OperatingNetCards } from '@/components/dashboard/OperatingNetCards'
+import { parsePickerState } from '@/lib/expense-picker'
 
 export const dynamic = 'force-dynamic'
 
@@ -32,20 +33,34 @@ function isValidDateParam(s: string | undefined): s is string {
 export default async function PerformanceDashboardPage({
   searchParams,
 }: {
-  searchParams: { from?: string; to?: string; gmvBasis?: string; cogsBasis?: string }
+  searchParams: Record<string, string | string[] | undefined>
 }) {
   // Resolve date range — fall back to last 7 days (Bangkok) if params missing/invalid
   const today = getBangkokNow()
   const defaultFrom = format(subDays(today, 6), 'yyyy-MM-dd')
   const defaultTo = format(today, 'yyyy-MM-dd')
-  const from = isValidDateParam(searchParams.from) ? searchParams.from : defaultFrom
-  const to   = isValidDateParam(searchParams.to)   ? searchParams.to   : defaultTo
+
+  const fromRaw = Array.isArray(searchParams.from) ? searchParams.from[0] : searchParams.from
+  const toRaw   = Array.isArray(searchParams.to)   ? searchParams.to[0]   : searchParams.to
+  const from = isValidDateParam(fromRaw) ? fromRaw : defaultFrom
+  const to   = isValidDateParam(toRaw)   ? toRaw   : defaultTo
 
   // Resolve basis params — strict whitelist, default to canonical values
-  const gmvBasis:  GmvBasis  = searchParams.gmvBasis  === 'paid'    ? 'paid'    : 'created'
-  const cogsBasis: CogsBasis = searchParams.cogsBasis === 'created' ? 'created' : 'shipped'
+  const gmvBasisRaw  = Array.isArray(searchParams.gmvBasis)  ? searchParams.gmvBasis[0]  : searchParams.gmvBasis
+  const cogsBasisRaw = Array.isArray(searchParams.cogsBasis) ? searchParams.cogsBasis[0] : searchParams.cogsBasis
+  const gmvBasis:  GmvBasis  = gmvBasisRaw  === 'paid'    ? 'paid'    : 'created'
+  const cogsBasis: CogsBasis = cogsBasisRaw === 'created' ? 'created' : 'shipped'
 
-  const result = await getPerformanceDashboard(from, to, gmvBasis, cogsBasis)
+  // Parse picker states from URL params
+  const opState  = parsePickerState(searchParams, 'op',  'ALL')
+  const taxState = parsePickerState(searchParams, 'tax', 'Tax')
+
+  // Fetch all data in parallel
+  const [result, opResult, taxResult] = await Promise.all([
+    getPerformanceDashboard(from, to, gmvBasis, cogsBasis),
+    getExpensePickerTotal(from, to, opState),
+    getExpensePickerTotal(from, to, taxState),
+  ])
 
   if (!result.success || !result.data) {
     return (
@@ -62,7 +77,18 @@ export default async function PerformanceDashboardPage({
   }
 
   const { summary, trend } = result.data
-  const isProfit = summary.netProfit >= 0
+
+  // Picker-computed totals (server-side, URL-persisted)
+  const displayOp  = opResult.data?.total  ?? summary.operating
+  const displayTax = taxResult.data?.total ?? summary.tax
+  const displayNet = Math.round((summary.gmv - summary.adSpend - summary.cogs - displayOp - displayTax) * 100) / 100
+  const isProfit   = displayNet >= 0
+
+  // Build flat search params map to pass to client component (for URL manipulation)
+  const allSearchParamsFlat: Record<string, string> = {}
+  Object.entries(searchParams).forEach(([k, v]) => {
+    if (v !== undefined) allSearchParamsFlat[k] = Array.isArray(v) ? v[0] : v
+  })
 
   return (
     <div className="space-y-6">
@@ -134,16 +160,18 @@ export default async function PerformanceDashboardPage({
           </CardContent>
         </Card>
 
-        {/* Operating + Net Profit — client component (Operating card opens filter modal) */}
+        {/* Operating + Tax + Net Profit — client component (both cards open picker modals) */}
         <OperatingNetCards
-          initialOperating={summary.operating}
-          initialNetProfit={summary.netProfit}
+          initialOp={displayOp}
+          initialTax={displayTax}
+          initialOpState={opState}
+          initialTaxState={taxState}
           gmv={summary.gmv}
           adSpend={summary.adSpend}
           cogs={summary.cogs}
           from={from}
           to={to}
-          initialSelectedSubcats={null}
+          allSearchParams={allSearchParamsFlat}
         />
 
         {/* ROAS */}
@@ -217,14 +245,16 @@ export default async function PerformanceDashboardPage({
             </div>
             <div className="flex justify-between border-b pb-2">
               <span className="font-medium">Less: Operating Expenses</span>
-              <span className="font-mono text-red-600">
-                (฿{formatCurrency(summary.operating)})
-              </span>
+              <span className="font-mono text-red-600">(฿{formatCurrency(displayOp)})</span>
+            </div>
+            <div className="flex justify-between border-b pb-2">
+              <span className="font-medium">Less: Tax</span>
+              <span className="font-mono text-red-600">(฿{formatCurrency(displayTax)})</span>
             </div>
             <div className="flex justify-between border-t-2 pt-3">
               <span className="text-lg font-bold">Net Profit</span>
               <span className={`text-lg font-bold font-mono ${isProfit ? 'text-green-600' : 'text-red-600'}`}>
-                {isProfit ? '' : '-'}฿{formatCurrency(Math.abs(summary.netProfit))}
+                {isProfit ? '' : '-'}฿{formatCurrency(Math.abs(displayNet))}
               </span>
             </div>
           </div>
