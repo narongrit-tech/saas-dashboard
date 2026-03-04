@@ -534,14 +534,29 @@ export async function getOperatingExpenseRows(params: {
 }
 
 /**
- * Compute Operating total for a specific set of expense IDs.
- * expenseIds: [] = all Operating expenses in [from, to] (no filter)
- * non-empty = sum only those IDs (RLS enforced by Supabase auth)
+ * Payload for getOperatingFiltered — two mutually exclusive modes:
+ *  'ids'  — sum exactly these expense IDs (RLS-safe; no date range needed)
+ *  'all'  — sum all Operating in [from,to] matching optional filters,
+ *            excluding the listed IDs (used for selectAll + excludedIds pattern)
+ */
+export type OperatingFilterPayload =
+  | { mode: 'ids'; selectedIds: string[] }
+  | {
+      mode: 'all'
+      excludedIds: string[]
+      status?: 'DRAFT' | 'PAID'       // omit = all statuses
+      subcategory?: string             // omit = all subcategories
+      q?: string                       // omit = no text search
+    }
+
+/**
+ * Compute the filtered Operating total server-side.
+ * Supports two modes via OperatingFilterPayload (see type definition above).
  */
 export async function getOperatingFiltered(
   from: string,
   to: string,
-  expenseIds: string[]
+  payload: OperatingFilterPayload
 ): Promise<{ success: boolean; data?: { total: number }; error?: string }> {
   try {
     const supabase = createClient()
@@ -550,12 +565,20 @@ export async function getOperatingFiltered(
 
     let query = supabase.from('expenses').select('amount').eq('category', 'Operating')
 
-    if (expenseIds.length > 0) {
-      // Sum specific IDs — date range not needed; RLS + ID list is sufficient
-      query = query.in('id', expenseIds)
+    if (payload.mode === 'ids') {
+      // Sum exact IDs — RLS still applies via auth
+      query = query.in('id', payload.selectedIds)
     } else {
-      // Sum all operating in range
+      // Sum all in range matching filters, minus excluded IDs
       query = query.gte('expense_date', from).lte('expense_date', to)
+      if (payload.status) query = query.eq('expense_status', payload.status)
+      if (payload.subcategory) query = query.eq('subcategory', payload.subcategory)
+      if (payload.q?.trim()) {
+        query = query.or(`description.ilike.%${payload.q.trim()}%,notes.ilike.%${payload.q.trim()}%`)
+      }
+      if (payload.excludedIds.length > 0) {
+        query = query.filter('id', 'not.in', `(${payload.excludedIds.join(',')})`)
+      }
     }
 
     const { data, error } = await query
@@ -565,6 +588,40 @@ export async function getOperatingFiltered(
     return { success: true, data: { total: round2(total) } }
   } catch (error) {
     console.error('[getOperatingFiltered] error:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
+  }
+}
+
+/**
+ * Return sorted distinct subcategory values for Operating expenses in [from,to].
+ * Called once when the picker modal opens to populate the subcategory dropdown.
+ */
+export async function getOperatingSubcategories(
+  from: string,
+  to: string
+): Promise<{ success: boolean; data?: string[]; error?: string }> {
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+
+    // Fetch only the subcategory column; Supabase may cap rows but subcategories
+    // are a small distinct set — 1000 rows is far more than enough distinct values.
+    const { data, error } = await supabase
+      .from('expenses')
+      .select('subcategory')
+      .eq('category', 'Operating')
+      .gte('expense_date', from)
+      .lte('expense_date', to)
+      .not('subcategory', 'is', null)
+      .range(0, 999)
+
+    if (error) throw new Error(`Subcategories query failed: ${error.message}`)
+
+    const unique = Array.from(new Set((data ?? []).map((r) => r.subcategory as string))).sort()
+    return { success: true, data: unique }
+  } catch (error) {
+    console.error('[getOperatingSubcategories] error:', error)
     return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
   }
 }
