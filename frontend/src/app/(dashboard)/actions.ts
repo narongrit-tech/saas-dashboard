@@ -55,6 +55,12 @@ export interface PerformanceDashboardData {
   trend: PerformanceTrendDay[]
 }
 
+export interface OperatingOption {
+  subcategory: string  // '' represents null/uncategorized
+  label: string        // display label shown in modal
+  amount: number
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Validate YYYY-MM-DD string (not future, not before 2020) */
@@ -202,7 +208,8 @@ export async function getPerformanceDashboard(
   fromDate?: string,
   toDate?: string,
   gmvBasis: GmvBasis  = 'created',
-  cogsBasis: CogsBasis = 'shipped'
+  cogsBasis: CogsBasis = 'shipped',
+  operatingSubcategories?: string[]  // undefined / [] = all; non-empty = filter to these subcategories
 ): Promise<{ success: boolean; data?: PerformanceDashboardData; error?: string }> {
   try {
     const supabase = createClient()
@@ -266,7 +273,7 @@ export async function getPerformanceDashboard(
 
       supabase
         .from('expenses')
-        .select('expense_date, amount')
+        .select('expense_date, amount, subcategory')
         .gte('expense_date', startDateStr)
         .lte('expense_date', endDateStr)
         .eq('category', 'Operating'),
@@ -283,7 +290,12 @@ export async function getPerformanceDashboard(
     adRes.data?.forEach((row) => {
       adByDate.set(row.date, (adByDate.get(row.date) || 0) + Math.max(0, row.amount || 0))
     })
+    const opFilter = operatingSubcategories && operatingSubcategories.length > 0
+      ? new Set(operatingSubcategories)
+      : null  // null = include all
     opRes.data?.forEach((row) => {
+      const key = (row as { subcategory?: string | null }).subcategory ?? ''
+      if (opFilter && !opFilter.has(key)) return
       opByDate.set(row.expense_date, (opByDate.get(row.expense_date) || 0) + Math.max(0, row.amount || 0))
     })
 
@@ -455,5 +467,92 @@ export async function getAdsBreakdown(
       success: false,
       error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
     }
+  }
+}
+
+// ─── Operating Filter ──────────────────────────────────────────────────────────
+
+/**
+ * Return distinct subcategory options for Operating expenses in [from, to],
+ * sorted by total amount descending. Used to populate the filter modal.
+ * Subcategory '' represents rows where expenses.subcategory IS NULL.
+ */
+export async function getOperatingOptions(
+  from: string,
+  to: string
+): Promise<{ success: boolean; data?: OperatingOption[]; error?: string }> {
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+
+    const { data, error } = await supabase
+      .from('expenses')
+      .select('subcategory, amount')
+      .gte('expense_date', from)
+      .lte('expense_date', to)
+      .eq('category', 'Operating')
+
+    if (error) throw new Error(`Operating options query failed: ${error.message}`)
+
+    // Group by subcategory client-side (data is small)
+    const grouped = new Map<string, number>()
+    for (const row of data ?? []) {
+      const key: string = (row.subcategory as string | null) ?? ''
+      grouped.set(key, (grouped.get(key) || 0) + Math.max(0, (row.amount as number) || 0))
+    }
+
+    const options: OperatingOption[] = Array.from(grouped.entries())
+      .map(([subcategory, amount]) => ({
+        subcategory,
+        label: subcategory === '' ? '(ไม่ระบุหมวดย่อย)' : subcategory,
+        amount: round2(amount),
+      }))
+      .sort((a, b) => b.amount - a.amount)
+
+    return { success: true, data: options }
+  } catch (error) {
+    console.error('[getOperatingOptions] error:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
+  }
+}
+
+/**
+ * Compute the filtered Operating total for selected subcategories.
+ * subcategories: [] = all (no filter); non-empty = include only those keys
+ * ('' in the array means "include null-subcategory rows").
+ */
+export async function getOperatingFiltered(
+  from: string,
+  to: string,
+  subcategories: string[]
+): Promise<{ success: boolean; data?: { total: number }; error?: string }> {
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+
+    const { data, error } = await supabase
+      .from('expenses')
+      .select('amount, subcategory')
+      .gte('expense_date', from)
+      .lte('expense_date', to)
+      .eq('category', 'Operating')
+
+    if (error) throw new Error(`Operating filtered query failed: ${error.message}`)
+
+    const filter = subcategories.length > 0 ? new Set(subcategories) : null
+    const total = (data ?? []).reduce((s, row) => {
+      if (filter) {
+        const key: string = (row.subcategory as string | null) ?? ''
+        if (!filter.has(key)) return s
+      }
+      return s + Math.max(0, (row.amount as number) || 0)
+    }, 0)
+
+    return { success: true, data: { total: round2(total) } }
+  } catch (error) {
+    console.error('[getOperatingFiltered] error:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
   }
 }

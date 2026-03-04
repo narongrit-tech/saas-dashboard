@@ -1,5 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { TrendingUp, TrendingDown, DollarSign, Megaphone, Package, AlertCircle } from 'lucide-react'
+import { TrendingUp, Megaphone, Package, AlertCircle } from 'lucide-react'
 import { format, subDays, parseISO, isValid } from 'date-fns'
 import { getPerformanceDashboard } from './actions'
 import type { GmvBasis, CogsBasis } from './actions'
@@ -8,6 +8,7 @@ import { PerformanceTrendChart } from '@/components/dashboard/PerformanceTrendCh
 import { AdsBreakdownSection } from '@/components/dashboard/AdsBreakdownSection'
 import { DateRangePickerClient } from '@/components/dashboard/DateRangePickerClient'
 import { BasisToggleClient } from '@/components/dashboard/BasisToggleClient'
+import { OperatingNetCards } from '@/components/dashboard/OperatingNetCards'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,7 +32,7 @@ function isValidDateParam(s: string | undefined): s is string {
 export default async function PerformanceDashboardPage({
   searchParams,
 }: {
-  searchParams: { from?: string; to?: string; gmvBasis?: string; cogsBasis?: string }
+  searchParams: { from?: string; to?: string; gmvBasis?: string; cogsBasis?: string; opSubcats?: string }
 }) {
   // Resolve date range — fall back to last 7 days (Bangkok) if params missing/invalid
   const today = getBangkokNow()
@@ -44,7 +45,16 @@ export default async function PerformanceDashboardPage({
   const gmvBasis:  GmvBasis  = searchParams.gmvBasis  === 'paid'    ? 'paid'    : 'created'
   const cogsBasis: CogsBasis = searchParams.cogsBasis === 'created' ? 'created' : 'shipped'
 
-  const result = await getPerformanceDashboard(from, to, gmvBasis, cogsBasis)
+  // Parse operating subcategory filter from URL (?opSubcats=a,b,c)
+  // undefined = all; string[] = specific subcategories ('' element = null subcategory)
+  const operatingSubcategories: string[] | undefined = searchParams.opSubcats
+    ? searchParams.opSubcats.split(',').map(decodeURIComponent)
+    : undefined
+
+  // initialSelectedSubcats: null means "all" (no filter in URL)
+  const initialSelectedSubcats: string[] | null = operatingSubcategories ?? null
+
+  const result = await getPerformanceDashboard(from, to, gmvBasis, cogsBasis, operatingSubcategories)
 
   if (!result.success || !result.data) {
     return (
@@ -133,39 +143,17 @@ export default async function PerformanceDashboardPage({
           </CardContent>
         </Card>
 
-        {/* Operating */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Operating (ช่วงที่เลือก)</CardTitle>
-            <div className="rounded-lg bg-blue-50 p-2 text-blue-600">
-              <DollarSign className="h-4 w-4" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-blue-600">
-              ฿{formatCurrency(summary.operating)}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">ค่าดำเนินงาน</p>
-          </CardContent>
-        </Card>
-
-        {/* Net Profit */}
-        <Card className={isProfit ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Net Profit (ช่วงที่เลือก)</CardTitle>
-            <div className={`rounded-lg p-2 ${isProfit ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-              {isProfit ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className={`text-2xl font-bold ${isProfit ? 'text-green-700' : 'text-red-700'}`}>
-              {isProfit ? '' : '-'}฿{formatCurrency(Math.abs(summary.netProfit))}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {isProfit ? '✓ กำไร' : '✗ ขาดทุน'} · GMV - Ads - COGS - Operating
-            </p>
-          </CardContent>
-        </Card>
+        {/* Operating + Net Profit — client component (Operating card opens filter modal) */}
+        <OperatingNetCards
+          initialOperating={summary.operating}
+          initialNetProfit={summary.netProfit}
+          gmv={summary.gmv}
+          adSpend={summary.adSpend}
+          cogs={summary.cogs}
+          from={from}
+          to={to}
+          initialSelectedSubcats={initialSelectedSubcats}
+        />
 
         {/* ROAS */}
         <Card>
