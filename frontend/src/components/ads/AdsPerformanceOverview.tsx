@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -70,15 +70,16 @@ export function AdsPerformanceOverview() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const searchParamsKey = searchParams.toString();
+  const urlStart = useMemo(() => parseDateParam(searchParams.get('start')), [searchParamsKey]);
+  const urlEnd = useMemo(() => parseDateParam(searchParams.get('end')), [searchParamsKey]);
+  const urlTab = useMemo(() => parseCampaignType(searchParams.get('tab')), [searchParamsKey]);
 
   const [dateRange, setDateRange] = useState<DateRangeResult>(() => {
-    const startFromUrl = parseDateParam(searchParams.get('start'));
-    const endFromUrl = parseDateParam(searchParams.get('end'));
-
-    if (startFromUrl && endFromUrl) {
+    if (urlStart && urlEnd) {
       return {
-        startDate: toDateQuery(startFromUrl, false),
-        endDate: toDateQuery(endFromUrl, true),
+        startDate: toDateQuery(urlStart, false),
+        endDate: toDateQuery(urlEnd, true),
       };
     }
 
@@ -96,63 +97,49 @@ export function AdsPerformanceOverview() {
   const latestRequestId = useRef(0);
 
   const [campaignTypeState, setCampaignTypeState] = useState<CampaignTypeFilter>(
-    parseCampaignType(searchParams.get('tab'))
+    urlTab
   );
+  const fromStr = useMemo(() => formatBangkok(dateRange.startDate, 'yyyy-MM-dd'), [dateRange.startDate]);
+  const toStr = useMemo(() => formatBangkok(dateRange.endDate, 'yyyy-MM-dd'), [dateRange.endDate]);
+  const tabParam = campaignTypeState === 'all' ? null : campaignTypeState;
 
   useEffect(() => {
-    const urlTab = parseCampaignType(searchParams.get('tab'));
     if (urlTab !== campaignTypeState) {
       setCampaignTypeState(urlTab);
     }
 
-    const urlStart = parseDateParam(searchParams.get('start'));
-    const urlEnd = parseDateParam(searchParams.get('end'));
     if (!urlStart || !urlEnd) return;
-
-    const currentStart = formatBangkok(dateRange.startDate, 'yyyy-MM-dd');
-    const currentEnd = formatBangkok(dateRange.endDate, 'yyyy-MM-dd');
-    if (currentStart === urlStart && currentEnd === urlEnd) return;
+    if (fromStr === urlStart && toStr === urlEnd) return;
 
     setDateRange((prev) => ({
       ...prev,
       startDate: toDateQuery(urlStart, false),
       endDate: toDateQuery(urlEnd, true),
     }));
-  }, [searchParams, campaignTypeState, dateRange.startDate, dateRange.endDate]);
+  }, [urlStart, urlEnd, urlTab, campaignTypeState, fromStr, toStr]);
 
   useEffect(() => {
-    const startDateString = formatBangkok(dateRange.startDate, 'yyyy-MM-dd');
-    const endDateString = formatBangkok(dateRange.endDate, 'yyyy-MM-dd');
-
-    const currentStart = parseDateParam(searchParams.get('start'));
-    const currentEnd = parseDateParam(searchParams.get('end'));
-    const currentTab = parseCampaignType(searchParams.get('tab'));
-
-    if (
-      currentStart === startDateString &&
-      currentEnd === endDateString &&
-      currentTab === campaignTypeState
-    ) {
+    const urlTabParam = urlTab === 'all' ? null : urlTab;
+    if (urlStart === fromStr && urlEnd === toStr && urlTabParam === tabParam) {
       return;
     }
 
-    const params = new URLSearchParams(searchParams.toString());
-    params.set('start', startDateString);
-    params.set('end', endDateString);
-    if (campaignTypeState === 'all') {
+    const params = new URLSearchParams(searchParamsKey);
+    params.set('start', fromStr);
+    params.set('end', toStr);
+    if (tabParam === null) {
       params.delete('tab');
     } else {
-      params.set('tab', campaignTypeState);
+      params.set('tab', tabParam);
     }
 
-    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
-  }, [campaignTypeState, dateRange, pathname, router, searchParams]);
+    const nextQuery = params.toString();
+    if (nextQuery !== searchParamsKey) {
+      router.replace(`${pathname}?${nextQuery}`, { scroll: false });
+    }
+  }, [urlStart, urlEnd, urlTab, fromStr, toStr, tabParam, pathname, router, searchParamsKey]);
 
-  useEffect(() => {
-    fetchData();
-  }, [dateRange, campaignTypeState]);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     latestRequestId.current += 1;
     const currentRequestId = latestRequestId.current;
 
@@ -160,10 +147,8 @@ export function AdsPerformanceOverview() {
       setLoading(true);
       setError(null);
 
-      const startDateString = formatBangkok(dateRange.startDate, 'yyyy-MM-dd');
-      const endDateString = formatBangkok(dateRange.endDate, 'yyyy-MM-dd');
-      const queryStartDate = toDateQuery(startDateString, false);
-      const queryEndDate = toDateQuery(endDateString, true);
+      const queryStartDate = toDateQuery(fromStr, false);
+      const queryEndDate = toDateQuery(toStr, true);
 
       const [summaryResult, perfResult] = await Promise.all([
         getAdsSummary(queryStartDate, queryEndDate, campaignTypeState),
@@ -200,11 +185,15 @@ export function AdsPerformanceOverview() {
         setLoading(false);
       }
     }
-  };
+  }, [fromStr, toStr, campaignTypeState]);
 
-  const handleImportSuccess = () => {
+  useEffect(() => {
     fetchData();
-  };
+  }, [fetchData]);
+
+  const handleImportSuccess = useCallback(() => {
+    fetchData();
+  }, [fetchData]);
 
   const handleOpenImportDialog = () => {
     setModalInstanceKey((k) => k + 1);
@@ -442,4 +431,3 @@ export function AdsPerformanceOverview() {
     </div>
   );
 }
-
