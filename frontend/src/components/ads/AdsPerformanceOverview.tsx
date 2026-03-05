@@ -66,27 +66,34 @@ function parseDateParam(rawDate: string | null): string | null {
   return /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : null;
 }
 
+function getDefaultRangeStrings(): { start: string; end: string } {
+  const endDate = getBangkokNow();
+  const startDate = startOfDayBangkok(new Date(endDate.getTime() - 6 * 24 * 60 * 60 * 1000));
+  return {
+    start: formatBangkok(startDate, 'yyyy-MM-dd'),
+    end: formatBangkok(endDate, 'yyyy-MM-dd'),
+  };
+}
+
 export function AdsPerformanceOverview() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const searchParamsKey = searchParams.toString();
+  const defaultRangeRef = useRef(getDefaultRangeStrings());
   const urlStart = useMemo(() => parseDateParam(searchParams.get('start')), [searchParamsKey]);
   const urlEnd = useMemo(() => parseDateParam(searchParams.get('end')), [searchParamsKey]);
   const urlTab = useMemo(() => parseCampaignType(searchParams.get('tab')), [searchParamsKey]);
-
-  const [dateRange, setDateRange] = useState<DateRangeResult>(() => {
-    if (urlStart && urlEnd) {
-      return {
-        startDate: toDateQuery(urlStart, false),
-        endDate: toDateQuery(urlEnd, true),
-      };
-    }
-
-    const endDate = getBangkokNow();
-    const startDate = startOfDayBangkok(new Date(endDate.getTime() - 6 * 24 * 60 * 60 * 1000));
-    return { startDate, endDate };
-  });
+  const startStr = urlStart || defaultRangeRef.current.start;
+  const endStr = urlEnd || defaultRangeRef.current.end;
+  const tabStr: CampaignTypeFilter = urlTab;
+  const pickerValue: DateRangeResult = useMemo(
+    () => ({
+      startDate: toDateQuery(startStr, false),
+      endDate: toDateQuery(endStr, true),
+    }),
+    [startStr, endStr]
+  );
 
   const [summary, setSummary] = useState<AdsSummary | null>(null);
   const [performance, setPerformance] = useState<AdsPerformance[]>([]);
@@ -96,48 +103,41 @@ export function AdsPerformanceOverview() {
   const [modalInstanceKey, setModalInstanceKey] = useState(0);
   const latestRequestId = useRef(0);
 
-  const [campaignTypeState, setCampaignTypeState] = useState<CampaignTypeFilter>(
-    urlTab
-  );
-  const fromStr = useMemo(() => formatBangkok(dateRange.startDate, 'yyyy-MM-dd'), [dateRange.startDate]);
-  const toStr = useMemo(() => formatBangkok(dateRange.endDate, 'yyyy-MM-dd'), [dateRange.endDate]);
-  const tabParam = campaignTypeState === 'all' ? null : campaignTypeState;
-
-  useEffect(() => {
-    if (urlTab !== campaignTypeState) {
-      setCampaignTypeState(urlTab);
-    }
-
-    if (!urlStart || !urlEnd) return;
-    if (fromStr === urlStart && toStr === urlEnd) return;
-
-    setDateRange((prev) => ({
-      ...prev,
-      startDate: toDateQuery(urlStart, false),
-      endDate: toDateQuery(urlEnd, true),
-    }));
-  }, [urlStart, urlEnd, urlTab, campaignTypeState, fromStr, toStr]);
-
-  useEffect(() => {
-    const urlTabParam = urlTab === 'all' ? null : urlTab;
-    if (urlStart === fromStr && urlEnd === toStr && urlTabParam === tabParam) {
-      return;
-    }
-
+  const buildQueryString = useCallback((nextStart: string, nextEnd: string, nextTab: CampaignTypeFilter) => {
     const params = new URLSearchParams(searchParamsKey);
-    params.set('start', fromStr);
-    params.set('end', toStr);
-    if (tabParam === null) {
+    params.set('start', nextStart);
+    params.set('end', nextEnd);
+    if (nextTab === 'all') {
       params.delete('tab');
     } else {
-      params.set('tab', tabParam);
+      params.set('tab', nextTab);
     }
+    return params.toString();
+  }, [searchParamsKey]);
 
-    const nextQuery = params.toString();
+  useEffect(() => {
+    const nextQuery = buildQueryString(startStr, endStr, tabStr);
     if (nextQuery !== searchParamsKey) {
       router.replace(`${pathname}?${nextQuery}`, { scroll: false });
     }
-  }, [urlStart, urlEnd, urlTab, fromStr, toStr, tabParam, pathname, router, searchParamsKey]);
+  }, [buildQueryString, startStr, endStr, tabStr, pathname, router, searchParamsKey]);
+
+  const handleDateRangeChange = useCallback((range: DateRangeResult) => {
+    const nextStart = formatBangkok(range.startDate, 'yyyy-MM-dd');
+    const nextEnd = formatBangkok(range.endDate, 'yyyy-MM-dd');
+    const nextQuery = buildQueryString(nextStart, nextEnd, tabStr);
+    if (nextQuery !== searchParamsKey) {
+      router.replace(`${pathname}?${nextQuery}`, { scroll: false });
+    }
+  }, [buildQueryString, tabStr, searchParamsKey, router, pathname]);
+
+  const handleTabChange = useCallback((value: string) => {
+    const nextTab = parseCampaignType(value);
+    const nextQuery = buildQueryString(startStr, endStr, nextTab);
+    if (nextQuery !== searchParamsKey) {
+      router.replace(`${pathname}?${nextQuery}`, { scroll: false });
+    }
+  }, [buildQueryString, startStr, endStr, searchParamsKey, router, pathname]);
 
   const fetchData = useCallback(async () => {
     latestRequestId.current += 1;
@@ -147,12 +147,12 @@ export function AdsPerformanceOverview() {
       setLoading(true);
       setError(null);
 
-      const queryStartDate = toDateQuery(fromStr, false);
-      const queryEndDate = toDateQuery(toStr, true);
+      const queryStartDate = toDateQuery(startStr, false);
+      const queryEndDate = toDateQuery(endStr, true);
 
       const [summaryResult, perfResult] = await Promise.all([
-        getAdsSummary(queryStartDate, queryEndDate, campaignTypeState),
-        getAdsPerformance(queryStartDate, queryEndDate, campaignTypeState),
+        getAdsSummary(queryStartDate, queryEndDate, tabStr),
+        getAdsPerformance(queryStartDate, queryEndDate, tabStr),
       ]);
 
       if (currentRequestId !== latestRequestId.current) return;
@@ -185,7 +185,7 @@ export function AdsPerformanceOverview() {
         setLoading(false);
       }
     }
-  }, [fromStr, toStr, campaignTypeState]);
+  }, [startStr, endStr, tabStr]);
 
   useEffect(() => {
     fetchData();
@@ -241,7 +241,7 @@ export function AdsPerformanceOverview() {
       </div>
 
       <div className="space-y-4">
-        <Tabs value={campaignTypeState} onValueChange={(value) => setCampaignTypeState(value as CampaignTypeFilter)}>
+        <Tabs value={tabStr} onValueChange={handleTabChange}>
           <TabsList>
             <TabsTrigger value="all">All</TabsTrigger>
             <TabsTrigger value="product">Product GMV Max</TabsTrigger>
@@ -249,7 +249,7 @@ export function AdsPerformanceOverview() {
           </TabsList>
         </Tabs>
 
-        <DateRangePicker value={dateRange} onChange={setDateRange} />
+        <DateRangePicker value={pickerValue} onChange={handleDateRangeChange} />
       </div>
 
       {error && (
