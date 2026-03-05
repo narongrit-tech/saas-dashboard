@@ -1,5 +1,6 @@
 import { AdsPerformanceOverview } from '@/components/ads/AdsPerformanceOverview';
 
-export default function AdsPage() {
+export default function OverviewPerformancePage() {
   return <AdsPerformanceOverview />;
 }
+

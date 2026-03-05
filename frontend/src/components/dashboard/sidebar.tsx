@@ -44,9 +44,14 @@ const menuGroups: MenuGroup[] = [
     defaultExpanded: true,
     items: [
       {
-        title: 'Performance',
+        title: 'Dashboard',
         href: '/',
         icon: LayoutDashboard,
+      },
+      {
+        title: 'Performance',
+        href: '/overview/performance',
+        icon: TrendingUp,
       },
       {
         title: 'Cash P&L',

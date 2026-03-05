@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Wallet, WalletLedger, LedgerFilters } from '@/types/wallets'
 import { toZonedTime } from 'date-fns-tz'
@@ -466,47 +467,65 @@ export default function WalletsPage() {
 
       {/* Action Buttons */}
       {selectedWalletId && (
-        <div className="flex gap-2 flex-wrap">
-          <Button onClick={() => setShowAddDialog(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Add Entry
-          </Button>
+        <div className="space-y-3">
           {selectedWallet?.wallet_type === 'ADS' && (
-            <>
-              <Button
-                variant="secondary"
-                onClick={() => setShowPerformanceAdsImportDialog(true)}
-                className="bg-green-600 hover:bg-green-700 text-white"
-              >
-                <Upload className="mr-2 h-4 w-4" />
-                Import Performance Ads
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => setShowTigerImportDialog(true)}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
-              >
-                <Upload className="mr-2 h-4 w-4" />
-                Import Awareness Ads (Monthly)
-              </Button>
-            </>
+            <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+              Performance metrics (Spend, GMV, Orders, ROAS) อยู่ที่หน้า Performance overview
+              {' '}
+              <Link href="/overview/performance" className="font-semibold underline underline-offset-2">
+                View Performance
+              </Link>
+            </div>
           )}
-          <Button
-            variant="secondary"
-            onClick={() => setShowShopeeWalletImportDialog(true)}
-            className="bg-orange-500 hover:bg-orange-600 text-white"
-          >
-            <Upload className="mr-2 h-4 w-4" />
-            Import Shopee Wallet
-          </Button>
-          <Button
-            variant="outline"
-            onClick={handleExport}
-            disabled={exportLoading || loading || ledgerEntries.length === 0}
-          >
-            <Download className="mr-2 h-4 w-4" />
-            {exportLoading ? 'Exporting...' : 'Export CSV'}
-          </Button>
+
+          <div className="flex gap-2 flex-wrap">
+            <Button onClick={() => setShowAddDialog(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add Entry
+            </Button>
+            {selectedWallet?.wallet_type === 'ADS' && (
+              <>
+                <Button
+                  variant="secondary"
+                  onClick={() => setShowPerformanceAdsImportDialog(true)}
+                  className="bg-green-600 hover:bg-green-700 text-white"
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  Import Performance Ads
+                </Button>
+                <Button
+                  variant="secondary"
+                  asChild
+                >
+                  <Link href="/overview/performance">View Performance</Link>
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => setShowTigerImportDialog(true)}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  Import Awareness Ads (Monthly)
+                </Button>
+              </>
+            )}
+            <Button
+              variant="secondary"
+              onClick={() => setShowShopeeWalletImportDialog(true)}
+              className="bg-orange-500 hover:bg-orange-600 text-white"
+            >
+              <Upload className="mr-2 h-4 w-4" />
+              Import Shopee Wallet
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleExport}
+              disabled={exportLoading || loading || ledgerEntries.length === 0}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              {exportLoading ? 'Exporting...' : 'Export CSV'}
+            </Button>
+          </div>
         </div>
       )}
 
