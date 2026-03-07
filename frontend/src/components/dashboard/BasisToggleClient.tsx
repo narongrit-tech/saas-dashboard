@@ -1,25 +1,23 @@
 'use client'
 
 /**
- * Basis Toggle — compact pill selectors for GMV and COGS date basis.
+ * Basis Toggle — compact pill selectors for Revenue, GMV date, and COGS date basis.
  *
- * Syncs selections to URL params (gmvBasis, cogsBasis) via router.replace
- * without a full page navigation. On first mount, writes defaults to URL
- * if params are missing (same pattern as DateRangePickerClient).
+ * Revenue: 'gmv' (default) | 'cashin' (เงินเข้าจริง from marketplace settlements)
+ * GMV:     'created' (Order Date, default) | 'paid' (Paid Date) — hidden when Revenue=Cash In
+ * COGS:    'shipped' (Shipped Date, default) | 'created' (Order Date — decision view)
  *
- * GMV:  'created' (Order Date, default) | 'paid' (Paid Date)
- * COGS: 'shipped' (Shipped Date, default) | 'created' (Order Date — decision view)
+ * Syncs selections to URL params via router.replace without full page navigation.
  */
 
 import { useEffect } from 'react'
 import { useRouter, useSearchParams, usePathname } from 'next/navigation'
-import type { GmvBasis, CogsBasis } from '@/app/(dashboard)/actions'
+import type { GmvBasis, CogsBasis, RevenueBasis } from '@/app/(dashboard)/actions'
 
 interface BasisToggleClientProps {
-  /** Server-resolved GMV basis */
-  gmvBasis: GmvBasis
-  /** Server-resolved COGS basis */
-  cogsBasis: CogsBasis
+  gmvBasis:     GmvBasis
+  cogsBasis:    CogsBasis
+  revenueBasis: RevenueBasis
 }
 
 function PillButton({
@@ -50,19 +48,19 @@ function PillButton({
   )
 }
 
-export function BasisToggleClient({ gmvBasis, cogsBasis }: BasisToggleClientProps) {
+export function BasisToggleClient({ gmvBasis, cogsBasis, revenueBasis }: BasisToggleClientProps) {
   const router       = useRouter()
   const searchParams = useSearchParams()
   const pathname     = usePathname()
 
   // On first mount: write defaults to URL if params are missing
   useEffect(() => {
-    if (!searchParams.get('gmvBasis') || !searchParams.get('cogsBasis')) {
-      const p = new URLSearchParams(searchParams.toString())
-      if (!p.get('gmvBasis'))  p.set('gmvBasis',  gmvBasis)
-      if (!p.get('cogsBasis')) p.set('cogsBasis', cogsBasis)
-      router.replace(`${pathname}?${p.toString()}`, { scroll: false })
-    }
+    const p = new URLSearchParams(searchParams.toString())
+    let changed = false
+    if (!p.get('revBasis'))  { p.set('revBasis',  revenueBasis); changed = true }
+    if (!p.get('gmvBasis'))  { p.set('gmvBasis',  gmvBasis);     changed = true }
+    if (!p.get('cogsBasis')) { p.set('cogsBasis', cogsBasis);    changed = true }
+    if (changed) router.replace(`${pathname}?${p.toString()}`, { scroll: false })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -74,18 +72,37 @@ export function BasisToggleClient({ gmvBasis, cogsBasis }: BasisToggleClientProp
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
-      {/* GMV Basis */}
+
+      {/* Revenue Basis */}
       <div className="flex items-center gap-1.5">
-        <span className="text-muted-foreground font-medium whitespace-nowrap">GMV:</span>
+        <span className="text-muted-foreground font-medium whitespace-nowrap">Revenue:</span>
         <div className="inline-flex rounded border overflow-hidden">
-          <PillButton first active={gmvBasis === 'created'} onClick={() => setParam('gmvBasis', 'created')}>
-            Order Date
+          <PillButton first active={revenueBasis === 'gmv'} onClick={() => setParam('revBasis', 'gmv')}>
+            GMV
           </PillButton>
-          <PillButton active={gmvBasis === 'paid'} onClick={() => setParam('gmvBasis', 'paid')}>
-            Paid Date
+          <PillButton active={revenueBasis === 'cashin'} onClick={() => setParam('revBasis', 'cashin')}>
+            Cash In
+          </PillButton>
+          <PillButton active={revenueBasis === 'bank'} onClick={() => setParam('revBasis', 'bank')}>
+            Bank
           </PillButton>
         </div>
       </div>
+
+      {/* GMV Date Basis — hidden when Revenue != GMV */}
+      {revenueBasis === 'gmv' && (
+        <div className="flex items-center gap-1.5">
+          <span className="text-muted-foreground font-medium whitespace-nowrap">GMV:</span>
+          <div className="inline-flex rounded border overflow-hidden">
+            <PillButton first active={gmvBasis === 'created'} onClick={() => setParam('gmvBasis', 'created')}>
+              Order Date
+            </PillButton>
+            <PillButton active={gmvBasis === 'paid'} onClick={() => setParam('gmvBasis', 'paid')}>
+              Paid Date
+            </PillButton>
+          </div>
+        </div>
+      )}
 
       {/* COGS Basis */}
       <div className="flex items-center gap-1.5">
@@ -100,8 +117,18 @@ export function BasisToggleClient({ gmvBasis, cogsBasis }: BasisToggleClientProp
         </div>
       </div>
 
-      {/* Help text — shown only in COGS decision-view mode */}
-      {cogsBasis === 'created' && (
+      {/* Help texts */}
+      {revenueBasis === 'cashin' && (
+        <span className="text-blue-600 hidden sm:inline">
+          · Cash In = เงินรับจริงจาก Settlement หลังหักค่าธรรมเนียม (TikTok + Shopee)
+        </span>
+      )}
+      {revenueBasis === 'bank' && (
+        <span className="text-emerald-600 hidden sm:inline">
+          · Bank = เงินเข้าธนาคารที่เลือกไว้ (คลิกที่การ์ดเพื่อเลือก)
+        </span>
+      )}
+      {revenueBasis === 'gmv' && cogsBasis === 'created' && (
         <span className="text-amber-600 hidden sm:inline">
           · COGS (Order Date) เป็นมุมมองวิเคราะห์รายวัน ไม่ใช่การรับรู้ตามบัญชี
         </span>

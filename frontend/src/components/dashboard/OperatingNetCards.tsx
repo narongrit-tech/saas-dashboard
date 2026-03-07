@@ -11,6 +11,7 @@ import {
   isDefaultPickerState,
 } from '@/lib/expense-picker'
 import type { ExpensePickerState } from '@/lib/expense-picker'
+import type { RevenueBasis } from '@/app/(dashboard)/actions'
 
 interface Props {
   initialOp: number
@@ -22,6 +23,7 @@ interface Props {
   cogs: number
   from: string
   to: string
+  revenueBasis?: RevenueBasis
   /** Snapshot of all current URL search params (for building updated URLs). */
   allSearchParams: Record<string, string>
 }
@@ -35,6 +37,7 @@ export function OperatingNetCards({
   initialOpState, initialTaxState,
   gmv, adSpend, cogs,
   from, to,
+  revenueBasis = 'gmv',
   allSearchParams,
 }: Props) {
   const router = useRouter()
@@ -133,7 +136,9 @@ export function OperatingNetCards({
       {/* Net Profit Card */}
       <Card className={isProfit ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium">Net Profit (ช่วงที่เลือก)</CardTitle>
+          <CardTitle className="text-sm font-medium">
+            {revenueBasis === 'cashin' ? 'Net Cash (Cash In)' : revenueBasis === 'bank' ? 'Net Cash (Bank Inflows)' : 'Net Profit (ช่วงที่เลือก)'}
+          </CardTitle>
           <div className={`rounded-lg p-2 ${isProfit ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
             {isProfit ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
           </div>
@@ -143,7 +148,8 @@ export function OperatingNetCards({
             {isProfit ? '' : '-'}฿{fmt(Math.abs(netProfit))}
           </div>
           <p className="text-xs text-muted-foreground mt-1">
-            {isProfit ? '\u2713 กำไร' : '\u2717 ขาดทุน'} · GMV - Ads - COGS - Operating - Tax
+            {isProfit ? '\u2713' : '\u2717'}{' '}
+            {revenueBasis === 'cashin' ? 'Cash In - Ads - COGS - Operating - Tax' : revenueBasis === 'bank' ? 'Bank Inflows - Ads - COGS - Operating - Tax' : 'กำไร · GMV - Ads - COGS - Operating - Tax'}
           </p>
         </CardContent>
       </Card>

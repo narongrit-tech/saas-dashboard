@@ -44,6 +44,7 @@ interface Props {
   gmv: number
   adSpend: number
   cogs: number
+  tax: number
   onApply: (newOperating: number, newNetProfit: number) => void
   onCancel: () => void
 }
@@ -101,6 +102,7 @@ export function OperatingPickerModal({
   gmv,
   adSpend,
   cogs,
+  tax,
   onApply,
   onCancel,
 }: Props) {
@@ -303,7 +305,7 @@ export function OperatingPickerModal({
       subcatFilter === 'All' &&
       !searchQ.trim()
     ) {
-      const newNet = Math.round((gmv - adSpend - cogs - initialOperating) * 100) / 100
+      const newNet = Math.round((gmv - adSpend - cogs - initialOperating - tax) * 100) / 100
       setApplying(false)
       onApply(initialOperating, newNet)
       return
@@ -311,7 +313,7 @@ export function OperatingPickerModal({
 
     // Short-circuit: nothing selected → 0
     if (!selectAll && selectedIds.size === 0) {
-      const newNet = Math.round((gmv - adSpend - cogs) * 100) / 100
+      const newNet = Math.round((gmv - adSpend - cogs - tax) * 100) / 100
       setApplying(false)
       onApply(0, newNet)
       return
@@ -339,7 +341,7 @@ export function OperatingPickerModal({
     }
 
     const newOp = result.data.total
-    const newNet = Math.round((gmv - adSpend - cogs - newOp) * 100) / 100
+    const newNet = Math.round((gmv - adSpend - cogs - newOp - tax) * 100) / 100
     setApplying(false)
     onApply(newOp, newNet)
   }

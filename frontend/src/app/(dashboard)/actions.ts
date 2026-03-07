@@ -8,8 +8,16 @@ import { fetchGMVByDay, fetchGMVByDayPaid } from '@/lib/sales-metrics'
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
 
-export type GmvBasis  = 'created' | 'paid'
-export type CogsBasis = 'shipped' | 'created'
+export type GmvBasis      = 'created' | 'paid'
+export type CogsBasis     = 'shipped' | 'created'
+export type RevenueBasis     = 'gmv' | 'cashin' | 'bank'
+export type RevenueChannel   = 'tiktok' | 'shopee' | 'other'
+
+export interface MarketplaceCashIn {
+  total:  number   // tiktok + shopee
+  tiktok: number   // settlement_transactions.settlement_amount
+  shopee: number   // shopee_order_settlements.net_payout
+}
 
 export interface PerformanceSummary {
   gmv: number
@@ -1017,6 +1025,292 @@ export async function getCogsExpensesBreakdown(params: {
     return { success: true, data: { rows, total } }
   } catch (error) {
     console.error('[getCogsExpensesBreakdown] error:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
+  }
+}
+
+// ─── Marketplace Cash-In ────────────────────────────────────────────────────────
+
+/**
+ * Fetch actual marketplace cash-in for a date range.
+ *
+ * Total:     cashflow_daily_summary.actual_sum  WHERE date IN [from, to]
+ *            — verified source of truth; matches Wallet Cashflow "Actual Total" exactly.
+ * Breakdown: settlement_transactions.settlement_amount grouped by marketplace column
+ *            — same underlying data; used only for TikTok/Shopee split display.
+ *
+ * Date filtering: inclusive on both ends (gte/lte), same as getDailyCashflowSummary.
+ * Timezone: cashflow_daily_summary.date is already Bangkok-date-bucketed (YYYY-MM-DD).
+ * settlement_transactions.settled_time uses `+07:00` suffix for Bangkok boundaries.
+ */
+export async function getMarketplaceCashIn(
+  from: string,
+  to: string,
+): Promise<{ success: boolean; data?: MarketplaceCashIn; error?: string }> {
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+
+    const startTs = `${from}T00:00:00+07:00`
+    const endTs   = `${to}T23:59:59+07:00`
+
+    // Fetch total + breakdown in parallel
+    const [summaryRes, txnRes] = await Promise.all([
+      // Total from pre-aggregated source — identical to Wallet Cashflow Actual Total
+      supabase
+        .from('cashflow_daily_summary')
+        .select('actual_sum')
+        .gte('date', from)
+        .lte('date', to)
+        .range(0, 999),
+
+      // Breakdown by marketplace (settlement_transactions bucketed by the same Bangkok day range)
+      supabase
+        .from('settlement_transactions')
+        .select('settlement_amount, marketplace')
+        .gte('settled_time', startTs)
+        .lte('settled_time', endTs)
+        .range(0, 9999),
+    ])
+
+    if (summaryRes.error) throw new Error(`Cash-in summary query failed: ${summaryRes.error.message}`)
+    if (txnRes.error)     throw new Error(`Cash-in breakdown query failed: ${txnRes.error.message}`)
+
+    // Total from cashflow_daily_summary (authoritative)
+    const total = (summaryRes.data ?? []).reduce(
+      (s, r) => s + Math.max(0, Number(r.actual_sum) || 0), 0,
+    )
+
+    // Breakdown by marketplace from settlement_transactions
+    let tiktok = 0, shopee = 0
+    for (const row of txnRes.data ?? []) {
+      const amt = Math.max(0, Number(row.settlement_amount) || 0)
+      const mkt = (row.marketplace as string | null) ?? 'tiktok'
+      if (mkt === 'shopee') shopee += amt
+      else tiktok += amt  // 'tiktok' or null → TikTok bucket
+    }
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log(
+        `[Cash In] source=cashflow_daily_summary total=${round2(total)}`,
+        `| breakdown settlement_txn tiktok=${round2(tiktok)} shopee=${round2(shopee)}`,
+        `| range [${from}, ${to}]`,
+      )
+    }
+
+    return {
+      success: true,
+      data: { total: round2(total), tiktok: round2(tiktok), shopee: round2(shopee) },
+    }
+  } catch (error) {
+    console.error('[getMarketplaceCashIn] error:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
+  }
+}
+
+// ─── Bank Inflow Revenue ────────────────────────────────────────────────────────
+
+export interface BankInflowRow {
+  id: string
+  txn_date: string
+  description: string | null
+  deposit: number
+  bank_channel: string | null  // bank_transactions.channel (ATM/Transfer etc.)
+  // From bank_txn_classifications (null = not yet classified)
+  include_as_revenue: boolean
+  revenue_channel: RevenueChannel | null
+  revenue_type: string | null
+  note: string | null
+}
+
+export interface BankInflowRevenueTotals {
+  total: number
+  tiktok: number
+  shopee: number
+  other: number
+}
+
+/**
+ * Paginated bank inflow rows (deposit > 0) for the date range, merged with
+ * user's revenue classifications from bank_txn_classifications.
+ *
+ * Two-step: fetch bank_transactions (paginated) then batch-fetch classifications.
+ */
+export async function getBankInflowRows(params: {
+  from: string
+  to: string
+  q?: string
+  page?: number
+  pageSize?: number
+}): Promise<{ success: boolean; data?: { rows: BankInflowRow[]; total: number }; error?: string }> {
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+
+    const { from, to, q, page = 1, pageSize = 25 } = params
+    const safePgSz = ([10, 25, 50, 100] as number[]).includes(pageSize) ? pageSize : 25
+    const fromIdx  = (page - 1) * safePgSz
+
+    let query = supabase
+      .from('bank_transactions')
+      .select('id, txn_date, description, deposit, channel', { count: 'exact' })
+      .gt('deposit', 0)
+      .gte('txn_date', from)
+      .lte('txn_date', to)
+      .order('txn_date', { ascending: false })
+      .order('created_at', { ascending: false })
+
+    if (q?.trim()) query = query.ilike('description', `%${q.trim()}%`)
+    query = query.range(fromIdx, fromIdx + safePgSz - 1)
+
+    const { data: txns, error: txnError, count } = await query
+    if (txnError) throw new Error(`Bank inflow rows query failed: ${txnError.message}`)
+
+    const ids = (txns ?? []).map((t) => t.id as string)
+
+    // Fetch classifications for this page's transactions
+    let classMap = new Map<string, { include_as_revenue: boolean; revenue_channel: RevenueChannel | null; revenue_type: string | null; note: string | null }>()
+    if (ids.length > 0) {
+      const { data: cls, error: clsErr } = await supabase
+        .from('bank_txn_classifications')
+        .select('bank_transaction_id, include_as_revenue, revenue_channel, revenue_type, note')
+        .in('bank_transaction_id', ids)
+      if (clsErr) throw new Error(`Bank classification query failed: ${clsErr.message}`)
+      for (const c of cls ?? []) {
+        classMap.set(c.bank_transaction_id as string, {
+          include_as_revenue: c.include_as_revenue as boolean,
+          revenue_channel:    (c.revenue_channel as RevenueChannel | null) ?? null,
+          revenue_type:       (c.revenue_type as string | null) ?? null,
+          note:               (c.note as string | null) ?? null,
+        })
+      }
+    }
+
+    const rows: BankInflowRow[] = (txns ?? []).map((t) => {
+      const cls = classMap.get(t.id as string)
+      return {
+        id:                 t.id as string,
+        txn_date:           t.txn_date as string,
+        description:        (t.description as string | null) ?? null,
+        deposit:            Math.max(0, (t.deposit as number) || 0),
+        bank_channel:       (t.channel as string | null) ?? null,
+        include_as_revenue: cls?.include_as_revenue ?? false,
+        revenue_channel:    cls?.revenue_channel ?? null,
+        revenue_type:       cls?.revenue_type ?? null,
+        note:               cls?.note ?? null,
+      }
+    })
+
+    return { success: true, data: { rows, total: count ?? 0 } }
+  } catch (error) {
+    console.error('[getBankInflowRows] error:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
+  }
+}
+
+/**
+ * Save (upsert) a bank transaction's revenue classification.
+ * Uses (bank_transaction_id, created_by) as the conflict key.
+ */
+export async function upsertBankTxnClassification(params: {
+  bank_transaction_id: string
+  include_as_revenue: boolean
+  revenue_channel?: RevenueChannel | null
+  revenue_type?: string | null
+  note?: string | null
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+
+    const { error } = await supabase
+      .from('bank_txn_classifications')
+      .upsert(
+        {
+          bank_transaction_id: params.bank_transaction_id,
+          include_as_revenue:  params.include_as_revenue,
+          revenue_channel:     params.revenue_channel ?? null,
+          revenue_type:        params.revenue_type ?? null,
+          note:                params.note ?? null,
+          created_by:          user.id,
+          updated_at:          new Date().toISOString(),
+        },
+        { onConflict: 'bank_transaction_id,created_by' },
+      )
+
+    if (error) throw new Error(`Upsert bank txn classification failed: ${error.message}`)
+    return { success: true }
+  } catch (error) {
+    console.error('[upsertBankTxnClassification] error:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
+  }
+}
+
+/**
+ * Compute the bank-inflow revenue total for the date range.
+ *
+ * Two-step:
+ * 1. Fetch all bank_txn_classifications WHERE include_as_revenue=true (no date filter)
+ * 2. Fetch bank_transactions for those IDs WHERE txn_date IN [from,to] AND deposit > 0
+ * 3. Sum deposits, broken down by revenue_channel
+ */
+export async function getBankInflowRevenueTotal(
+  from: string,
+  to: string,
+): Promise<{ success: boolean; data?: BankInflowRevenueTotals; error?: string }> {
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+
+    // Step 1: All classifications where include_as_revenue = true
+    const { data: classified, error: clsErr } = await supabase
+      .from('bank_txn_classifications')
+      .select('bank_transaction_id, revenue_channel')
+      .eq('include_as_revenue', true)
+      .range(0, 9999)
+
+    if (clsErr) throw new Error(`Bank classification query failed: ${clsErr.message}`)
+    if (!classified || classified.length === 0) {
+      return { success: true, data: { total: 0, tiktok: 0, shopee: 0, other: 0 } }
+    }
+
+    const channelById = new Map<string, RevenueChannel | null>(
+      (classified ?? []).map((c) => [c.bank_transaction_id as string, (c.revenue_channel as RevenueChannel | null) ?? null]),
+    )
+
+    // Step 2: Fetch matching transactions in date range
+    const txnIds = Array.from(channelById.keys())
+    const { data: txns, error: txnErr } = await supabase
+      .from('bank_transactions')
+      .select('id, deposit')
+      .in('id', txnIds)
+      .gte('txn_date', from)
+      .lte('txn_date', to)
+      .gt('deposit', 0)
+      .range(0, 9999)
+
+    if (txnErr) throw new Error(`Bank transactions query failed: ${txnErr.message}`)
+
+    let total = 0, tiktok = 0, shopee = 0, other = 0
+    for (const t of txns ?? []) {
+      const amt     = Math.max(0, (t.deposit as number) || 0)
+      const channel = channelById.get(t.id as string) ?? null
+      total  += amt
+      if      (channel === 'tiktok') tiktok += amt
+      else if (channel === 'shopee') shopee += amt
+      else                           other  += amt
+    }
+
+    return {
+      success: true,
+      data: { total: round2(total), tiktok: round2(tiktok), shopee: round2(shopee), other: round2(other) },
+    }
+  } catch (error) {
+    console.error('[getBankInflowRevenueTotal] error:', error)
     return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
   }
 }

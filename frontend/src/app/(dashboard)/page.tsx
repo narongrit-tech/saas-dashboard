@@ -1,8 +1,8 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { TrendingUp, Megaphone, AlertCircle } from 'lucide-react'
+import { TrendingUp, Megaphone, AlertCircle, Wallet } from 'lucide-react'
 import { format, subDays, parseISO, isValid } from 'date-fns'
-import { getPerformanceDashboard, getExpensePickerTotal } from './actions'
-import type { GmvBasis, CogsBasis } from './actions'
+import { getPerformanceDashboard, getExpensePickerTotal, getMarketplaceCashIn, getBankInflowRevenueTotal } from './actions'
+import type { GmvBasis, CogsBasis, RevenueBasis, BankInflowRevenueTotals } from './actions'
 import { getBangkokNow } from '@/lib/bangkok-time'
 import { PerformanceTrendChart } from '@/components/dashboard/PerformanceTrendChart'
 import { AdsBreakdownSection } from '@/components/dashboard/AdsBreakdownSection'
@@ -10,6 +10,7 @@ import { DateRangePickerClient } from '@/components/dashboard/DateRangePickerCli
 import { BasisToggleClient } from '@/components/dashboard/BasisToggleClient'
 import { OperatingNetCards } from '@/components/dashboard/OperatingNetCards'
 import { CogsCard } from '@/components/dashboard/CogsCard'
+import { BankRevenueCard } from '@/components/dashboard/BankRevenueCard'
 import { parsePickerState } from '@/lib/expense-picker'
 
 export const dynamic = 'force-dynamic'
@@ -31,36 +32,48 @@ function isValidDateParam(s: string | undefined): s is string {
   return d <= today
 }
 
+function sp(searchParams: Record<string, string | string[] | undefined>, key: string): string | undefined {
+  const v = searchParams[key]
+  return Array.isArray(v) ? v[0] : v
+}
+
 export default async function PerformanceDashboardPage({
   searchParams,
 }: {
   searchParams: Record<string, string | string[] | undefined>
 }) {
-  // Resolve date range — fall back to last 7 days (Bangkok) if params missing/invalid
+  // ── Date range ──────────────────────────────────────────────────────────────
   const today = getBangkokNow()
   const defaultFrom = format(subDays(today, 6), 'yyyy-MM-dd')
-  const defaultTo = format(today, 'yyyy-MM-dd')
+  const defaultTo   = format(today, 'yyyy-MM-dd')
 
-  const fromRaw = Array.isArray(searchParams.from) ? searchParams.from[0] : searchParams.from
-  const toRaw   = Array.isArray(searchParams.to)   ? searchParams.to[0]   : searchParams.to
-  const from = isValidDateParam(fromRaw) ? fromRaw : defaultFrom
-  const to   = isValidDateParam(toRaw)   ? toRaw   : defaultTo
+  const from = isValidDateParam(sp(searchParams, 'from')) ? sp(searchParams, 'from')! : defaultFrom
+  const to   = isValidDateParam(sp(searchParams, 'to'))   ? sp(searchParams, 'to')!   : defaultTo
 
-  // Resolve basis params — strict whitelist, default to canonical values
-  const gmvBasisRaw  = Array.isArray(searchParams.gmvBasis)  ? searchParams.gmvBasis[0]  : searchParams.gmvBasis
-  const cogsBasisRaw = Array.isArray(searchParams.cogsBasis) ? searchParams.cogsBasis[0] : searchParams.cogsBasis
-  const gmvBasis:  GmvBasis  = gmvBasisRaw  === 'paid'    ? 'paid'    : 'created'
-  const cogsBasis: CogsBasis = cogsBasisRaw === 'created' ? 'created' : 'shipped'
+  // ── Basis params — strict whitelist ─────────────────────────────────────────
+  const gmvBasis:     GmvBasis     = sp(searchParams, 'gmvBasis')  === 'paid'    ? 'paid'    : 'created'
+  const cogsBasis:    CogsBasis    = sp(searchParams, 'cogsBasis') === 'created' ? 'created' : 'shipped'
+  const _rawRevBasis = sp(searchParams, 'revBasis')
+  const revenueBasis: RevenueBasis = _rawRevBasis === 'cashin' ? 'cashin' : _rawRevBasis === 'bank' ? 'bank' : 'gmv'
 
-  // Parse picker states from URL params
-  const opState  = parsePickerState(searchParams, 'op',  'ALL')
-  const taxState = parsePickerState(searchParams, 'tax', 'Tax')
+  // ── Expense picker states from URL ───────────────────────────────────────────
+  const opState      = parsePickerState(searchParams, 'op',      'ALL')
+  const taxState     = parsePickerState(searchParams, 'tax',     'Tax')
+  const cogsExpState = parsePickerState(searchParams, 'cogsExp', 'COGS')
+  if (cogsExpState.category !== 'COGS') cogsExpState.category = 'COGS'
 
-  // Fetch all data in parallel
-  const [result, opResult, taxResult] = await Promise.all([
+  // ── Fetch all data in parallel ───────────────────────────────────────────────
+  const [result, opResult, taxResult, cogsExpResult, cashInResult, bankInflowResult] = await Promise.all([
     getPerformanceDashboard(from, to, gmvBasis, cogsBasis),
     getExpensePickerTotal(from, to, opState),
     getExpensePickerTotal(from, to, taxState),
+    getExpensePickerTotal(from, to, cogsExpState),
+    revenueBasis === 'cashin'
+      ? getMarketplaceCashIn(from, to)
+      : Promise.resolve({ success: true as const, data: { total: 0, tiktok: 0, shopee: 0 } }),
+    revenueBasis === 'bank'
+      ? getBankInflowRevenueTotal(from, to)
+      : Promise.resolve({ success: true as const, data: { total: 0, tiktok: 0, shopee: 0, other: 0 } as BankInflowRevenueTotals }),
   ])
 
   if (!result.success || !result.data) {
@@ -79,17 +92,41 @@ export default async function PerformanceDashboardPage({
 
   const { summary, trend } = result.data
 
-  // Picker-computed totals (server-side, URL-persisted)
-  const displayOp  = opResult.data?.total  ?? summary.operating
-  const displayTax = taxResult.data?.total ?? summary.tax
-  const displayNet = Math.round((summary.gmv - summary.adSpend - summary.cogs - displayOp - displayTax) * 100) / 100
-  const isProfit   = displayNet >= 0
+  // ── Computed display values ──────────────────────────────────────────────────
+  const displayOp      = opResult.data?.total      ?? summary.operating
+  const displayTax     = taxResult.data?.total     ?? summary.tax
+  const displayCogsExp = cogsExpResult.data?.total ?? 0
+  const displayCogs    = summary.cogs + displayCogsExp
 
-  // Build flat search params map to pass to client component (for URL manipulation)
+  const cashInData    = cashInResult.success ? cashInResult.data : undefined
+  const displayCashIn = cashInData?.total ?? 0
+  const bankInflowData    = bankInflowResult.success ? bankInflowResult.data : undefined
+  const displayBankInflow = bankInflowData?.total ?? 0
+  // displayRevenue: the "top line" used for Net Profit, ROAS, P&L breakdown
+  const displayRevenue = revenueBasis === 'cashin' ? displayCashIn : revenueBasis === 'bank' ? displayBankInflow : summary.gmv
+
+  const displayNet = Math.round((displayRevenue - summary.adSpend - displayCogs - displayOp - displayTax) * 100) / 100
+  const isProfit   = displayNet >= 0
+  const displayRoas = summary.adSpend > 0 ? Math.round((displayRevenue / summary.adSpend) * 100) / 100 : 0
+
+  // ── Flat URL params for client components ────────────────────────────────────
   const allSearchParamsFlat: Record<string, string> = {}
   Object.entries(searchParams).forEach(([k, v]) => {
     if (v !== undefined) allSearchParamsFlat[k] = Array.isArray(v) ? v[0] : v
   })
+
+  // ── Labels ───────────────────────────────────────────────────────────────────
+  const revenueCardTitle = revenueBasis === 'cashin'
+    ? 'Cash In (เงินเข้าจริง)'
+    : revenueBasis === 'bank'
+    ? 'Bank Inflows (Selected)'
+    : `GMV ${gmvBasis === 'paid' ? '(Paid Date)' : '(Order Date)'}`
+
+  const revenueCardSub = revenueBasis === 'cashin'
+    ? `TikTok ฿${formatCurrency(cashInData?.tiktok ?? 0)} + Shopee ฿${formatCurrency(cashInData?.shopee ?? 0)}`
+    : revenueBasis === 'bank'
+    ? 'คลิกที่การ์ดเพื่อเลือกรายการ'
+    : gmvBasis === 'created' ? 'ยอดขายตามวันสร้างออเดอร์' : 'ยอดขายตามวันชำระเงิน'
 
   return (
     <div className="space-y-6">
@@ -103,29 +140,47 @@ export default async function PerformanceDashboardPage({
         </div>
         <div className="flex flex-col items-end gap-2">
           <DateRangePickerClient from={from} to={to} />
-          <BasisToggleClient gmvBasis={gmvBasis} cogsBasis={cogsBasis} />
+          <BasisToggleClient gmvBasis={gmvBasis} cogsBasis={cogsBasis} revenueBasis={revenueBasis} />
         </div>
       </div>
 
       {/* Summary Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {/* GMV */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">GMV {gmvBasis === 'paid' ? '(Paid Date)' : '(Order Date)'}</CardTitle>
-            <div className="rounded-lg bg-green-50 p-2 text-green-600">
-              <TrendingUp className="h-4 w-4" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">
-              ฿{formatCurrency(summary.gmv)}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {gmvBasis === 'created' ? 'ยอดขายตามวันสร้างออเดอร์' : 'ยอดขายตามวันชำระเงิน'}
-            </p>
-          </CardContent>
-        </Card>
+
+        {/* Revenue Card — Bank basis renders interactive client card; others static */}
+        {revenueBasis === 'bank' ? (
+          <BankRevenueCard
+            initialTotal={displayBankInflow}
+            initialBreakdown={bankInflowData ?? { total: 0, tiktok: 0, shopee: 0, other: 0 }}
+            from={from}
+            to={to}
+          />
+        ) : (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">{revenueCardTitle}</CardTitle>
+              <div className={`rounded-lg p-2 ${revenueBasis === 'cashin' ? 'bg-blue-50 text-blue-600' : 'bg-green-50 text-green-600'}`}>
+                {revenueBasis === 'cashin' ? <Wallet className="h-4 w-4" /> : <TrendingUp className="h-4 w-4" />}
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className={`text-2xl font-bold ${revenueBasis === 'cashin' ? 'text-blue-600' : 'text-green-600'}`}>
+                ฿{formatCurrency(displayRevenue)}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">{revenueCardSub}</p>
+              {revenueBasis === 'cashin' && (
+                <>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    GMV: ฿{formatCurrency(summary.gmv)}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    เงินรับจริงจาก Settlement หลังหักค่าธรรมเนียม (TikTok+Shopee)
+                  </p>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Ad Spend */}
         <Card>
@@ -145,23 +200,27 @@ export default async function PerformanceDashboardPage({
 
         {/* COGS — clickable, opens drilldown modal */}
         <CogsCard
-          amount={summary.cogs}
+          allocatedCogs={summary.cogs}
+          cogsExpenses={displayCogsExp}
+          cogsExpState={cogsExpState}
           cogsBasis={cogsBasis}
           from={from}
           to={to}
+          allSearchParams={allSearchParamsFlat}
         />
 
-        {/* Operating + Tax + Net Profit — client component (both cards open picker modals) */}
+        {/* Operating + Tax + Net Profit — client component */}
         <OperatingNetCards
           initialOp={displayOp}
           initialTax={displayTax}
           initialOpState={opState}
           initialTaxState={taxState}
-          gmv={summary.gmv}
+          gmv={displayRevenue}
           adSpend={summary.adSpend}
-          cogs={summary.cogs}
+          cogs={displayCogs}
           from={from}
           to={to}
+          revenueBasis={revenueBasis}
           allSearchParams={allSearchParamsFlat}
         />
 
@@ -175,9 +234,11 @@ export default async function PerformanceDashboardPage({
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-yellow-600">
-              {summary.roas.toFixed(2)}x
+              {displayRoas.toFixed(2)}x
             </div>
-            <p className="text-xs text-muted-foreground mt-1">GMV / Ad Spend</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {revenueBasis === 'cashin' ? 'Cash In / Ad Spend' : revenueBasis === 'bank' ? 'Bank Inflows / Ad Spend' : 'GMV / Ad Spend'}
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -187,6 +248,9 @@ export default async function PerformanceDashboardPage({
         <CardHeader>
           <CardTitle>
             Trend: GMV{gmvBasis === 'paid' ? ' (Paid)' : ''} vs Ad Spend vs Net Profit
+            {revenueBasis === 'cashin' && (
+              <span className="ml-2 text-sm font-normal text-blue-600">· Revenue = Cash In</span>
+            )}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -208,18 +272,31 @@ export default async function PerformanceDashboardPage({
       <Card>
         <CardHeader>
           <CardTitle>
-            P&L Breakdown
-            {(gmvBasis !== 'created' || cogsBasis !== 'shipped') && (
+            {revenueBasis === 'cashin' ? 'Cash P&L Breakdown' : revenueBasis === 'bank' ? 'Bank P&L Breakdown' : 'P&L Breakdown'}
+            {revenueBasis === 'gmv' && (gmvBasis !== 'created' || cogsBasis !== 'shipped') && (
               <span className="ml-2 text-sm font-normal text-amber-600">· Mixed basis</span>
+            )}
+            {revenueBasis === 'cashin' && (
+              <span className="ml-2 text-sm font-normal text-blue-600">· Revenue = Settlement Date</span>
+            )}
+            {revenueBasis === 'bank' && (
+              <span className="ml-2 text-sm font-normal text-emerald-600">· Revenue = Bank Inflows (Selected)</span>
             )}
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
+            {/* Revenue row */}
             <div className="flex justify-between border-b pb-2">
-              <span className="font-medium">GMV ({gmvBasis === 'paid' ? 'Paid Date' : 'Order Date'})</span>
-              <span className="font-mono text-green-600">
-                ฿{formatCurrency(summary.gmv)}
+              <span className="font-medium">
+                {revenueBasis === 'cashin'
+                  ? 'Cash In (Settlement Date)'
+                  : revenueBasis === 'bank'
+                  ? 'Bank Inflows (Selected)'
+                  : `GMV (${gmvBasis === 'paid' ? 'Paid Date' : 'Order Date'})`}
+              </span>
+              <span className={`font-mono ${revenueBasis === 'cashin' ? 'text-blue-600' : revenueBasis === 'bank' ? 'text-emerald-600' : 'text-green-600'}`}>
+                ฿{formatCurrency(displayRevenue)}
               </span>
             </div>
             <div className="flex justify-between border-b pb-2">
@@ -231,7 +308,7 @@ export default async function PerformanceDashboardPage({
             <div className="flex justify-between border-b pb-2">
               <span className="font-medium">Less: COGS ({cogsBasis === 'created' ? 'Order Date' : 'Shipped'})</span>
               <span className="font-mono text-red-600">
-                (฿{formatCurrency(summary.cogs)})
+                (฿{formatCurrency(displayCogs)})
               </span>
             </div>
             <div className="flex justify-between border-b pb-2">
@@ -243,7 +320,9 @@ export default async function PerformanceDashboardPage({
               <span className="font-mono text-red-600">(฿{formatCurrency(displayTax)})</span>
             </div>
             <div className="flex justify-between border-t-2 pt-3">
-              <span className="text-lg font-bold">Net Profit</span>
+              <span className="text-lg font-bold">
+                {revenueBasis === 'cashin' || revenueBasis === 'bank' ? 'Net Cash' : 'Net Profit'}
+              </span>
               <span className={`text-lg font-bold font-mono ${isProfit ? 'text-green-600' : 'text-red-600'}`}>
                 {isProfit ? '' : '-'}฿{formatCurrency(Math.abs(displayNet))}
               </span>
