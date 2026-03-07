@@ -21,6 +21,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { formatBangkok } from '@/lib/bangkok-time'
 import type { DailyAdData } from '@/lib/parsers/tiktok-ads-parser'
+import crypto from 'crypto'
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
 
@@ -28,6 +29,128 @@ interface ActionResult {
   success: boolean
   error?: string
   data?: unknown
+}
+
+interface PerformanceUpsertRow {
+  id?: string
+  created_by: string
+  marketplace: string
+  ad_date: string
+  campaign_type: 'product' | 'live'
+  campaign_name: string | null
+  campaign_id: string | null
+  video_id: string | null
+  spend: number
+  orders: number
+  revenue: number
+  roi: number
+  source_row_hash: string
+  source: string
+  import_batch_id: string
+}
+
+function normalizeForHash(value: string | null | undefined): string {
+  return String(value ?? '').trim().toLowerCase()
+}
+
+function makeSourceRowHash(input: {
+  campaignName: string | null | undefined
+  spend: number
+  orders: number
+  revenue: number
+}): string {
+  const content = [
+    normalizeForHash(input.campaignName),
+    '',
+    '',
+    Number(input.spend || 0).toFixed(2),
+    String(Math.round(Number(input.orders || 0))),
+    Number(input.revenue || 0).toFixed(2),
+  ].join('|')
+
+  return crypto.createHash('md5').update(content, 'utf8').digest('hex')
+}
+
+async function upsertPerformanceChunkWithFallback(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  rows: PerformanceUpsertRow[]
+): Promise<{ ok: boolean; insertedCount: number; mode: 'primary' | 'fallback'; error?: string }> {
+  const { error: primaryError } = await supabase
+    .from('ad_daily_performance')
+    .upsert(rows, { onConflict: 'created_by,source_row_hash' })
+
+  if (!primaryError) {
+    return { ok: true, insertedCount: rows.length, mode: 'primary' }
+  }
+
+  if (primaryError.code !== '42P10') {
+    return {
+      ok: false,
+      insertedCount: 0,
+      mode: 'primary',
+      error: `[${primaryError.code}] ${primaryError.message}`,
+    }
+  }
+
+  const uniqueHashes = Array.from(
+    new Set(
+      rows
+        .map((row) => row.source_row_hash)
+        .filter((hash): hash is string => typeof hash === 'string' && hash.length > 0)
+    )
+  )
+
+  if (uniqueHashes.length === 0) {
+    return {
+      ok: false,
+      insertedCount: 0,
+      mode: 'fallback',
+      error: '[FALLBACK] source_row_hash is empty for all rows',
+    }
+  }
+
+  const { data: existingRows, error: existingError } = await supabase
+    .from('ad_daily_performance')
+    .select('id, source_row_hash')
+    .eq('created_by', userId)
+    .in('source_row_hash', uniqueHashes)
+
+  if (existingError) {
+    return {
+      ok: false,
+      insertedCount: 0,
+      mode: 'fallback',
+      error: `[${existingError.code}] ${existingError.message}`,
+    }
+  }
+
+  const existingByHash = new Map<string, string>()
+  for (const existing of existingRows || []) {
+    if (existing?.source_row_hash && existing?.id) {
+      existingByHash.set(String(existing.source_row_hash), String(existing.id))
+    }
+  }
+
+  const mergedRows = rows.map((row) => {
+    const existingId = existingByHash.get(row.source_row_hash)
+    return existingId ? { ...row, id: existingId } : row
+  })
+
+  const { error: fallbackUpsertError } = await supabase
+    .from('ad_daily_performance')
+    .upsert(mergedRows, { onConflict: 'id' })
+
+  if (fallbackUpsertError) {
+    return {
+      ok: false,
+      insertedCount: 0,
+      mode: 'fallback',
+      error: `[${fallbackUpsertError.code}] ${fallbackUpsertError.message}`,
+    }
+  }
+
+  return { ok: true, insertedCount: mergedRows.length, mode: 'fallback' }
 }
 
 // ─── Step 1: Preview ──────────────────────────────────────────────────────────
@@ -92,6 +215,18 @@ export async function createAdsImportPreview(
     }
 
     // 3. Dedup check — only against successfully imported batches
+    console.log('[AdsImport][Preview] input-stats', {
+      fileName: input.fileName,
+      campaignType: input.campaignType,
+      reportDate: input.reportDate,
+      parsedRowsCount: input.rows.length,
+      totalSpend: input.totalSpend,
+      totalGMV: input.totalGMV,
+      totalOrders: input.totalOrders,
+      daysCount: input.daysCount,
+      reportDateRange: input.reportDateRange,
+    })
+
     const { data: existingBatch } = await supabase
       .from('import_batches')
       .select('id, file_name, created_at, metadata')
@@ -253,37 +388,102 @@ export async function confirmAdsImport(
     if (stagingError || !stagingRows?.length) {
       return { success: false, error: 'ไม่พบ staging rows สำหรับ batch นี้' }
     }
+    const rowsWithDate = stagingRows.filter((row) => !!row.ad_date).length
+    const rowsWithCampaign = stagingRows.filter((row) => !!row.campaign_name).length
+    const rowsWithSpend = stagingRows.filter((row) => Number(row.spend) > 0).length
+    const rowsWithRevenue = stagingRows.filter((row) => Number(row.gmv) > 0).length
+    const rowsWithOrders = stagingRows.filter((row) => Number(row.orders) > 0).length
+    console.log('[AdsImport][Confirm] staging-stats', {
+      batchId,
+      campaignType,
+      stagingRowsCount: stagingRows.length,
+      rowsWithDate,
+      rowsWithCampaign,
+      rowsWithSpend,
+      rowsWithRevenue,
+      rowsWithOrders,
+    })
 
     // 5. Upsert ad_daily_performance in chunks
     let perfInsertedCount = 0
+    let fallbackChunkCount = 0
+    const perfErrors: string[] = []
     const CHUNK = 500
     for (let i = 0; i < stagingRows.length; i += CHUNK) {
       const chunk = stagingRows.slice(i, i + CHUNK)
-      const { error: perfError } = await supabase.from('ad_daily_performance').upsert(
-        chunk.map((row) => ({
-          marketplace: 'tiktok',
-          ad_date: row.ad_date,
-          campaign_type: campaignType,
-          campaign_name: row.campaign_name,
-          spend: row.spend,
-          orders: row.orders,
-          revenue: row.gmv,
-          roi: row.roas,
-          source: 'imported',
-          import_batch_id: batchId,
-          created_by: user.id,
-        })),
-        { onConflict: 'marketplace,ad_date,campaign_type,campaign_name,created_by' }
-      )
-      if (perfError) {
-        console.error('Error upserting ad_daily_performance:', perfError)
-        // Continue — partial inserts better than full failure
-      } else {
-        perfInsertedCount += chunk.length
+      const perfRows: PerformanceUpsertRow[] = chunk.map((row) => ({
+        created_by: user.id,
+        marketplace: 'tiktok',
+        ad_date: String(row.ad_date),
+        campaign_type: campaignType,
+        campaign_name: row.campaign_name,
+        campaign_id: null,
+        video_id: null,
+        spend: Number(row.spend) || 0,
+        orders: Number(row.orders) || 0,
+        revenue: Number(row.gmv) || 0,
+        roi: Number(row.roas) || 0,
+        source_row_hash: makeSourceRowHash({
+          campaignName: row.campaign_name,
+          spend: Number(row.spend) || 0,
+          orders: Number(row.orders) || 0,
+          revenue: Number(row.gmv) || 0,
+        }),
+        source: 'imported',
+        import_batch_id: batchId,
+      }))
+
+      console.log('[AdsImport][Confirm] perf-chunk-prepared', {
+        batchId,
+        chunkStart: i,
+        chunkSize: perfRows.length,
+      })
+
+      const result = await upsertPerformanceChunkWithFallback(supabase, user.id, perfRows)
+      if (!result.ok) {
+        perfErrors.push(`chunk ${Math.floor(i / CHUNK) + 1}: ${result.error ?? 'unknown error'}`)
+        console.error('[AdsImport][Confirm] perf-chunk-failed', {
+          batchId,
+          chunkStart: i,
+          chunkSize: perfRows.length,
+          error: result.error,
+        })
+        continue
+      }
+
+      if (result.mode === 'fallback') fallbackChunkCount++
+      perfInsertedCount += result.insertedCount
+      console.log('[AdsImport][Confirm] perf-chunk-upserted', {
+        batchId,
+        chunkStart: i,
+        chunkSize: perfRows.length,
+        mode: result.mode,
+      })
+    }
+
+    if (perfErrors.length > 0 || perfInsertedCount === 0) {
+      const reason =
+        perfErrors.length > 0
+          ? `Performance upsert failed (${perfErrors.join(' | ')})`
+          : 'Performance upsert wrote 0 rows'
+
+      await supabase
+        .from('import_batches')
+        .update({
+          status: 'error',
+          inserted_count: 0,
+          error_count: stagingRows.length,
+          notes: reason.slice(0, 500),
+        })
+        .eq('id', batchId)
+
+      return {
+        success: false,
+        error: reason,
       }
     }
 
-    // 6. Aggregate spend per day → wallet_ledger SPEND entries (one per day)
+    // 6. Aggregate spend per day
     const dailySpendMap = new Map<string, number>()
     for (const row of stagingRows) {
       const key = String(row.ad_date)
@@ -291,6 +491,10 @@ export async function confirmAdsImport(
     }
 
     let walletInsertedCount = 0
+    console.log('[AdsImport][Confirm] wallet-aggregation', {
+      batchId,
+      walletDaysCount: dailySpendMap.size,
+    })
     for (const [date, totalSpend] of Array.from(dailySpendMap.entries())) {
       const note = `${campaignType === 'product' ? 'Product' : 'Live'} Ads Spend - ${date}`
       const { error: ledgerError } = await supabase.from('wallet_ledger').insert({
@@ -318,7 +522,7 @@ export async function confirmAdsImport(
       .update({
         status: 'success',
         inserted_count: perfInsertedCount,
-        notes: `Performance: ${perfInsertedCount} records, Wallet: ${walletInsertedCount} entries, Total: ${meta.totalSpend} ${meta.currency}`,
+        notes: `Performance: ${perfInsertedCount} records, Wallet: ${walletInsertedCount} entries, Total: ${meta.totalSpend} ${meta.currency}${fallbackChunkCount > 0 ? ` (fallback chunks: ${fallbackChunkCount})` : ''}`,
       })
       .eq('id', batchId)
 
@@ -413,3 +617,5 @@ export async function createAdsImportNotification(
     console.error('Unexpected error in createAdsImportNotification:', err)
   }
 }
+
+

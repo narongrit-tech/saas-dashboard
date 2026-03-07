@@ -254,6 +254,18 @@ export function PerformanceAdsImportDialog({
         continue
       }
       const { preview } = parseResult
+      console.log('[AdsImport][Dialog] parse-preview', {
+        fileName: job.file.name,
+        campaignTypeSelected: job.campaignType,
+        effectiveDate: effectiveDateStr,
+        parserReportType: preview.reportType,
+        sourceRowCount: preview.rowCount,
+        normalizedRowsCount: preview.dailyBreakdown.length,
+        daysCount: preview.daysCount,
+        totalSpend: preview.totalSpend,
+        totalGMV: preview.totalGMV,
+        totalOrders: preview.totalOrders,
+      })
 
       // Step 2: Hash + createAdsImportPreview (staging)
       updateJob(job.id, { status: 'staging' })
@@ -296,6 +308,12 @@ export function PerformanceAdsImportDialog({
         continue
       }
 
+      console.log('[AdsImport][Dialog] staging-created', {
+        fileName: job.file.name,
+        batchId: previewResult.batchId,
+        rowsSentToStaging: preview.dailyBreakdown.length,
+      })
+
       // Step 3: confirmAdsImport
       updateJob(job.id, { status: 'confirming' })
       const confirmResult = await confirmAdsImport(previewResult.batchId!, adsWalletId)
@@ -305,6 +323,11 @@ export function PerformanceAdsImportDialog({
         results.push({ fileName: job.file.name, status: 'error', error: err })
         continue
       }
+
+      console.log('[AdsImport][Dialog] confirm-success', {
+        fileName: job.file.name,
+        batchId: previewResult.batchId,
+      })
 
       updateJob(job.id, {
         status: 'done',
@@ -699,3 +722,4 @@ function DatePickerCell({
     </Popover>
   )
 }
+

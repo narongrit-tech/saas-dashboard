@@ -456,23 +456,35 @@ export async function parseTikTokAdsFile(
     let currency = 'THB'
     const seenDates = new Set<string>()
     let rawRowCount = 0
+    let dateResolvedCount = 0
+    let droppedInvalidDateCount = 0
+    let droppedMissingCampaignCount = 0
+    let droppedZeroActivityCount = 0
 
     for (const row of rows) {
       // Resolve date
       let dateFormatted: string
       if (hasDateColumn && mapping.date) {
         const adDate = parseDate(row[mapping.date])
-        if (!adDate || !isValid(adDate)) continue
+        if (!adDate || !isValid(adDate)) {
+          droppedInvalidDateCount++
+          continue
+        }
         dateFormatted = format(toZonedTime(adDate, 'Asia/Bangkok'), 'yyyy-MM-dd')
       } else if (reportDate) {
         dateFormatted = reportDate
       } else {
+        droppedInvalidDateCount++
         continue
       }
+      dateResolvedCount++
 
       // Resolve campaign
       const rawCampaign = row[mapping.campaign!]
-      if (!rawCampaign) continue
+      if (!rawCampaign) {
+        droppedMissingCampaignCount++
+        continue
+      }
       const campaignName = String(rawCampaign)
 
       // Parse numbers
@@ -484,7 +496,10 @@ export async function parseTikTokAdsFile(
       // Skip rows with no activity (spend=0, gmv=0, orders=0)
       // This filters out inactive creatives/campaigns that appear in creative-level
       // reports but had no delivery on this day — keeps DB clean and totals accurate.
-      if (spend === 0 && gmv === 0 && orders === 0) continue
+      if (spend === 0 && gmv === 0 && orders === 0) {
+        droppedZeroActivityCount++
+        continue
+      }
 
       // Aggregate
       const key = `${dateFormatted}\x00${campaignName}`
@@ -518,6 +533,17 @@ export async function parseTikTokAdsFile(
       rawRowCount++
     }
     dbg(`row aggregation (${rawRowCount} raw → ${campaignAggregates.size} aggregated): ${Date.now() - t0}ms`)
+    console.log('[AdsParser] row-flow', {
+      fileName,
+      reportDateInput: reportDate ?? null,
+      sourceRows: rows.length,
+      dateResolvedCount,
+      droppedInvalidDateCount,
+      droppedMissingCampaignCount,
+      droppedZeroActivityCount,
+      rowsAfterValidation: rawRowCount,
+      aggregatedRows: campaignAggregates.size,
+    })
 
     if (campaignAggregates.size === 0) {
       return {
