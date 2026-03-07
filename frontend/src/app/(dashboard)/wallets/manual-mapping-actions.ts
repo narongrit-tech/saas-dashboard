@@ -67,6 +67,28 @@ function parseNumberValue(value: unknown): number {
   return isNaN(num) ? 0 : num
 }
 
+function normalizeForHash(value: string | null | undefined): string {
+  return String(value ?? '').trim().toLowerCase()
+}
+
+function makeSourceRowHash(input: {
+  campaignName: string | null | undefined
+  spend: number
+  orders: number
+  revenue: number
+}): string {
+  const content = [
+    normalizeForHash(input.campaignName),
+    '',
+    '',
+    Number(input.spend || 0).toFixed(2),
+    String(Math.round(Number(input.orders || 0))),
+    Number(input.revenue || 0).toFixed(2),
+  ].join('|')
+
+  return crypto.createHash('md5').update(content, 'utf8').digest('hex')
+}
+
 // ============================================================================
 // Preset Management
 // ============================================================================
@@ -603,20 +625,28 @@ export async function executeManualImport(
 
         const { error: perfError } = await supabase.from('ad_daily_performance').upsert(
           {
+            created_by: user.id,
             marketplace: 'tiktok',
             ad_date: row.date,
             campaign_type: reportType,
             campaign_name: row.campaignName,
+            campaign_id: null,
+            video_id: null,
             spend: row.spend,
             orders: row.orders || 0,
             revenue: row.revenue || 0,
             roi: row.roi || 0,
+            source_row_hash: makeSourceRowHash({
+              campaignName: row.campaignName,
+              spend: row.spend || 0,
+              orders: row.orders || 0,
+              revenue: row.revenue || 0,
+            }),
             source: 'imported',
             import_batch_id: batch.id,
-            created_by: user.id,
           },
           {
-            onConflict: 'marketplace,ad_date,campaign_type,campaign_name,created_by',
+            onConflict: 'created_by,source_row_hash',
           }
         )
 
