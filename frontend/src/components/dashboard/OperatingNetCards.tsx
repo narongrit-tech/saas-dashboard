@@ -89,19 +89,19 @@ export function OperatingNetCards({
     <>
       {/* Operating Card (clickable) */}
       <Card
-        className="cursor-pointer hover:shadow-md transition-shadow select-none"
+        className="cursor-pointer hover:shadow-md hover:ring-1 hover:ring-blue-200 transition-all select-none"
         onClick={() => setOpOpen(true)}
       >
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <CardTitle className="text-sm font-medium">
             Operating (ช่วงที่เลือก){opFiltered ? ' \u270e' : ''}
           </CardTitle>
-          <div className="rounded-lg bg-blue-50 p-2 text-blue-600">
+          <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-2 text-blue-600 dark:text-blue-400">
             <DollarSign className="h-4 w-4" />
           </div>
         </CardHeader>
         <CardContent>
-          <div className="text-2xl font-bold text-blue-600">฿{fmt(currentOp)}</div>
+          <div className="text-2xl font-bold text-blue-600 dark:text-blue-400 tracking-tight">฿{fmt(currentOp)}</div>
           <p className="text-xs text-muted-foreground mt-1">
             {opFiltered
               ? 'กรองแล้ว · คลิกเพื่อแก้ไขตัวกรอง'
@@ -112,19 +112,19 @@ export function OperatingNetCards({
 
       {/* Tax Card (clickable) */}
       <Card
-        className="cursor-pointer hover:shadow-md transition-shadow select-none"
+        className="cursor-pointer hover:shadow-md hover:ring-1 hover:ring-rose-200 transition-all select-none"
         onClick={() => setTaxOpen(true)}
       >
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <CardTitle className="text-sm font-medium">
             Tax (ช่วงที่เลือก){taxFiltered ? ' \u270e' : ''}
           </CardTitle>
-          <div className="rounded-lg bg-rose-50 p-2 text-rose-600">
+          <div className="rounded-lg bg-rose-50 dark:bg-rose-900/20 p-2 text-rose-600 dark:text-rose-400">
             <Receipt className="h-4 w-4" />
           </div>
         </CardHeader>
         <CardContent>
-          <div className="text-2xl font-bold text-rose-600">฿{fmt(currentTax)}</div>
+          <div className="text-2xl font-bold text-rose-600 dark:text-rose-400 tracking-tight">฿{fmt(currentTax)}</div>
           <p className="text-xs text-muted-foreground mt-1">
             {taxFiltered
               ? 'กรองแล้ว · คลิกเพื่อแก้ไขตัวกรอง'
@@ -134,22 +134,22 @@ export function OperatingNetCards({
       </Card>
 
       {/* Net Profit Card */}
-      <Card className={isProfit ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}>
+      <Card className={isProfit ? 'border-green-200 dark:border-green-800/40 bg-green-50 dark:bg-green-900/15' : 'border-red-200 dark:border-red-800/40 bg-red-50 dark:bg-red-900/15'}>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <CardTitle className="text-sm font-medium">
             {revenueBasis === 'cashin' ? 'Net Cash (Cash In)' : revenueBasis === 'bank' ? 'Net Cash (Bank Inflows)' : 'Net Profit (ช่วงที่เลือก)'}
           </CardTitle>
-          <div className={`rounded-lg p-2 ${isProfit ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+          <div className={`rounded-lg p-2 ${isProfit ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'}`}>
             {isProfit ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
           </div>
         </CardHeader>
         <CardContent>
-          <div className={`text-2xl font-bold ${isProfit ? 'text-green-700' : 'text-red-700'}`}>
+          <div className={`text-3xl font-bold tracking-tight ${isProfit ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
             {isProfit ? '' : '-'}฿{fmt(Math.abs(netProfit))}
           </div>
           <p className="text-xs text-muted-foreground mt-1">
-            {isProfit ? '\u2713' : '\u2717'}{' '}
-            {revenueBasis === 'cashin' ? 'Cash In - Ads - COGS - Operating - Tax' : revenueBasis === 'bank' ? 'Bank Inflows - Ads - COGS - Operating - Tax' : 'กำไร · GMV - Ads - COGS - Operating - Tax'}
+            {isProfit ? '▲' : '▼'}{' '}
+            {revenueBasis === 'cashin' ? 'Cash In - Ads - COGS - Op - Tax' : revenueBasis === 'bank' ? 'Bank Inflows - Ads - COGS - Op - Tax' : 'GMV - Ads - COGS - Op - Tax'}
           </p>
         </CardContent>
       </Card>

@@ -36,24 +36,27 @@ export function BankRevenueCard({ initialTotal, initialBreakdown, from, to }: Pr
   return (
     <>
       <Card
-        className="cursor-pointer hover:shadow-md transition-shadow select-none"
+        className="cursor-pointer hover:shadow-md hover:ring-1 hover:ring-emerald-200 transition-all select-none"
         onClick={() => setOpen(true)}
       >
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <CardTitle className="text-sm font-medium">
             Bank Inflows (Selected){hasSelection ? ' \u270e' : ''}
           </CardTitle>
-          <div className="rounded-lg bg-emerald-50 p-2 text-emerald-600">
+          <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-2 text-emerald-600 dark:text-emerald-400">
             <Landmark className="h-4 w-4" />
           </div>
         </CardHeader>
         <CardContent>
-          <div className="text-2xl font-bold text-emerald-600">฿{fmt(total)}</div>
+          <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 tracking-tight">฿{fmt(total)}</div>
           <p className="text-xs text-muted-foreground mt-1">
             {hasSelection
               ? `TikTok ฿${fmt(breakdown.tiktok)} · Shopee ฿${fmt(breakdown.shopee)} · Other ฿${fmt(breakdown.other)}`
-              : 'คลิกเพื่อเลือกรายการเงินเข้าธนาคาร'}
+              : 'ยังไม่มีรายการที่เลือก'}
           </p>
+          {!hasSelection && (
+            <p className="text-xs text-emerald-600 mt-0.5">คลิกเพื่อเลือกรายการ →</p>
+          )}
         </CardContent>
       </Card>
 

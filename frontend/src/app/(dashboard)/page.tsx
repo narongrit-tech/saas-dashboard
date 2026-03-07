@@ -1,4 +1,4 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { TrendingUp, Megaphone, AlertCircle, Wallet } from 'lucide-react'
 import { format, subDays, parseISO, isValid } from 'date-fns'
 import { getPerformanceDashboard, getExpensePickerTotal, getMarketplaceCashIn, getBankInflowRevenueTotal } from './actions'
@@ -145,7 +145,9 @@ export default async function PerformanceDashboardPage({
       </div>
 
       {/* Summary Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Key Metrics</p>
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
 
         {/* Revenue Card — Bank basis renders interactive client card; others static */}
         {revenueBasis === 'bank' ? (
@@ -159,12 +161,12 @@ export default async function PerformanceDashboardPage({
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">{revenueCardTitle}</CardTitle>
-              <div className={`rounded-lg p-2 ${revenueBasis === 'cashin' ? 'bg-blue-50 text-blue-600' : 'bg-green-50 text-green-600'}`}>
+              <div className={`rounded-lg p-2 ${revenueBasis === 'cashin' ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400' : 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'}`}>
                 {revenueBasis === 'cashin' ? <Wallet className="h-4 w-4" /> : <TrendingUp className="h-4 w-4" />}
               </div>
             </CardHeader>
             <CardContent>
-              <div className={`text-2xl font-bold ${revenueBasis === 'cashin' ? 'text-blue-600' : 'text-green-600'}`}>
+              <div className={`text-2xl font-bold tracking-tight ${revenueBasis === 'cashin' ? 'text-blue-600 dark:text-blue-400' : 'text-green-600 dark:text-green-400'}`}>
                 ฿{formatCurrency(displayRevenue)}
               </div>
               <p className="text-xs text-muted-foreground mt-1">{revenueCardSub}</p>
@@ -186,12 +188,12 @@ export default async function PerformanceDashboardPage({
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Ad Spend (ช่วงที่เลือก)</CardTitle>
-            <div className="rounded-lg bg-purple-50 p-2 text-purple-600">
+            <div className="rounded-lg bg-purple-50 dark:bg-purple-900/20 p-2 text-purple-600 dark:text-purple-400">
               <Megaphone className="h-4 w-4" />
             </div>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-purple-600">
+            <div className="text-2xl font-bold text-purple-600 dark:text-purple-400 tracking-tight">
               ฿{formatCurrency(summary.adSpend)}
             </div>
             <p className="text-xs text-muted-foreground mt-1">ค่าโฆษณา (Performance)</p>
@@ -228,12 +230,12 @@ export default async function PerformanceDashboardPage({
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">ROAS (ช่วงที่เลือก)</CardTitle>
-            <div className="rounded-lg bg-yellow-50 p-2 text-yellow-600">
+            <div className="rounded-lg bg-yellow-50 dark:bg-yellow-900/20 p-2 text-yellow-600 dark:text-yellow-400">
               <TrendingUp className="h-4 w-4" />
             </div>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-yellow-600">
+            <div className="text-2xl font-bold text-yellow-600 dark:text-yellow-400 tracking-tight">
               {displayRoas.toFixed(2)}x
             </div>
             <p className="text-xs text-muted-foreground mt-1">
@@ -241,17 +243,19 @@ export default async function PerformanceDashboardPage({
             </p>
           </CardContent>
         </Card>
+        </div>
       </div>
 
       {/* Trend Chart */}
       <Card>
-        <CardHeader>
+        <CardHeader className="pb-3">
           <CardTitle>
             Trend: GMV{gmvBasis === 'paid' ? ' (Paid)' : ''} vs Ad Spend vs Net Profit
             {revenueBasis === 'cashin' && (
               <span className="ml-2 text-sm font-normal text-blue-600">· Revenue = Cash In</span>
             )}
           </CardTitle>
+          <CardDescription>แนวโน้มรายวันในช่วงที่เลือก</CardDescription>
         </CardHeader>
         <CardContent>
           <PerformanceTrendChart data={trend} />
@@ -260,8 +264,9 @@ export default async function PerformanceDashboardPage({
 
       {/* Ads Breakdown */}
       <Card>
-        <CardHeader>
-          <CardTitle>Ads Breakdown (Performance)</CardTitle>
+        <CardHeader className="pb-3">
+          <CardTitle>Ads Breakdown</CardTitle>
+          <CardDescription>ค่าโฆษณาแยกตามแพลตฟอร์ม · ช่วงที่เลือก</CardDescription>
         </CardHeader>
         <CardContent>
           <AdsBreakdownSection from={from} to={to} />
@@ -270,60 +275,79 @@ export default async function PerformanceDashboardPage({
 
       {/* P&L Breakdown */}
       <Card>
-        <CardHeader>
-          <CardTitle>
-            {revenueBasis === 'cashin' ? 'Cash P&L Breakdown' : revenueBasis === 'bank' ? 'Bank P&L Breakdown' : 'P&L Breakdown'}
-            {revenueBasis === 'gmv' && (gmvBasis !== 'created' || cogsBasis !== 'shipped') && (
-              <span className="ml-2 text-sm font-normal text-amber-600">· Mixed basis</span>
-            )}
-            {revenueBasis === 'cashin' && (
-              <span className="ml-2 text-sm font-normal text-blue-600">· Revenue = Settlement Date</span>
-            )}
-            {revenueBasis === 'bank' && (
-              <span className="ml-2 text-sm font-normal text-emerald-600">· Revenue = Bank Inflows (Selected)</span>
-            )}
-          </CardTitle>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>
+                {revenueBasis === 'cashin' ? 'Cash P&L Breakdown' : revenueBasis === 'bank' ? 'Bank P&L Breakdown' : 'P&L Breakdown'}
+              </CardTitle>
+              <CardDescription className="mt-1">
+                {revenueBasis === 'cashin'
+                  ? 'Revenue = เงินรับจริงจาก Settlement'
+                  : revenueBasis === 'bank'
+                  ? 'Revenue = Bank Inflows ที่เลือกไว้'
+                  : `Revenue = GMV · COGS basis: ${cogsBasis === 'shipped' ? 'Shipped Date' : 'Order Date'}`}
+              </CardDescription>
+            </div>
+            <div className="flex flex-col items-end gap-1">
+              {revenueBasis === 'gmv' && (gmvBasis !== 'created' || cogsBasis !== 'shipped') && (
+                <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">Mixed basis</span>
+              )}
+              {revenueBasis === 'cashin' && (
+                <span className="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">Settlement Date</span>
+              )}
+              {revenueBasis === 'bank' && (
+                <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">Bank Inflows</span>
+              )}
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
-          <div className="space-y-3">
-            {/* Revenue row */}
-            <div className="flex justify-between border-b pb-2">
-              <span className="font-medium">
+          <div className="space-y-2">
+            {/* Revenue row — highlighted top line */}
+            <div className={`flex justify-between items-center rounded-lg px-3 py-2.5 ${
+              revenueBasis === 'cashin' ? 'bg-blue-50 dark:bg-blue-900/20' : revenueBasis === 'bank' ? 'bg-emerald-50 dark:bg-emerald-900/20' : 'bg-green-50 dark:bg-green-900/20'
+            }`}>
+              <span className="font-semibold text-sm">
                 {revenueBasis === 'cashin'
                   ? 'Cash In (Settlement Date)'
                   : revenueBasis === 'bank'
                   ? 'Bank Inflows (Selected)'
                   : `GMV (${gmvBasis === 'paid' ? 'Paid Date' : 'Order Date'})`}
               </span>
-              <span className={`font-mono ${revenueBasis === 'cashin' ? 'text-blue-600' : revenueBasis === 'bank' ? 'text-emerald-600' : 'text-green-600'}`}>
+              <span className={`font-mono font-bold ${revenueBasis === 'cashin' ? 'text-blue-700 dark:text-blue-400' : revenueBasis === 'bank' ? 'text-emerald-700 dark:text-emerald-400' : 'text-green-700 dark:text-green-400'}`}>
                 ฿{formatCurrency(displayRevenue)}
               </span>
             </div>
-            <div className="flex justify-between border-b pb-2">
-              <span className="font-medium">Less: Ad Spend</span>
-              <span className="font-mono text-red-600">
-                (฿{formatCurrency(summary.adSpend)})
-              </span>
+
+            {/* Deduction rows — grouped in a subtle container */}
+            <div className="rounded-lg border bg-muted/30 overflow-hidden">
+              <div className="flex justify-between items-center px-3 py-2 border-b">
+                <span className="text-sm text-muted-foreground">Less: <span className="text-foreground">Ad Spend</span></span>
+                <span className="font-mono text-sm text-red-600">(฿{formatCurrency(summary.adSpend)})</span>
+              </div>
+              <div className="flex justify-between items-center px-3 py-2 border-b">
+                <span className="text-sm text-muted-foreground">Less: <span className="text-foreground">COGS ({cogsBasis === 'created' ? 'Order Date' : 'Shipped'})</span></span>
+                <span className="font-mono text-sm text-red-600">(฿{formatCurrency(displayCogs)})</span>
+              </div>
+              <div className="flex justify-between items-center px-3 py-2 border-b">
+                <span className="text-sm text-muted-foreground">Less: <span className="text-foreground">Operating Expenses</span></span>
+                <span className="font-mono text-sm text-red-600">(฿{formatCurrency(displayOp)})</span>
+              </div>
+              <div className="flex justify-between items-center px-3 py-2">
+                <span className="text-sm text-muted-foreground">Less: <span className="text-foreground">Tax</span></span>
+                <span className="font-mono text-sm text-red-600">(฿{formatCurrency(displayTax)})</span>
+              </div>
             </div>
-            <div className="flex justify-between border-b pb-2">
-              <span className="font-medium">Less: COGS ({cogsBasis === 'created' ? 'Order Date' : 'Shipped'})</span>
-              <span className="font-mono text-red-600">
-                (฿{formatCurrency(displayCogs)})
-              </span>
-            </div>
-            <div className="flex justify-between border-b pb-2">
-              <span className="font-medium">Less: Operating Expenses</span>
-              <span className="font-mono text-red-600">(฿{formatCurrency(displayOp)})</span>
-            </div>
-            <div className="flex justify-between border-b pb-2">
-              <span className="font-medium">Less: Tax</span>
-              <span className="font-mono text-red-600">(฿{formatCurrency(displayTax)})</span>
-            </div>
-            <div className="flex justify-between border-t-2 pt-3">
-              <span className="text-lg font-bold">
+
+            {/* Net — emphasized bottom line */}
+            <div className={`flex justify-between items-center rounded-lg px-3 py-3 border ${
+              isProfit ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800/40' : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800/40'
+            }`}>
+              <span className={`font-bold text-base ${isProfit ? 'text-green-800 dark:text-green-400' : 'text-red-800 dark:text-red-400'}`}>
                 {revenueBasis === 'cashin' || revenueBasis === 'bank' ? 'Net Cash' : 'Net Profit'}
               </span>
-              <span className={`text-lg font-bold font-mono ${isProfit ? 'text-green-600' : 'text-red-600'}`}>
+              <span className={`text-xl font-bold font-mono ${isProfit ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
                 {isProfit ? '' : '-'}฿{formatCurrency(Math.abs(displayNet))}
               </span>
             </div>

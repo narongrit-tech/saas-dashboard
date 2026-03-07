@@ -33,7 +33,7 @@ export function Header({ title, user }: HeaderProps) {
   }
 
   return (
-    <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b bg-white px-6">
+    <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b bg-card px-6">
       <h1 className="text-2xl font-bold">{title}</h1>
 
       <div className="flex items-center gap-4">

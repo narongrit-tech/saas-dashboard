@@ -25,57 +25,59 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 3.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 0 0% 3.9%;
+    /* ── DayNight Admin — Snow Edition ── */
+    --background: 210 40% 98%;      /* #F8FAFC slate-50 */
+    --foreground: 222 47% 11%;      /* #1E293B slate-800 */
+    --card: 0 0% 100%;              /* #FFFFFF */
+    --card-foreground: 222 47% 11%;
     --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 3.9%;
-    --primary: 0 0% 9%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 0 0% 96.1%;
-    --secondary-foreground: 0 0% 9%;
-    --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
-    --accent: 0 0% 96.1%;
-    --accent-foreground: 0 0% 9%;
-    --destructive: 0 84.2% 60.2%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 199 93% 60%;         /* #38BDF8 sky-400 */
+    --primary-foreground: 222 47% 11%; /* dark text on sky */
+    --secondary: 210 40% 96%;       /* #F1F5F9 slate-100 */
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;           /* #F1F5F9 */
+    --muted-foreground: 215 16% 47%; /* #64748B slate-500 */
+    --accent: 210 40% 94%;          /* hover bg */
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 84% 60%;       /* #EF4444 */
     --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 89.8%;
-    --input: 0 0% 89.8%;
-    --ring: 0 0% 3.9%;
-    --chart-1: 12 76% 61%;
-    --chart-2: 173 58% 39%;
-    --chart-3: 197 37% 24%;
-    --chart-4: 43 74% 66%;
-    --chart-5: 27 87% 67%;
-    --radius: 0.5rem;
+    --border: 214 32% 91%;          /* #E2E8F0 slate-200 */
+    --input: 214 32% 91%;
+    --ring: 199 93% 60%;            /* sky blue ring */
+    --chart-1: 199 93% 60%;         /* sky blue */
+    --chart-2: 142 71% 45%;         /* green #22C55E */
+    --chart-3: 38 92% 50%;          /* amber #F59E0B */
+    --chart-4: 0 84% 60%;           /* red #EF4444 */
+    --chart-5: 262 83% 58%;         /* purple */
+    --radius: 0.75rem;              /* 12px — DayNight card radius */
   }
   .dark {
-    --background: 0 0% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 0 0% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 0 0% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 9%;
-    --secondary: 0 0% 14.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 0 0% 14.9%;
-    --muted-foreground: 0 0% 63.9%;
-    --accent: 0 0% 14.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
+    /* ── DayNight Admin — Carbon Edition ── */
+    --background: 0 0% 9%;          /* #171717 */
+    --foreground: 0 0% 96%;         /* #F5F5F5 */
+    --card: 0 0% 6%;                /* #0F0F0F */
+    --card-foreground: 0 0% 96%;
+    --popover: 0 0% 6%;
+    --popover-foreground: 0 0% 96%;
+    --primary: 199 93% 60%;         /* sky blue (same) */
+    --primary-foreground: 222 47% 11%;
+    --secondary: 0 0% 12%;          /* #1F1F1F */
+    --secondary-foreground: 0 0% 96%;
+    --muted: 0 0% 12%;
+    --muted-foreground: 0 0% 64%;   /* #A3A3A3 */
+    --accent: 0 0% 15%;
+    --accent-foreground: 0 0% 96%;
+    --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
-    --ring: 0 0% 83.1%;
-    --chart-1: 220 70% 50%;
-    --chart-2: 160 60% 45%;
-    --chart-3: 30 80% 55%;
-    --chart-4: 280 65% 60%;
-    --chart-5: 340 75% 55%;
+    --border: 0 0% 18%;             /* #2E2E2E */
+    --input: 0 0% 18%;
+    --ring: 199 93% 60%;
+    --chart-1: 199 93% 60%;
+    --chart-2: 142 71% 45%;
+    --chart-3: 38 92% 50%;
+    --chart-4: 0 84% 60%;
+    --chart-5: 262 83% 58%;
   }
 }
 
@@ -87,5 +89,6 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-dm-sans), var(--font-geist-sans), -apple-system, BlinkMacSystemFont, sans-serif;
   }
 }

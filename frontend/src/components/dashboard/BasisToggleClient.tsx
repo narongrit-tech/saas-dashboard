@@ -36,11 +36,11 @@ function PillButton({
       type="button"
       onClick={onClick}
       className={[
-        'px-2.5 py-1 text-xs transition-colors',
+        'px-3 py-1 text-xs transition-colors',
         first ? '' : 'border-l',
         active
-          ? 'bg-primary text-primary-foreground'
-          : 'bg-background text-foreground hover:bg-muted',
+          ? 'bg-primary text-primary-foreground font-medium'
+          : 'bg-background text-muted-foreground hover:bg-muted hover:text-foreground',
       ].join(' ')}
     >
       {children}
@@ -119,18 +119,18 @@ export function BasisToggleClient({ gmvBasis, cogsBasis, revenueBasis }: BasisTo
 
       {/* Help texts */}
       {revenueBasis === 'cashin' && (
-        <span className="text-blue-600 hidden sm:inline">
-          · Cash In = เงินรับจริงจาก Settlement หลังหักค่าธรรมเนียม (TikTok + Shopee)
+        <span className="hidden sm:inline-flex items-center gap-1 text-xs text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">
+          เงินรับจริงจาก Settlement หลังหักค่าธรรมเนียม
         </span>
       )}
       {revenueBasis === 'bank' && (
-        <span className="text-emerald-600 hidden sm:inline">
-          · Bank = เงินเข้าธนาคารที่เลือกไว้ (คลิกที่การ์ดเพื่อเลือก)
+        <span className="hidden sm:inline-flex items-center gap-1 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+          คลิกที่การ์ด Bank Inflows เพื่อเลือกรายการ
         </span>
       )}
       {revenueBasis === 'gmv' && cogsBasis === 'created' && (
-        <span className="text-amber-600 hidden sm:inline">
-          · COGS (Order Date) เป็นมุมมองวิเคราะห์รายวัน ไม่ใช่การรับรู้ตามบัญชี
+        <span className="hidden sm:inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+          COGS (Order Date) = มุมมองวิเคราะห์เท่านั้น
         </span>
       )}
     </div>

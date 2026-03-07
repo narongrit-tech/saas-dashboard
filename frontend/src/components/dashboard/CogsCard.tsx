@@ -65,7 +65,7 @@ export function CogsCard({
   return (
     <>
       <Card
-        className="cursor-pointer hover:shadow-md transition-shadow select-none"
+        className="cursor-pointer hover:shadow-md hover:ring-1 hover:ring-orange-200 transition-all select-none"
         onClick={() => setOpen(true)}
       >
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -73,12 +73,12 @@ export function CogsCard({
             COGS {cogsBasis === 'created' ? '(Order Date)' : '(Shipped Date)'}
             {expFiltered ? ' \u270e' : ''}
           </CardTitle>
-          <div className="rounded-lg bg-orange-50 p-2 text-orange-600">
+          <div className="rounded-lg bg-orange-50 dark:bg-orange-900/20 p-2 text-orange-600 dark:text-orange-400">
             <Package className="h-4 w-4" />
           </div>
         </CardHeader>
         <CardContent>
-          <div className="text-2xl font-bold text-orange-600">฿{fmt(total)}</div>
+          <div className="text-2xl font-bold text-orange-600 dark:text-orange-400 tracking-tight">฿{fmt(total)}</div>
           <p className="text-xs text-muted-foreground mt-1">
             {cogsBasis === 'shipped'
               ? 'ต้นทุนตามวันจัดส่ง (FIFO/AVG)'
@@ -86,9 +86,8 @@ export function CogsCard({
             {currentCogsExp > 0 && (
               <span className="text-orange-500"> + Expenses</span>
             )}
-            {' · '}
-            <span className="text-orange-500">คลิกดูรายละเอียด</span>
           </p>
+          <p className="text-xs text-orange-500 mt-0.5">คลิกดูรายละเอียด →</p>
         </CardContent>
       </Card>
 
