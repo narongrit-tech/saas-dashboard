@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
 import { checkImportOverlap } from '@/app/(dashboard)/bank/import-actions';
 
 export const dynamic = 'force-dynamic';
@@ -26,6 +27,12 @@ export const maxDuration = 30;
  */
 export async function POST(request: NextRequest) {
   try {
+    const supabase = createClient();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
     const bankAccountId = formData.get('bank_account_id') as string | null;
