@@ -15,92 +15,75 @@ export interface DualCalendarProps {
     after?: Date | undefined;
   };
   className?: string;
+  /** When true: single-month view (used on mobile) */
+  singleMonth?: boolean;
 }
 
 /**
- * Dual calendar with month/year navigation
+ * Calendar with month/year navigation.
+ * Desktop: dual-month side-by-side.
+ * Mobile: pass singleMonth=true to render one month only.
  */
 export function DualCalendar({
   value,
   onChange,
   disabled,
   className,
+  singleMonth = false,
 }: DualCalendarProps) {
-  // Filter out undefined values from disabled prop for react-day-picker
   const disabledMatcher =
     disabled && (disabled.before || disabled.after)
       ? ({
           ...(disabled.before && { before: disabled.before }),
-          ...(disabled.after && { after: disabled.after }),
+          ...(disabled.after  && { after:  disabled.after  }),
         } as { before?: Date; after?: Date })
       : undefined;
 
-  // Current month for left calendar
   const [leftMonth, setLeftMonth] = useState(() => {
-    if (value?.from) {
-      return new Date(value.from.getFullYear(), value.from.getMonth(), 1);
-    }
+    if (value?.from) return new Date(value.from.getFullYear(), value.from.getMonth(), 1);
     return new Date();
   });
 
-  // Right month is always left month + 1
   const rightMonth = new Date(leftMonth.getFullYear(), leftMonth.getMonth() + 1, 1);
 
-  /**
-   * Handle month navigation (arrow buttons)
-   */
   const handlePreviousMonth = () => {
-    const newMonth = new Date(leftMonth);
-    newMonth.setMonth(newMonth.getMonth() - 1);
-    setLeftMonth(newMonth);
+    const m = new Date(leftMonth);
+    m.setMonth(m.getMonth() - 1);
+    setLeftMonth(m);
   };
 
   const handleNextMonth = () => {
-    const newMonth = new Date(leftMonth);
-    newMonth.setMonth(newMonth.getMonth() + 1);
-    setLeftMonth(newMonth);
+    const m = new Date(leftMonth);
+    m.setMonth(m.getMonth() + 1);
+    setLeftMonth(m);
   };
 
-  /**
-   * Handle month change from dropdown (left calendar)
-   */
   const handleLeftMonthChange = (month: number) => {
-    const newMonth = new Date(leftMonth);
-    newMonth.setMonth(month);
-    setLeftMonth(newMonth);
+    const m = new Date(leftMonth);
+    m.setMonth(month);
+    setLeftMonth(m);
   };
 
-  /**
-   * Handle year change from dropdown (left calendar)
-   */
   const handleLeftYearChange = (year: number) => {
-    const newMonth = new Date(leftMonth);
-    newMonth.setFullYear(year);
-    setLeftMonth(newMonth);
+    const m = new Date(leftMonth);
+    m.setFullYear(year);
+    setLeftMonth(m);
   };
 
-  /**
-   * Handle month change from dropdown (right calendar)
-   */
   const handleRightMonthChange = (month: number) => {
-    const newMonth = new Date(rightMonth);
-    newMonth.setMonth(month);
-    // Set left month to be 1 month before right month
-    const leftDate = new Date(newMonth);
-    leftDate.setMonth(leftDate.getMonth() - 1);
-    setLeftMonth(leftDate);
+    const m = new Date(rightMonth);
+    m.setMonth(month);
+    const left = new Date(m);
+    left.setMonth(left.getMonth() - 1);
+    setLeftMonth(left);
   };
 
-  /**
-   * Handle year change from dropdown (right calendar)
-   */
   const handleRightYearChange = (year: number) => {
-    const newMonth = new Date(rightMonth);
-    newMonth.setFullYear(year);
-    // Set left month to be 1 month before right month
-    const leftDate = new Date(newMonth);
-    leftDate.setMonth(leftDate.getMonth() - 1);
-    setLeftMonth(leftDate);
+    const m = new Date(rightMonth);
+    m.setFullYear(year);
+    const left = new Date(m);
+    left.setMonth(left.getMonth() - 1);
+    setLeftMonth(left);
   };
 
   return (
@@ -118,21 +101,20 @@ export function DualCalendar({
         </Button>
 
         <div className="flex gap-4">
-          {/* Left Calendar Selectors */}
           <MonthYearSelector
             month={leftMonth.getMonth()}
             year={leftMonth.getFullYear()}
             onMonthChange={handleLeftMonthChange}
             onYearChange={handleLeftYearChange}
           />
-
-          {/* Right Calendar Selectors */}
-          <MonthYearSelector
-            month={rightMonth.getMonth()}
-            year={rightMonth.getFullYear()}
-            onMonthChange={handleRightMonthChange}
-            onYearChange={handleRightYearChange}
-          />
+          {!singleMonth && (
+            <MonthYearSelector
+              month={rightMonth.getMonth()}
+              year={rightMonth.getFullYear()}
+              onMonthChange={handleRightMonthChange}
+              onYearChange={handleRightYearChange}
+            />
+          )}
         </div>
 
         <Button
@@ -146,23 +128,20 @@ export function DualCalendar({
         </Button>
       </div>
 
-      {/* Dual Calendar */}
+      {/* Calendar */}
       <Calendar
         mode="range"
         selected={value}
         onSelect={onChange}
-        numberOfMonths={2}
+        numberOfMonths={singleMonth ? 1 : 2}
         month={leftMonth}
         onMonthChange={setLeftMonth}
-        disabled={disabledMatcher as any}
+        disabled={disabledMatcher as Parameters<typeof Calendar>[0]['disabled']}
         className="rounded-md border"
       />
 
-      {/* Hint text when selecting */}
       {value?.from && !value?.to && (
-        <div className="text-xs text-muted-foreground text-center">
-          เลือกวันสิ้นสุด
-        </div>
+        <div className="text-xs text-muted-foreground text-center">เลือกวันสิ้นสุด</div>
       )}
     </div>
   );
