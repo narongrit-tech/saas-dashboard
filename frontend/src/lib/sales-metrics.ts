@@ -118,11 +118,11 @@ export async function fetchGMVByDay(supabase: any, from: string, to: string): Pr
   // ── Build gmvByDate map ──────────────────────────────────────────────────
   const gmvByDate = new Map<string, number>()
 
-  for (const bucket of orderMap.values()) {
+  for (const bucket of Array.from(orderMap.values())) {
     let gmv: number
     if (bucket.order_amounts.length > 0) {
       const first   = bucket.order_amounts[0]
-      const allSame = bucket.order_amounts.every((a) => a === first)
+      const allSame = bucket.order_amounts.every((a: number) => a === first)
       gmv = allSame ? first : bucket.line_total_sum
     } else {
       gmv = bucket.line_total_sum
@@ -217,11 +217,11 @@ export async function fetchGMVByCreatedTime(supabase: any, from: string, to: str
   }
 
   const gmvByDate = new Map<string, number>()
-  for (const bucket of orderMap.values()) {
+  for (const bucket of Array.from(orderMap.values())) {
     let gmv: number
     if (bucket.order_amounts.length > 0) {
       const first   = bucket.order_amounts[0]
-      const allSame = bucket.order_amounts.every((a) => a === first)
+      const allSame = bucket.order_amounts.every((a: number) => a === first)
       gmv = allSame ? first : bucket.line_total_sum
     } else {
       gmv = bucket.line_total_sum
@@ -322,11 +322,11 @@ export async function fetchGMVByDayPaid(supabase: any, from: string, to: string)
   // ── Build gmvByDate map ──────────────────────────────────────────────────
   const gmvByDate = new Map<string, number>()
 
-  for (const bucket of orderMap.values()) {
+  for (const bucket of Array.from(orderMap.values())) {
     let gmv: number
     if (bucket.order_amounts.length > 0) {
       const first   = bucket.order_amounts[0]
-      const allSame = bucket.order_amounts.every((a) => a === first)
+      const allSame = bucket.order_amounts.every((a: number) => a === first)
       gmv = allSame ? first : bucket.line_total_sum
     } else {
       gmv = bucket.line_total_sum
