@@ -24,6 +24,11 @@ import {
   ArrowLeftCircle,
   Tags,
   Banknote,
+  Palette,
+  Shield,
+  Key,
+  Calculator,
+  Lock,
 } from 'lucide-react'
 
 interface MenuItem {
@@ -157,11 +162,13 @@ const menuGroups: MenuGroup[] = [
     title: 'Settings',
     defaultExpanded: false,
     items: [
-      {
-        title: 'Settings',
-        href: '/settings',
-        icon: Settings,
-      },
+      { title: 'General',       href: '/settings/general',          icon: Settings    },
+      { title: 'Appearance',    href: '/settings/appearance',       icon: Palette     },
+      { title: 'Users',         href: '/settings/users',            icon: Users       },
+      { title: 'Roles',         href: '/settings/roles',            icon: Shield      },
+      { title: 'Permissions',   href: '/settings/permissions',      icon: Key         },
+      { title: 'Finance Rules', href: '/settings/finance-defaults', icon: Calculator  },
+      { title: 'Security',      href: '/settings/security',         icon: Lock        },
     ],
   },
 ]
@@ -170,13 +177,19 @@ export function Sidebar() {
   const pathname = usePathname()
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
 
+  function isItemActive(href: string): boolean {
+    // Settings sub-pages use startsWith so /settings/general is active on that path
+    if (href.startsWith('/settings/')) return pathname === href || pathname.startsWith(href + '/')
+    return pathname === href
+  }
+
   // Initialize expanded state and auto-expand group with active route
   useEffect(() => {
     const initialExpanded: Record<string, boolean> = {}
 
     menuGroups.forEach((group) => {
       // Check if this group contains the active route
-      const hasActiveRoute = group.items.some((item) => pathname === item.href)
+      const hasActiveRoute = group.items.some((item) => isItemActive(item.href))
 
       // Expand if: default expanded OR contains active route
       initialExpanded[group.title] = group.defaultExpanded || hasActiveRoute
@@ -218,7 +231,7 @@ export function Sidebar() {
       <nav className="flex-1 space-y-1 p-4 overflow-y-auto scrollbar-hide">
         {menuGroups.map((group) => {
           const isExpanded = expandedGroups[group.title]
-          const hasActiveRoute = group.items.some((item) => pathname === item.href)
+          const hasActiveRoute = group.items.some((item) => isItemActive(item.href))
 
           return (
             <div key={group.title} className="space-y-1">
@@ -244,7 +257,7 @@ export function Sidebar() {
               {isExpanded && (
                 <div className="ml-2 space-y-1">
                   {group.items.map((item) => {
-                    const isActive = pathname === item.href
+                    const isActive = isItemActive(item.href)
                     const Icon = item.icon
 
                     return (
