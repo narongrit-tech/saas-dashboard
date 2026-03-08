@@ -36,18 +36,18 @@ Changes:
 - Large tappable buttons
 - Sections: Imports, Manual Entry
 
----
-
-## Pending
-
 ### Cash P&L
 Route: /reports/cash-pl
 Spec: docs/ui-mobile/03-cash-pnl.md
-Required:
-- compact header
-- KPI cards responsive
-- Net Cash Change highlighted
-- Daily Cash Movement table becomes cards on mobile
+Changes:
+- Compact header (text-xl sm:text-2xl)
+- KPI cards: grid-cols-2 on mobile, md:grid-cols-3 on desktop
+- Net Cash Change: full width on mobile (col-span-2), prominent
+- Daily Cash Movement: card list on mobile, table on desktop
+
+---
+
+## Pending
 
 ### Sales Orders
 Route: /sales
@@ -115,8 +115,8 @@ Purpose:
 
 ## Next Page To Improve
 
-Cash P&L — /reports/cash-pl
-Spec ready at: docs/ui-mobile/03-cash-pnl.md
+Sales Orders — /sales
+Spec ready at: docs/ui-mobile/04-sales-orders.md
 
 ---
 

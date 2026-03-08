@@ -40,17 +40,17 @@ export default async function CashPLPage() {
   const isPositive = summary.netChange >= 0
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold">Cash P&L</h1>
-        <p className="text-muted-foreground">
+        <h1 className="text-xl font-bold leading-tight sm:text-2xl">Cash P&L</h1>
+        <p className="text-sm text-muted-foreground">
           เงินสดเข้า-ออกจริง · 7 วันที่ผ่านมา ({formatDateRange(summary.startDate, summary.endDate)}) · Asia/Bangkok
         </p>
       </div>
 
       {/* Summary Cards */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
         {/* Cash In */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -88,7 +88,7 @@ export default async function CashPLPage() {
         </Card>
 
         {/* Net Change */}
-        <Card className={isPositive ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}>
+        <Card className={`col-span-2 md:col-span-1 ${isPositive ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Net Cash Change (7 วัน)</CardTitle>
             <div className={`rounded-lg p-2 ${isPositive ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
@@ -104,13 +104,68 @@ export default async function CashPLPage() {
         </Card>
       </div>
 
-      {/* Daily Breakdown Table */}
+      {/* Daily Breakdown */}
       <Card>
         <CardHeader>
           <CardTitle>Daily Cash Movement</CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
+        <CardContent className="p-0 sm:p-6">
+          {/* Mobile: card list */}
+          <div className="divide-y sm:hidden">
+            {daily.map((row) => {
+              const rowPositive = row.net >= 0
+              return (
+                <div key={row.date} className="px-4 py-3 space-y-2">
+                  <div className="font-medium text-sm">{row.dateLabel}</div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Cash In</span>
+                      <span className="font-mono text-green-600">
+                        {row.cashIn > 0 ? `฿${formatCurrency(row.cashIn)}` : '–'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Cash Out</span>
+                      <span className="font-mono text-red-600">
+                        {row.cashOut > 0 ? `฿${formatCurrency(row.cashOut)}` : '–'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between col-span-2">
+                      <span className="text-muted-foreground">Net</span>
+                      <span className={`font-mono font-semibold ${rowPositive ? 'text-green-600' : 'text-red-600'}`}>
+                        {row.net === 0
+                          ? '฿0.00'
+                          : `${rowPositive ? '+' : '-'}฿${formatCurrency(Math.abs(row.net))}`}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+            {/* Mobile total row */}
+            <div className="px-4 py-3 space-y-2 bg-muted/30">
+              <div className="font-bold text-sm">รวม</div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Cash In</span>
+                  <span className="font-mono font-bold text-green-600">฿{formatCurrency(summary.cashIn)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Cash Out</span>
+                  <span className="font-mono font-bold text-red-600">฿{formatCurrency(summary.cashOut)}</span>
+                </div>
+                <div className="flex justify-between col-span-2">
+                  <span className="text-muted-foreground">Net</span>
+                  <span className={`font-mono font-bold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
+                    {isPositive ? '+' : '-'}฿{formatCurrency(Math.abs(summary.netChange))}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Desktop: table */}
+          <div className="hidden sm:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left">

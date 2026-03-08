@@ -1,6 +1,15 @@
 # Cash P&L Page
 
-Status: Pending
+Status: Completed
+Date: 2026-03-08
+
+Changes implemented:
+
+* Header changed to text-xl sm:text-2xl, compact spacing (space-y-4)
+* KPI cards: grid-cols-2 gap-3 on mobile, md:grid-cols-3 on desktop
+* Net Cash Change card: col-span-2 on mobile (full width, prominent), md:col-span-1 on desktop
+* Daily Cash Movement: table hidden on mobile; 2-col card list on mobile (with total row)
+* Desktop layout unchanged
 
 Route: /reports/cash-pl
 
