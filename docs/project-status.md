@@ -47,13 +47,16 @@ Changes:
 
 ### Sales Orders
 Route: /sales
-Spec: docs/ui-mobile/04-sales-orders.md
+Spec: docs/ui-mobile/04-sales-orders.md + docs/ui-mobile/08-sales-orders-analytics.md
 Changes:
 - Compact header (text-xl sm:text-2xl)
 - GMV KPI cards: grid-cols-2 on mobile (GMVCards component)
 - Import TikTok + Import Shopee buttons: hidden on mobile (hidden lg:flex)
 - SKU Outflow: 2-col card grid on mobile, table on desktop
 - Orders table: mobile card list (order view), table on desktop
+- Platform Distribution: donut chart + horizontal bar chart on desktop; compact platform cards with progress bars on mobile
+- Leakage by Platform: horizontal bars with orange styling on desktop; compact orange cards on mobile
+- New server action: getSalesPlatformBreakdown (parallel, no business logic changed)
 
 ### Internal Affiliates
 Route: /affiliates

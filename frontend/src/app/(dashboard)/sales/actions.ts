@@ -2235,6 +2235,201 @@ export async function getSalesGMVSummary(
 }
 
 // ============================================================
+// Platform Breakdown (GMV + Leakage by platform)
+// ============================================================
+
+export interface PlatformBreakdownRow {
+  platform: string
+  gmv_created: number
+  orders_created: number
+  gmv_leakage: number
+  orders_leakage: number
+  leakage_pct: number   // gmv_leakage / gmv_created * 100
+  gmv_pct: number       // share of total gmv (0–100)
+  orders_pct: number    // share of total orders (0–100)
+}
+
+/**
+ * Get GMV + Leakage breakdown by source_platform.
+ * Uses identical cohort logic to getSalesGMVSummary — same date filter,
+ * same COALESCE(created_time, order_date) logic, same GMV rule per order.
+ * Does NOT change any existing function; parallel query only.
+ */
+export async function getSalesPlatformBreakdown(
+  filters: ExportFilters,
+  dateBasis: 'order' | 'paid' = 'order'
+): Promise<{ success: boolean; data?: PlatformBreakdownRow[]; error?: string }> {
+  noStore()
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่' }
+
+    if (!filters.startDate || !filters.endDate) return { success: true, data: [] }
+
+    const { toZonedTime } = await import('date-fns-tz')
+    const { endOfDay } = await import('date-fns')
+    const bangkokEndDate = toZonedTime(new Date(filters.endDate), 'Asia/Bangkok')
+    const endOfDayISO = endOfDay(bangkokEndDate).toISOString()
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let baseQuery: any = supabase
+      .from('sales_orders')
+      .select('external_order_id, order_id, order_amount, total_amount, shipped_at, status_group, created_time, order_date, paid_time, source_platform')
+      .eq('created_by', user.id)
+
+    if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
+      baseQuery = baseQuery.eq('source_platform', filters.sourcePlatform)
+    }
+    if (filters.status && filters.status.length > 0) {
+      baseQuery = baseQuery.in('platform_status', filters.status)
+    }
+    if (filters.paymentStatus && filters.paymentStatus !== 'all') {
+      baseQuery = baseQuery.eq('payment_status', filters.paymentStatus)
+    }
+    if (filters.search && filters.search.trim()) {
+      baseQuery = baseQuery.or(
+        `order_id.ilike.%${filters.search}%,product_name.ilike.%${filters.search}%,external_order_id.ilike.%${filters.search}%`
+      )
+    }
+
+    if (dateBasis === 'paid') {
+      baseQuery = baseQuery
+        .not('paid_time', 'is', null)
+        .gte('paid_time', filters.startDate)
+        .lte('paid_time', endOfDayISO)
+    } else {
+      baseQuery = baseQuery
+        .gte('order_date', filters.startDate)
+        .lte('order_date', endOfDayISO)
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let allLines: any[] = []
+    const PAGE_SIZE = 1000
+    let from = 0
+    let hasMore = true
+
+    while (hasMore) {
+      const { data: page, error: pageError } = await baseQuery.range(from, from + PAGE_SIZE - 1)
+      if (pageError) return { success: false, error: `เกิดข้อผิดพลาด: ${pageError.message}` }
+      if (page && page.length > 0) {
+        allLines = allLines.concat(page)
+        hasMore = page.length === PAGE_SIZE
+        from += PAGE_SIZE
+      } else {
+        hasMore = false
+      }
+    }
+
+    if (allLines.length === 0) return { success: true, data: [] }
+
+    // COALESCE(created_time, order_date) client-side filter — identical to getSalesGMVSummary
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cohortLines = dateBasis === 'order'
+      ? allLines.filter((line: any) => {
+          const effectiveDate = line.created_time || line.order_date
+          if (!effectiveDate) return false
+          const bangkokDateStr = toBangkokDateString(new Date(effectiveDate))
+          if (filters.startDate && bangkokDateStr < filters.startDate) return false
+          if (filters.endDate && bangkokDateStr > filters.endDate) return false
+          return true
+        })
+      : allLines
+
+    if (cohortLines.length === 0) return { success: true, data: [] }
+
+    // Per-order aggregation (same GMV rule as getSalesGMVSummary)
+    interface OrderBucket {
+      order_amounts: number[]
+      line_total_sum: number
+      shipped_at: string | null
+      is_cancelled: boolean
+      platform: string
+    }
+    const orderMap = new Map<string, OrderBucket>()
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const line of cohortLines as any[]) {
+      const key = (line.external_order_id as string | null) || (line.order_id as string)
+      const platform = (line.source_platform as string | null) || 'other'
+      const lineTotal = Number(line.total_amount ?? 0)
+      const lineOrderAmt = (line.order_amount != null && Number(line.order_amount) > 0)
+        ? Number(line.order_amount) : null
+      const lineShipped = (line.shipped_at as string | null) ?? null
+      const lineCancelled = (line.status_group as string | null) === 'ยกเลิกแล้ว'
+
+      const existing = orderMap.get(key)
+      if (!existing) {
+        orderMap.set(key, {
+          order_amounts: lineOrderAmt != null ? [lineOrderAmt] : [],
+          line_total_sum: lineTotal,
+          shipped_at: lineShipped,
+          is_cancelled: lineCancelled,
+          platform,
+        })
+      } else {
+        existing.line_total_sum += lineTotal
+        if (lineOrderAmt != null) existing.order_amounts.push(lineOrderAmt)
+        if (!existing.shipped_at && lineShipped) existing.shipped_at = lineShipped
+        if (lineCancelled) existing.is_cancelled = true
+      }
+    }
+
+    // Aggregate by platform
+    const platformMap = new Map<string, { gmv_created: number; orders_created: number; gmv_leakage: number; orders_leakage: number }>()
+
+    for (const order of Array.from(orderMap.values())) {
+      let gmv: number
+      if (order.order_amounts.length > 0) {
+        const first = order.order_amounts[0]
+        gmv = order.order_amounts.every((a) => a === first) ? first : order.line_total_sum
+      } else {
+        gmv = order.line_total_sum
+      }
+      const is_fulfilled = !!order.shipped_at && !order.is_cancelled
+      const is_leakage = !is_fulfilled
+      const p = platformMap.get(order.platform)
+      if (!p) {
+        platformMap.set(order.platform, {
+          gmv_created: gmv, orders_created: 1,
+          gmv_leakage: is_leakage ? gmv : 0,
+          orders_leakage: is_leakage ? 1 : 0,
+        })
+      } else {
+        p.gmv_created += gmv
+        p.orders_created++
+        if (is_leakage) { p.gmv_leakage += gmv; p.orders_leakage++ }
+      }
+    }
+
+    let totalGmv = 0, totalOrders = 0
+    for (const p of Array.from(platformMap.values())) {
+      totalGmv += p.gmv_created
+      totalOrders += p.orders_created
+    }
+
+    const rows: PlatformBreakdownRow[] = Array.from(platformMap.entries())
+      .map(([platform, p]) => ({
+        platform,
+        gmv_created: Math.round(p.gmv_created * 100) / 100,
+        orders_created: p.orders_created,
+        gmv_leakage: Math.round(p.gmv_leakage * 100) / 100,
+        orders_leakage: p.orders_leakage,
+        leakage_pct: p.gmv_created > 0 ? Math.round(p.gmv_leakage / p.gmv_created * 10000) / 100 : 0,
+        gmv_pct: totalGmv > 0 ? Math.round(p.gmv_created / totalGmv * 10000) / 100 : 0,
+        orders_pct: totalOrders > 0 ? Math.round(p.orders_created / totalOrders * 10000) / 100 : 0,
+      }))
+      .sort((a, b) => b.gmv_created - a.gmv_created)
+
+    return { success: true, data: rows }
+  } catch (error) {
+    console.error('Unexpected error in getSalesPlatformBreakdown:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด' }
+  }
+}
+
+// ============================================================
 // Main SKU Outflow Summary
 // ============================================================
 

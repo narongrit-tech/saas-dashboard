@@ -9,7 +9,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { DateRangePicker, DateRangeResult } from '@/components/shared/DateRangePicker'
 import { GMVCards } from '@/components/sales/GMVCards'
-import { getSalesOrdersGrouped, getSalesGMVSummary, GMVSummary, getMainSkuOutflowSummary, MainSkuOutflowRow } from '@/app/(dashboard)/sales/actions'
+import { getSalesOrdersGrouped, getSalesGMVSummary, GMVSummary, getMainSkuOutflowSummary, MainSkuOutflowRow, getSalesPlatformBreakdown, PlatformBreakdownRow } from '@/app/(dashboard)/sales/actions'
+import { SalesPlatformAnalytics } from '@/components/sales/SalesPlatformAnalytics'
 import { useLatestOnly } from '@/hooks/useLatestOnly'
 import {
   Select,
@@ -94,6 +95,7 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
   const { runLatest: runLatestOrders } = useLatestOnly()
   const { runLatest: runLatestGmv } = useLatestOnly()
   const { runLatest: runLatestSkuOutflow } = useLatestOnly()
+  const { runLatest: runLatestPlatform } = useLatestOnly()
 
   const [orders, setOrders] = useState<SalesOrder[]>([])
   const [groupedOrders, setGroupedOrders] = useState<GroupedSalesOrder[]>([])
@@ -118,6 +120,10 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
   const [gmvSummary, setGmvSummary] = useState<GMVSummary | null>(null)
   const [gmvSummaryLoading, setGmvSummaryLoading] = useState(true)
   const [gmvSummaryError, setGmvSummaryError] = useState<string | null>(null)
+
+  // Platform breakdown state
+  const [platformBreakdown, setPlatformBreakdown] = useState<PlatformBreakdownRow[]>([])
+  const [platformBreakdownLoading, setPlatformBreakdownLoading] = useState(false)
 
   // Main SKU Outflow state
   const [mainSkuOutflow, setMainSkuOutflow] = useState<MainSkuOutflowRow[]>([])
@@ -265,6 +271,7 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
     fetchOrders()
     fetchGMVSummary()
     fetchMainSkuOutflow()
+    fetchPlatformBreakdown()
   }, [sourcePlatform, statusString, paymentStatus, startDate, endDate, search, page, perPage, dateBasis, view])
 
   const fetchGMVSummary = async () => {
@@ -340,6 +347,39 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
         console.error('Error fetching main SKU outflow:', err)
       } finally {
         if (!signal.isStale) setMainSkuOutflowLoading(false)
+      }
+    })
+  }
+
+  const fetchPlatformBreakdown = async () => {
+    await runLatestPlatform(async (signal) => {
+      setPlatformBreakdownLoading(true)
+      try {
+        if (!filters.startDate || !filters.endDate) {
+          setPlatformBreakdown([])
+          setPlatformBreakdownLoading(false)
+          return
+        }
+        const result = await getSalesPlatformBreakdown(
+          {
+            sourcePlatform: filters.sourcePlatform,
+            status: filters.status,
+            paymentStatus: filters.paymentStatus,
+            startDate: filters.startDate,
+            endDate: filters.endDate,
+            search: filters.search,
+          },
+          dateBasis
+        )
+        if (signal.isStale) return
+        if (result.success) {
+          setPlatformBreakdown(result.data || [])
+        }
+      } catch (err) {
+        if (signal.isStale) return
+        console.error('Error fetching platform breakdown:', err)
+      } finally {
+        if (!signal.isStale) setPlatformBreakdownLoading(false)
       }
     })
   }
@@ -717,6 +757,11 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
         loading={gmvSummaryLoading}
         error={gmvSummaryError}
         dateBasis={dateBasis}
+      />
+
+      <SalesPlatformAnalytics
+        data={platformBreakdown}
+        loading={platformBreakdownLoading}
       />
 
       {/* DEBUG CHIP (Dev Only) */}
