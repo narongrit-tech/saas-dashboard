@@ -13,6 +13,7 @@ import { CogsCard } from '@/components/dashboard/CogsCard'
 import { BankRevenueCard } from '@/components/dashboard/BankRevenueCard'
 import { MarketingPerformanceCards } from '@/components/dashboard/MarketingPerformanceCards'
 import { ProfitBridge } from '@/components/dashboard/ProfitBridge'
+import { CollapsibleSection } from '@/components/dashboard/CollapsibleSection'
 import { parsePickerState } from '@/lib/expense-picker'
 
 export const dynamic = 'force-dynamic'
@@ -168,7 +169,7 @@ export default async function PerformanceDashboardPage({
       ══════════════════════════════════════════════════════════════════════ */}
       <div>
         <SectionLabel>Business Performance</SectionLabel>
-        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 items-start">
 
           {/* Revenue */}
           {revenueBasis === 'bank' ? (
@@ -246,8 +247,7 @@ export default async function PerformanceDashboardPage({
       {/* ═══════════════════════════════════════════════════════════════════
           SECTION C — MARKETING PERFORMANCE
       ══════════════════════════════════════════════════════════════════════ */}
-      <div>
-        <SectionLabel>Marketing Performance</SectionLabel>
+      <CollapsibleSection title="Marketing Performance">
         <MarketingPerformanceCards
           blendedRoas={summary.roas}
           attributedRoas={summary.attributedRoas}
@@ -256,7 +256,7 @@ export default async function PerformanceDashboardPage({
           liveSpend={summary.liveSpend}
           totalAdSpend={summary.adSpend}
         />
-      </div>
+      </CollapsibleSection>
 
       {/* ═══════════════════════════════════════════════════════════════════
           SECTION D — TREND CHART
@@ -278,23 +278,24 @@ export default async function PerformanceDashboardPage({
       {/* ═══════════════════════════════════════════════════════════════════
           SECTION E + F — ADS BREAKDOWN (charts-first, table collapsible)
       ══════════════════════════════════════════════════════════════════════ */}
-      <Card className="shadow-sm">
-        <CardHeader className="pb-2 pt-5 px-5">
-          <CardTitle className="text-base">Ads Breakdown</CardTitle>
-          <CardDescription className="mt-0.5">
-            ประสิทธิภาพโฆษณาตามประเภท · ช่วงที่เลือก
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="px-5 pb-5">
-          <AdsBreakdownSection from={from} to={to} />
-        </CardContent>
-      </Card>
+      <CollapsibleSection title="Ads Breakdown">
+        <Card className="shadow-sm">
+          <CardHeader className="pb-2 pt-5 px-5">
+            <CardTitle className="text-base">Ads Breakdown</CardTitle>
+            <CardDescription className="mt-0.5">
+              ประสิทธิภาพโฆษณาตามประเภท · ช่วงที่เลือก
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="px-5 pb-5">
+            <AdsBreakdownSection from={from} to={to} />
+          </CardContent>
+        </Card>
+      </CollapsibleSection>
 
       {/* ═══════════════════════════════════════════════════════════════════
           SECTION G — PROFIT BRIDGE / DIAGNOSTIC
       ══════════════════════════════════════════════════════════════════════ */}
-      <div>
-        <SectionLabel>Profit Bridge — Diagnostics</SectionLabel>
+      <CollapsibleSection title="Profit Bridge — Diagnostics">
         <div className="grid gap-4 lg:grid-cols-2">
 
           {/* Left: P&L reconciliation */}
@@ -379,7 +380,7 @@ export default async function PerformanceDashboardPage({
           </Card>
 
         </div>
-      </div>
+      </CollapsibleSection>
 
     </div>
   )

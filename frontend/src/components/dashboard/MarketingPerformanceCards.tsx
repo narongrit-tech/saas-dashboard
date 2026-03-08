@@ -1,5 +1,6 @@
 'use client'
 
+import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Target, Eye, BarChart2 } from 'lucide-react'
 
@@ -17,11 +18,16 @@ function fmt(n: number) {
 }
 
 function BarSegment({ pct, color, label }: { pct: number; color: string; label: string }) {
+  const [width, setWidth] = useState(0)
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setWidth(pct))
+    return () => cancelAnimationFrame(raf)
+  }, [pct])
   if (pct <= 0) return null
   return (
     <div className="flex items-center gap-2 text-xs">
       <div className="flex-1 bg-muted rounded-full h-2 overflow-hidden">
-        <div className={`h-2 rounded-full ${color}`} style={{ width: `${Math.min(100, pct)}%` }} />
+        <div className={`h-2 rounded-full ${color} transition-all duration-300 ease-out`} style={{ width: `${Math.min(100, width)}%` }} />
       </div>
       <span className="w-12 text-right font-mono text-muted-foreground">{pct.toFixed(1)}%</span>
       <span className="w-20 text-muted-foreground">{label}</span>

@@ -35,7 +35,7 @@ function Row({
     <div
       className={[
         'flex justify-between items-center px-3 py-2',
-        subtotal ? 'border-t border-b font-semibold bg-muted/30' : '',
+        subtotal ? 'border-t border-b font-semibold bg-muted/30 border-l-2 border-l-orange-300' : '',
         highlight ? 'rounded-lg border-2 font-bold text-base py-3' : '',
       ].join(' ')}
     >
@@ -85,7 +85,7 @@ export function ProfitBridge({
     <div className="space-y-0.5">
       {/* Revenue row */}
       <div className={[
-        'flex justify-between items-center rounded-t-lg px-3 py-2.5',
+        'flex justify-between items-center rounded-lg px-3 py-2.5',
         revenueBasis === 'cashin'
           ? 'bg-blue-50 dark:bg-blue-900/20'
           : revenueBasis === 'bank'
@@ -105,6 +105,11 @@ export function ProfitBridge({
         </span>
       </div>
 
+      {/* Arrow connector */}
+      <div className="flex justify-center py-0.5">
+        <span className="text-muted-foreground/50 text-sm leading-none">↓</span>
+      </div>
+
       {/* Deduction rows */}
       <div className="rounded-lg border bg-muted/20 overflow-hidden divide-y">
         <Row label="Less: Product Ads"   value={productSpend}   indent negative />
@@ -116,9 +121,14 @@ export function ProfitBridge({
         <Row label="Less: Tax"           value={tax}            indent negative />
       </div>
 
+      {/* Arrow connector */}
+      <div className="flex justify-center py-0.5">
+        <span className="text-muted-foreground/50 text-sm leading-none">↓</span>
+      </div>
+
       {/* Net Profit row */}
       <div className={[
-        'flex justify-between items-center rounded-b-lg px-3 py-3 border',
+        'flex justify-between items-center rounded-lg px-3 py-3 border',
         isProfit
           ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800/40'
           : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800/40',

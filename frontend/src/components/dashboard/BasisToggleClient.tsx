@@ -10,8 +10,9 @@
  * Syncs selections to URL params via router.replace without full page navigation.
  */
 
-import { useEffect } from 'react'
+import { useEffect, useTransition, useState } from 'react'
 import { useRouter, useSearchParams, usePathname } from 'next/navigation'
+import { Loader2 } from 'lucide-react'
 import type { CogsBasis, RevenueBasis } from '@/app/(dashboard)/actions'
 
 interface BasisToggleClientProps {
@@ -24,24 +25,31 @@ function PillButton({
   onClick,
   children,
   first,
+  loading,
+  disabled,
 }: {
-  active: boolean
-  onClick: () => void
-  children: React.ReactNode
-  first?: boolean
+  active:    boolean
+  onClick:   () => void
+  children:  React.ReactNode
+  first?:    boolean
+  loading?:  boolean
+  disabled?: boolean
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       className={[
-        'px-3 py-1 text-xs transition-colors',
+        'px-3 py-1 text-xs transition-colors inline-flex items-center gap-1',
         first ? '' : 'border-l',
         active
           ? 'bg-primary text-primary-foreground font-medium'
           : 'bg-background text-muted-foreground hover:bg-muted hover:text-foreground',
+        disabled ? 'opacity-60 cursor-not-allowed' : '',
       ].join(' ')}
     >
+      {loading && <Loader2 className="h-3 w-3 animate-spin" />}
       {children}
     </button>
   )
@@ -51,6 +59,14 @@ export function BasisToggleClient({ cogsBasis, revenueBasis }: BasisToggleClient
   const router       = useRouter()
   const searchParams = useSearchParams()
   const pathname     = usePathname()
+
+  const [isPending, startTransition]              = useTransition()
+  const [pendingValue, setPendingValue]           = useState<string | undefined>()
+
+  // Reset pendingValue once the transition settles
+  useEffect(() => {
+    if (!isPending) setPendingValue(undefined)
+  }, [isPending])
 
   // On first mount: write defaults to URL if params are missing
   useEffect(() => {
@@ -63,59 +79,98 @@ export function BasisToggleClient({ cogsBasis, revenueBasis }: BasisToggleClient
   }, [])
 
   const setParam = (key: string, value: string) => {
+    setPendingValue(value)
     const p = new URLSearchParams(searchParams.toString())
     p.set(key, value)
-    router.replace(`${pathname}?${p.toString()}`, { scroll: false })
+    startTransition(() => {
+      router.replace(`${pathname}?${p.toString()}`, { scroll: false })
+    })
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
-
-      {/* Revenue Basis */}
-      <div className="flex items-center gap-1.5">
-        <span className="text-muted-foreground font-medium whitespace-nowrap">Revenue:</span>
-        <div className="inline-flex rounded border overflow-hidden">
-          <PillButton first active={revenueBasis === 'gmv'} onClick={() => setParam('revBasis', 'gmv')}>
-            GMV
-          </PillButton>
-          <PillButton active={revenueBasis === 'cashin'} onClick={() => setParam('revBasis', 'cashin')}>
-            Cash In
-          </PillButton>
-          <PillButton active={revenueBasis === 'bank'} onClick={() => setParam('revBasis', 'bank')}>
-            Bank
-          </PillButton>
+    <>
+      {/* Thin top loading bar */}
+      {isPending && (
+        <div className="fixed top-0 inset-x-0 z-[9999] h-0.5 bg-primary/20 overflow-hidden">
+          <div className="h-full bg-primary animate-pulse" style={{ width: '60%' }} />
         </div>
-      </div>
+      )}
 
-      {/* COGS Basis */}
-      <div className="flex items-center gap-1.5">
-        <span className="text-muted-foreground font-medium whitespace-nowrap">COGS:</span>
-        <div className="inline-flex rounded border overflow-hidden">
-          <PillButton first active={cogsBasis === 'shipped'} onClick={() => setParam('cogsBasis', 'shipped')}>
-            Shipped Date
-          </PillButton>
-          <PillButton active={cogsBasis === 'created'} onClick={() => setParam('cogsBasis', 'created')}>
-            Order Date
-          </PillButton>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
+
+        {/* Revenue Basis */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-muted-foreground font-medium whitespace-nowrap">Revenue:</span>
+          <div className="inline-flex rounded border overflow-hidden">
+            <PillButton
+              first
+              active={revenueBasis === 'gmv'}
+              onClick={() => setParam('revBasis', 'gmv')}
+              loading={isPending && pendingValue === 'gmv'}
+              disabled={isPending}
+            >
+              GMV
+            </PillButton>
+            <PillButton
+              active={revenueBasis === 'cashin'}
+              onClick={() => setParam('revBasis', 'cashin')}
+              loading={isPending && pendingValue === 'cashin'}
+              disabled={isPending}
+            >
+              Cash In
+            </PillButton>
+            <PillButton
+              active={revenueBasis === 'bank'}
+              onClick={() => setParam('revBasis', 'bank')}
+              loading={isPending && pendingValue === 'bank'}
+              disabled={isPending}
+            >
+              Bank
+            </PillButton>
+          </div>
         </div>
-      </div>
 
-      {/* Help texts */}
-      {revenueBasis === 'cashin' && (
-        <span className="hidden sm:inline-flex items-center gap-1 text-xs text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">
-          เงินรับจริงจาก Settlement หลังหักค่าธรรมเนียม
-        </span>
-      )}
-      {revenueBasis === 'bank' && (
-        <span className="hidden sm:inline-flex items-center gap-1 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-          คลิกที่การ์ด Bank Inflows เพื่อเลือกรายการ
-        </span>
-      )}
-      {cogsBasis === 'created' && (
-        <span className="hidden sm:inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-          COGS (Order Date) = มุมมองวิเคราะห์เท่านั้น
-        </span>
-      )}
-    </div>
+        {/* COGS Basis */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-muted-foreground font-medium whitespace-nowrap">COGS:</span>
+          <div className="inline-flex rounded border overflow-hidden">
+            <PillButton
+              first
+              active={cogsBasis === 'shipped'}
+              onClick={() => setParam('cogsBasis', 'shipped')}
+              loading={isPending && pendingValue === 'shipped'}
+              disabled={isPending}
+            >
+              Shipped Date
+            </PillButton>
+            <PillButton
+              active={cogsBasis === 'created'}
+              onClick={() => setParam('cogsBasis', 'created')}
+              loading={isPending && pendingValue === 'created'}
+              disabled={isPending}
+            >
+              Order Date
+            </PillButton>
+          </div>
+        </div>
+
+        {/* Help texts */}
+        {revenueBasis === 'cashin' && (
+          <span className="hidden sm:inline-flex items-center gap-1 text-xs text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">
+            เงินรับจริงจาก Settlement หลังหักค่าธรรมเนียม
+          </span>
+        )}
+        {revenueBasis === 'bank' && (
+          <span className="hidden sm:inline-flex items-center gap-1 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+            คลิกที่การ์ด Bank Inflows เพื่อเลือกรายการ
+          </span>
+        )}
+        {cogsBasis === 'created' && (
+          <span className="hidden sm:inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+            COGS (Order Date) = มุมมองวิเคราะห์เท่านั้น
+          </span>
+        )}
+      </div>
+    </>
   )
 }
