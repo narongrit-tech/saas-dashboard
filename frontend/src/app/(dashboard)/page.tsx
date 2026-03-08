@@ -141,26 +141,27 @@ export default async function PerformanceDashboardPage({
           SECTION A — HEADER + CONTROLS
       ══════════════════════════════════════════════════════════════════════ */}
       <div className="rounded-xl border bg-card px-4 py-4 shadow-sm sm:px-5">
-        {/* Title row */}
-        <div className="flex items-center justify-between gap-2">
-          <h1 className="text-xl font-bold tracking-tight sm:text-2xl">Performance Dashboard</h1>
-        </div>
+        {/* Desktop: horizontal split — left=title+date, right=toggles */}
+        <div className="lg:flex lg:items-center lg:gap-8">
 
-        {/* Meta row */}
-        <p className="text-muted-foreground text-xs mt-0.5">
-          {summary.startDate} – {summary.endDate}
-          <span className="mx-1.5 text-muted-foreground/40">·</span>
-          Asia/Bangkok
-        </p>
+          {/* Left: Title + Meta + Date Picker */}
+          <div className="flex-1 min-w-0">
+            <h1 className="text-xl font-bold tracking-tight sm:text-2xl">Performance Dashboard</h1>
+            <p className="text-muted-foreground text-xs mt-0.5">
+              {summary.startDate} – {summary.endDate}
+              <span className="mx-1.5 text-muted-foreground/40">·</span>
+              Asia/Bangkok
+            </p>
+            <div className="mt-3">
+              <DateRangePickerClient from={from} to={to} />
+            </div>
+          </div>
 
-        {/* Date picker — full-width on mobile */}
-        <div className="mt-3">
-          <DateRangePickerClient from={from} to={to} />
-        </div>
+          {/* Right: Basis toggles — inline on desktop, below-divider on mobile */}
+          <div className="mt-3 pt-3 border-t lg:mt-0 lg:pt-0 lg:border-t-0 lg:border-l lg:pl-8 lg:flex-shrink-0">
+            <BasisToggleClient cogsBasis={cogsBasis} revenueBasis={revenueBasis} />
+          </div>
 
-        {/* Basis toggles */}
-        <div className="mt-2.5 pt-2.5 border-t">
-          <BasisToggleClient cogsBasis={cogsBasis} revenueBasis={revenueBasis} />
         </div>
       </div>
 
@@ -169,7 +170,8 @@ export default async function PerformanceDashboardPage({
       ══════════════════════════════════════════════════════════════════════ */}
       <div>
         <SectionLabel>Business Performance</SectionLabel>
-        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 items-start">
+        {/* Desktop: 3-col × 2 rows — primary (Revenue/Ads/COGS) + secondary (Op/Tax/Net) */}
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 items-start">
 
           {/* Revenue */}
           {revenueBasis === 'bank' ? (
@@ -245,21 +247,7 @@ export default async function PerformanceDashboardPage({
       </div>
 
       {/* ═══════════════════════════════════════════════════════════════════
-          SECTION C — MARKETING PERFORMANCE
-      ══════════════════════════════════════════════════════════════════════ */}
-      <CollapsibleSection title="Marketing Performance">
-        <MarketingPerformanceCards
-          blendedRoas={summary.roas}
-          attributedRoas={summary.attributedRoas}
-          awarenessSpend={summary.awarenessSpend}
-          productSpend={summary.productSpend}
-          liveSpend={summary.liveSpend}
-          totalAdSpend={summary.adSpend}
-        />
-      </CollapsibleSection>
-
-      {/* ═══════════════════════════════════════════════════════════════════
-          SECTION D — TREND CHART
+          SECTION D — TREND CHART  (elevated: above marketing for faster insight)
       ══════════════════════════════════════════════════════════════════════ */}
       <Card className="shadow-sm">
         <CardHeader className="pb-2 pt-5 px-5">
@@ -274,6 +262,20 @@ export default async function PerformanceDashboardPage({
           <PerformanceTrendChart data={trend} />
         </CardContent>
       </Card>
+
+      {/* ═══════════════════════════════════════════════════════════════════
+          SECTION C — MARKETING PERFORMANCE
+      ══════════════════════════════════════════════════════════════════════ */}
+      <CollapsibleSection title="Marketing Performance">
+        <MarketingPerformanceCards
+          blendedRoas={summary.roas}
+          attributedRoas={summary.attributedRoas}
+          awarenessSpend={summary.awarenessSpend}
+          productSpend={summary.productSpend}
+          liveSpend={summary.liveSpend}
+          totalAdSpend={summary.adSpend}
+        />
+      </CollapsibleSection>
 
       {/* ═══════════════════════════════════════════════════════════════════
           SECTION E + F — ADS BREAKDOWN (charts-first, table collapsible)

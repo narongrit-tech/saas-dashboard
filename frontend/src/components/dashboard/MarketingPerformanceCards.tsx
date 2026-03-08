@@ -49,10 +49,10 @@ export function MarketingPerformanceCards({
   const awarenessPct = totalAdSpend > 0 ? (awarenessSpend / totalAdSpend) * 100 : 0
 
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
 
-      {/* Blended ROAS */}
-      <Card>
+      {/* Blended ROAS — primary metric, emphasized */}
+      <Card className="lg:border-yellow-200/60 dark:lg:border-yellow-800/30 lg:bg-yellow-50/30 dark:lg:bg-yellow-900/10">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <CardTitle className="text-sm font-medium">Blended ROAS</CardTitle>
           <div className="rounded-lg bg-yellow-50 dark:bg-yellow-900/20 p-2 text-yellow-600 dark:text-yellow-400">
@@ -60,15 +60,15 @@ export function MarketingPerformanceCards({
           </div>
         </CardHeader>
         <CardContent>
-          <div className={`text-2xl font-bold tracking-tight ${blendedRoas >= 1 ? 'text-yellow-600 dark:text-yellow-400' : blendedRoas > 0 ? 'text-red-600' : 'text-muted-foreground'}`}>
+          <div className={`text-2xl lg:text-3xl font-bold tracking-tight ${blendedRoas >= 1 ? 'text-yellow-600 dark:text-yellow-400' : blendedRoas > 0 ? 'text-red-600' : 'text-muted-foreground'}`}>
             {blendedRoas > 0 ? `${blendedRoas.toFixed(2)}x` : '–'}
           </div>
           <p className="text-xs text-muted-foreground mt-1">Revenue / Total Ads (incl. awareness)</p>
         </CardContent>
       </Card>
 
-      {/* Attributed ROAS */}
-      <Card>
+      {/* Attributed ROAS — secondary metric */}
+      <Card className="lg:border-violet-200/60 dark:lg:border-violet-800/30 lg:bg-violet-50/30 dark:lg:bg-violet-900/10">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <CardTitle className="text-sm font-medium">Attributed ROAS</CardTitle>
           <div className="rounded-lg bg-violet-50 dark:bg-violet-900/20 p-2 text-violet-600 dark:text-violet-400">
@@ -76,7 +76,7 @@ export function MarketingPerformanceCards({
           </div>
         </CardHeader>
         <CardContent>
-          <div className={`text-2xl font-bold tracking-tight ${attributedRoas >= 1 ? 'text-violet-600 dark:text-violet-400' : attributedRoas > 0 ? 'text-red-600' : 'text-muted-foreground'}`}>
+          <div className={`text-2xl lg:text-3xl font-bold tracking-tight ${attributedRoas >= 1 ? 'text-violet-600 dark:text-violet-400' : attributedRoas > 0 ? 'text-red-600' : 'text-muted-foreground'}`}>
             {attributedRoas > 0 ? `${attributedRoas.toFixed(2)}x` : '–'}
           </div>
           <p className="text-xs text-muted-foreground mt-1">

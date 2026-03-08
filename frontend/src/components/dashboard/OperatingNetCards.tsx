@@ -133,18 +133,26 @@ export function OperatingNetCards({
         </CardContent>
       </Card>
 
-      {/* Net Profit Card */}
-      <Card className={isProfit ? 'border-green-200 dark:border-green-800/40 bg-green-50 dark:bg-green-900/15' : 'border-red-200 dark:border-red-800/40 bg-red-50 dark:bg-red-900/15'}>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium">
+      {/* Net Profit Card — visually emphasized on desktop */}
+      <Card className={[
+        isProfit
+          ? 'border-green-200 dark:border-green-800/40 bg-green-50 dark:bg-green-900/15'
+          : 'border-red-200 dark:border-red-800/40 bg-red-50 dark:bg-red-900/15',
+        'lg:shadow-md',
+        isProfit
+          ? 'lg:ring-1 lg:ring-green-300/50 dark:lg:ring-green-700/40'
+          : 'lg:ring-1 lg:ring-red-300/50 dark:lg:ring-red-700/40',
+      ].join(' ')}>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 lg:pt-5 lg:px-5">
+          <CardTitle className="text-sm font-semibold">
             {revenueBasis === 'cashin' ? 'Net Cash (Cash In)' : revenueBasis === 'bank' ? 'Net Cash (Bank Inflows)' : 'Net Profit (ช่วงที่เลือก)'}
           </CardTitle>
           <div className={`rounded-lg p-2 ${isProfit ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'}`}>
             {isProfit ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
           </div>
         </CardHeader>
-        <CardContent>
-          <div className={`text-3xl font-bold tracking-tight ${isProfit ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
+        <CardContent className="lg:px-5 lg:pb-5">
+          <div className={`text-3xl lg:text-4xl font-bold tracking-tight ${isProfit ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
             {isProfit ? '' : '-'}฿{fmt(Math.abs(netProfit))}
           </div>
           <p className="text-xs text-muted-foreground mt-1">
