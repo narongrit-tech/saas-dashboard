@@ -1,21 +1,20 @@
 'use client'
 
 /**
- * Basis Toggle — compact pill selectors for Revenue, GMV date, and COGS date basis.
+ * Basis Toggle — compact pill selectors for Revenue and COGS date basis.
  *
- * Revenue: 'gmv' (default) | 'cashin' (เงินเข้าจริง from marketplace settlements)
- * GMV:     'created' (Order Date, default) | 'paid' (Paid Date) — hidden when Revenue=Cash In
+ * Revenue: 'gmv' (default) | 'cashin' (เงินเข้าจริง from marketplace settlements) | 'bank'
  * COGS:    'shipped' (Shipped Date, default) | 'created' (Order Date — decision view)
  *
+ * GMV is always bucketed by created_time — no paid date toggle.
  * Syncs selections to URL params via router.replace without full page navigation.
  */
 
 import { useEffect } from 'react'
 import { useRouter, useSearchParams, usePathname } from 'next/navigation'
-import type { GmvBasis, CogsBasis, RevenueBasis } from '@/app/(dashboard)/actions'
+import type { CogsBasis, RevenueBasis } from '@/app/(dashboard)/actions'
 
 interface BasisToggleClientProps {
-  gmvBasis:     GmvBasis
   cogsBasis:    CogsBasis
   revenueBasis: RevenueBasis
 }
@@ -48,7 +47,7 @@ function PillButton({
   )
 }
 
-export function BasisToggleClient({ gmvBasis, cogsBasis, revenueBasis }: BasisToggleClientProps) {
+export function BasisToggleClient({ cogsBasis, revenueBasis }: BasisToggleClientProps) {
   const router       = useRouter()
   const searchParams = useSearchParams()
   const pathname     = usePathname()
@@ -58,7 +57,6 @@ export function BasisToggleClient({ gmvBasis, cogsBasis, revenueBasis }: BasisTo
     const p = new URLSearchParams(searchParams.toString())
     let changed = false
     if (!p.get('revBasis'))  { p.set('revBasis',  revenueBasis); changed = true }
-    if (!p.get('gmvBasis'))  { p.set('gmvBasis',  gmvBasis);     changed = true }
     if (!p.get('cogsBasis')) { p.set('cogsBasis', cogsBasis);    changed = true }
     if (changed) router.replace(`${pathname}?${p.toString()}`, { scroll: false })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -89,21 +87,6 @@ export function BasisToggleClient({ gmvBasis, cogsBasis, revenueBasis }: BasisTo
         </div>
       </div>
 
-      {/* GMV Date Basis — hidden when Revenue != GMV */}
-      {revenueBasis === 'gmv' && (
-        <div className="flex items-center gap-1.5">
-          <span className="text-muted-foreground font-medium whitespace-nowrap">GMV:</span>
-          <div className="inline-flex rounded border overflow-hidden">
-            <PillButton first active={gmvBasis === 'created'} onClick={() => setParam('gmvBasis', 'created')}>
-              Order Date
-            </PillButton>
-            <PillButton active={gmvBasis === 'paid'} onClick={() => setParam('gmvBasis', 'paid')}>
-              Paid Date
-            </PillButton>
-          </div>
-        </div>
-      )}
-
       {/* COGS Basis */}
       <div className="flex items-center gap-1.5">
         <span className="text-muted-foreground font-medium whitespace-nowrap">COGS:</span>
@@ -128,7 +111,7 @@ export function BasisToggleClient({ gmvBasis, cogsBasis, revenueBasis }: BasisTo
           คลิกที่การ์ด Bank Inflows เพื่อเลือกรายการ
         </span>
       )}
-      {revenueBasis === 'gmv' && cogsBasis === 'created' && (
+      {cogsBasis === 'created' && (
         <span className="hidden sm:inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
           COGS (Order Date) = มุมมองวิเคราะห์เท่านั้น
         </span>

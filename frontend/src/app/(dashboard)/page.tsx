@@ -2,7 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { TrendingUp, Megaphone, AlertCircle, Wallet } from 'lucide-react'
 import { format, subDays, parseISO, isValid } from 'date-fns'
 import { getPerformanceDashboard, getExpensePickerTotal, getMarketplaceCashIn, getBankInflowRevenueTotal } from './actions'
-import type { GmvBasis, CogsBasis, RevenueBasis, BankInflowRevenueTotals } from './actions'
+import type { CogsBasis, RevenueBasis, BankInflowRevenueTotals } from './actions'
 import { getBangkokNow } from '@/lib/bangkok-time'
 import { PerformanceTrendChart } from '@/components/dashboard/PerformanceTrendChart'
 import { AdsBreakdownSection } from '@/components/dashboard/AdsBreakdownSection'
@@ -11,15 +11,14 @@ import { BasisToggleClient } from '@/components/dashboard/BasisToggleClient'
 import { OperatingNetCards } from '@/components/dashboard/OperatingNetCards'
 import { CogsCard } from '@/components/dashboard/CogsCard'
 import { BankRevenueCard } from '@/components/dashboard/BankRevenueCard'
+import { MarketingPerformanceCards } from '@/components/dashboard/MarketingPerformanceCards'
+import { ProfitBridge } from '@/components/dashboard/ProfitBridge'
 import { parsePickerState } from '@/lib/expense-picker'
 
 export const dynamic = 'force-dynamic'
 
 function formatCurrency(amount: number): string {
-  return amount.toLocaleString('th-TH', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
+  return amount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 function isValidDateParam(s: string | undefined): s is string {
@@ -37,6 +36,16 @@ function sp(searchParams: Record<string, string | string[] | undefined>, key: st
   return Array.isArray(v) ? v[0] : v
 }
 
+/** Section header with left-border accent */
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 mb-4">
+      <div className="w-1 h-4 rounded-full bg-primary/60" />
+      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{children}</p>
+    </div>
+  )
+}
+
 export default async function PerformanceDashboardPage({
   searchParams,
 }: {
@@ -51,7 +60,6 @@ export default async function PerformanceDashboardPage({
   const to   = isValidDateParam(sp(searchParams, 'to'))   ? sp(searchParams, 'to')!   : defaultTo
 
   // ── Basis params — strict whitelist ─────────────────────────────────────────
-  const gmvBasis:     GmvBasis     = sp(searchParams, 'gmvBasis')  === 'paid'    ? 'paid'    : 'created'
   const cogsBasis:    CogsBasis    = sp(searchParams, 'cogsBasis') === 'created' ? 'created' : 'shipped'
   const _rawRevBasis = sp(searchParams, 'revBasis')
   const revenueBasis: RevenueBasis = _rawRevBasis === 'cashin' ? 'cashin' : _rawRevBasis === 'bank' ? 'bank' : 'gmv'
@@ -63,10 +71,10 @@ export default async function PerformanceDashboardPage({
   if (cogsExpState.category !== 'COGS') cogsExpState.category = 'COGS'
 
   // ── Fetch all data in parallel ───────────────────────────────────────────────
-  const [result, opResult, taxResult, cogsExpResult, cashInResult, bankInflowResult] = await Promise.all([
-    getPerformanceDashboard(from, to, gmvBasis, cogsBasis),
-    getExpensePickerTotal(from, to, opState),
-    getExpensePickerTotal(from, to, taxState),
+  // opState/taxState are passed into getPerformanceDashboard so the trend chart
+  // uses the exact same filtered expenses as the summary cards.
+  const [result, cogsExpResult, cashInResult, bankInflowResult] = await Promise.all([
+    getPerformanceDashboard(from, to, cogsBasis, opState, taxState),
     getExpensePickerTotal(from, to, cogsExpState),
     revenueBasis === 'cashin'
       ? getMarketplaceCashIn(from, to)
@@ -93,21 +101,18 @@ export default async function PerformanceDashboardPage({
   const { summary, trend } = result.data
 
   // ── Computed display values ──────────────────────────────────────────────────
-  const displayOp      = opResult.data?.total      ?? summary.operating
-  const displayTax     = taxResult.data?.total     ?? summary.tax
+  // summary.operating and summary.tax are already picker-filtered (opState/taxState
+  // passed into getPerformanceDashboard), so they match the trend chart exactly.
+  const displayOp      = summary.operating
+  const displayTax     = summary.tax
   const displayCogsExp = cogsExpResult.data?.total ?? 0
   const displayCogs    = summary.cogs + displayCogsExp
 
-  const cashInData    = cashInResult.success ? cashInResult.data : undefined
-  const displayCashIn = cashInData?.total ?? 0
+  const cashInData        = cashInResult.success ? cashInResult.data : undefined
+  const displayCashIn     = cashInData?.total ?? 0
   const bankInflowData    = bankInflowResult.success ? bankInflowResult.data : undefined
   const displayBankInflow = bankInflowData?.total ?? 0
-  // displayRevenue: the "top line" used for Net Profit, ROAS, P&L breakdown
-  const displayRevenue = revenueBasis === 'cashin' ? displayCashIn : revenueBasis === 'bank' ? displayBankInflow : summary.gmv
-
-  const displayNet = Math.round((displayRevenue - summary.adSpend - displayCogs - displayOp - displayTax) * 100) / 100
-  const isProfit   = displayNet >= 0
-  const displayRoas = summary.adSpend > 0 ? Math.round((displayRevenue / summary.adSpend) * 100) / 100 : 0
+  const displayRevenue    = revenueBasis === 'cashin' ? displayCashIn : revenueBasis === 'bank' ? displayBankInflow : summary.gmv
 
   // ── Flat URL params for client components ────────────────────────────────────
   const allSearchParamsFlat: Record<string, string> = {}
@@ -115,245 +120,260 @@ export default async function PerformanceDashboardPage({
     if (v !== undefined) allSearchParamsFlat[k] = Array.isArray(v) ? v[0] : v
   })
 
-  // ── Labels ───────────────────────────────────────────────────────────────────
+  // ── Revenue card labels ───────────────────────────────────────────────────────
   const revenueCardTitle = revenueBasis === 'cashin'
     ? 'Cash In (เงินเข้าจริง)'
     : revenueBasis === 'bank'
     ? 'Bank Inflows (Selected)'
-    : `GMV ${gmvBasis === 'paid' ? '(Paid Date)' : '(Order Date)'}`
+    : 'GMV (Orders Created)'
 
   const revenueCardSub = revenueBasis === 'cashin'
     ? `TikTok ฿${formatCurrency(cashInData?.tiktok ?? 0)} + Shopee ฿${formatCurrency(cashInData?.shopee ?? 0)}`
     : revenueBasis === 'bank'
     ? 'คลิกที่การ์ดเพื่อเลือกรายการ'
-    : gmvBasis === 'created' ? 'ยอดขายตามวันสร้างออเดอร์' : 'ยอดขายตามวันชำระเงิน'
+    : 'Source: sales_orders (created_time)'
 
   return (
-    <div className="space-y-6">
-      {/* Page Header */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-3xl font-bold">Performance Dashboard</h1>
-          <p className="text-muted-foreground">
-            {summary.startDate} – {summary.endDate} · Asia/Bangkok
-          </p>
-        </div>
-        <div className="flex flex-col items-end gap-2">
-          <DateRangePickerClient from={from} to={to} />
-          <BasisToggleClient gmvBasis={gmvBasis} cogsBasis={cogsBasis} revenueBasis={revenueBasis} />
+    <div className="space-y-6 pb-10">
+
+      {/* ═══════════════════════════════════════════════════════════════════
+          SECTION A — HEADER + CONTROLS
+      ══════════════════════════════════════════════════════════════════════ */}
+      <div className="rounded-xl border bg-card px-5 py-4 shadow-sm">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Performance Dashboard</h1>
+            <p className="text-muted-foreground text-sm mt-0.5">
+              {summary.startDate} – {summary.endDate}
+              <span className="mx-1.5 text-muted-foreground/50">·</span>
+              <span className="text-xs">Asia/Bangkok</span>
+            </p>
+          </div>
+          <div className="flex flex-col items-end gap-2">
+            <DateRangePickerClient from={from} to={to} />
+            <BasisToggleClient cogsBasis={cogsBasis} revenueBasis={revenueBasis} />
+          </div>
         </div>
       </div>
 
-      {/* Summary Cards */}
+      {/* ═══════════════════════════════════════════════════════════════════
+          SECTION B — BUSINESS PERFORMANCE (Executive Summary)
+      ══════════════════════════════════════════════════════════════════════ */}
       <div>
-        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Key Metrics</p>
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <SectionLabel>Business Performance</SectionLabel>
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
 
-        {/* Revenue Card — Bank basis renders interactive client card; others static */}
-        {revenueBasis === 'bank' ? (
-          <BankRevenueCard
-            initialTotal={displayBankInflow}
-            initialBreakdown={bankInflowData ?? { total: 0, tiktok: 0, shopee: 0, other: 0 }}
-            from={from}
-            to={to}
-          />
-        ) : (
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">{revenueCardTitle}</CardTitle>
-              <div className={`rounded-lg p-2 ${revenueBasis === 'cashin' ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400' : 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'}`}>
-                {revenueBasis === 'cashin' ? <Wallet className="h-4 w-4" /> : <TrendingUp className="h-4 w-4" />}
+          {/* Revenue */}
+          {revenueBasis === 'bank' ? (
+            <BankRevenueCard
+              initialTotal={displayBankInflow}
+              initialBreakdown={bankInflowData ?? { total: 0, tiktok: 0, shopee: 0, other: 0 }}
+              from={from}
+              to={to}
+            />
+          ) : (
+            <Card className="border-green-100 dark:border-green-900/30">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 pt-4 px-4">
+                <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Revenue</CardTitle>
+                <div className={`rounded-md p-1.5 ${revenueBasis === 'cashin' ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600' : 'bg-green-50 dark:bg-green-900/20 text-green-600'}`}>
+                  {revenueBasis === 'cashin' ? <Wallet className="h-3.5 w-3.5" /> : <TrendingUp className="h-3.5 w-3.5" />}
+                </div>
+              </CardHeader>
+              <CardContent className="pb-4 px-4 pt-1">
+                <div className={`text-2xl font-bold tracking-tight ${revenueBasis === 'cashin' ? 'text-blue-600 dark:text-blue-400' : 'text-green-600 dark:text-green-400'}`}>
+                  ฿{formatCurrency(displayRevenue)}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-1 leading-snug">{revenueCardSub}</p>
+                {revenueBasis === 'cashin' && (
+                  <p className="text-[11px] text-muted-foreground mt-0.5">GMV: ฿{formatCurrency(summary.gmv)}</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Ad Spend */}
+          <Card className="border-purple-100 dark:border-purple-900/30">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 pt-4 px-4">
+              <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Ad Spend</CardTitle>
+              <div className="rounded-md bg-purple-50 dark:bg-purple-900/20 p-1.5 text-purple-600 dark:text-purple-400">
+                <Megaphone className="h-3.5 w-3.5" />
               </div>
             </CardHeader>
-            <CardContent>
-              <div className={`text-2xl font-bold tracking-tight ${revenueBasis === 'cashin' ? 'text-blue-600 dark:text-blue-400' : 'text-green-600 dark:text-green-400'}`}>
-                ฿{formatCurrency(displayRevenue)}
+            <CardContent className="pb-4 px-4 pt-1">
+              <div className="text-2xl font-bold text-purple-600 dark:text-purple-400 tracking-tight">
+                ฿{formatCurrency(summary.adSpend)}
               </div>
-              <p className="text-xs text-muted-foreground mt-1">{revenueCardSub}</p>
-              {revenueBasis === 'cashin' && (
-                <>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    GMV: ฿{formatCurrency(summary.gmv)}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    เงินรับจริงจาก Settlement หลังหักค่าธรรมเนียม (TikTok+Shopee)
-                  </p>
-                </>
-              )}
+              <p className="text-[11px] text-muted-foreground mt-1 leading-snug">Product + Live + Awareness</p>
             </CardContent>
           </Card>
-        )}
 
-        {/* Ad Spend */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Ad Spend (ช่วงที่เลือก)</CardTitle>
-            <div className="rounded-lg bg-purple-50 dark:bg-purple-900/20 p-2 text-purple-600 dark:text-purple-400">
-              <Megaphone className="h-4 w-4" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-purple-600 dark:text-purple-400 tracking-tight">
-              ฿{formatCurrency(summary.adSpend)}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">ค่าโฆษณา (Performance)</p>
-          </CardContent>
-        </Card>
+          {/* COGS — interactive drilldown */}
+          <CogsCard
+            allocatedCogs={summary.cogs}
+            cogsExpenses={displayCogsExp}
+            cogsExpState={cogsExpState}
+            cogsBasis={cogsBasis}
+            from={from}
+            to={to}
+            allSearchParams={allSearchParamsFlat}
+          />
 
-        {/* COGS — clickable, opens drilldown modal */}
-        <CogsCard
-          allocatedCogs={summary.cogs}
-          cogsExpenses={displayCogsExp}
-          cogsExpState={cogsExpState}
-          cogsBasis={cogsBasis}
-          from={from}
-          to={to}
-          allSearchParams={allSearchParamsFlat}
-        />
+          {/* Operating + Tax + Net Profit (3 cards rendered by client component) */}
+          <OperatingNetCards
+            initialOp={displayOp}
+            initialTax={displayTax}
+            initialOpState={opState}
+            initialTaxState={taxState}
+            gmv={displayRevenue}
+            adSpend={summary.adSpend}
+            cogs={displayCogs}
+            from={from}
+            to={to}
+            revenueBasis={revenueBasis}
+            allSearchParams={allSearchParamsFlat}
+          />
 
-        {/* Operating + Tax + Net Profit — client component */}
-        <OperatingNetCards
-          initialOp={displayOp}
-          initialTax={displayTax}
-          initialOpState={opState}
-          initialTaxState={taxState}
-          gmv={displayRevenue}
-          adSpend={summary.adSpend}
-          cogs={displayCogs}
-          from={from}
-          to={to}
-          revenueBasis={revenueBasis}
-          allSearchParams={allSearchParamsFlat}
-        />
-
-        {/* ROAS */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">ROAS (ช่วงที่เลือก)</CardTitle>
-            <div className="rounded-lg bg-yellow-50 dark:bg-yellow-900/20 p-2 text-yellow-600 dark:text-yellow-400">
-              <TrendingUp className="h-4 w-4" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-yellow-600 dark:text-yellow-400 tracking-tight">
-              {displayRoas.toFixed(2)}x
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {revenueBasis === 'cashin' ? 'Cash In / Ad Spend' : revenueBasis === 'bank' ? 'Bank Inflows / Ad Spend' : 'GMV / Ad Spend'}
-            </p>
-          </CardContent>
-        </Card>
         </div>
       </div>
 
-      {/* Trend Chart */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle>
-            Trend: GMV{gmvBasis === 'paid' ? ' (Paid)' : ''} vs Ad Spend vs Net Profit
-            {revenueBasis === 'cashin' && (
-              <span className="ml-2 text-sm font-normal text-blue-600">· Revenue = Cash In</span>
-            )}
-          </CardTitle>
-          <CardDescription>แนวโน้มรายวันในช่วงที่เลือก</CardDescription>
+      {/* ═══════════════════════════════════════════════════════════════════
+          SECTION C — MARKETING PERFORMANCE
+      ══════════════════════════════════════════════════════════════════════ */}
+      <div>
+        <SectionLabel>Marketing Performance</SectionLabel>
+        <MarketingPerformanceCards
+          blendedRoas={summary.roas}
+          attributedRoas={summary.attributedRoas}
+          awarenessSpend={summary.awarenessSpend}
+          productSpend={summary.productSpend}
+          liveSpend={summary.liveSpend}
+          totalAdSpend={summary.adSpend}
+        />
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════════════
+          SECTION D — TREND CHART
+      ══════════════════════════════════════════════════════════════════════ */}
+      <Card className="shadow-sm">
+        <CardHeader className="pb-2 pt-5 px-5">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <CardTitle className="text-base">Daily Trend</CardTitle>
+              <CardDescription className="mt-0.5">แนวโน้มรายวัน — เลือก View เพื่อเปลี่ยนมุมมอง</CardDescription>
+            </div>
+          </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-5 pb-5">
           <PerformanceTrendChart data={trend} />
         </CardContent>
       </Card>
 
-      {/* Ads Breakdown */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle>Ads Breakdown</CardTitle>
-          <CardDescription>ค่าโฆษณาแยกตามแพลตฟอร์ม · ช่วงที่เลือก</CardDescription>
+      {/* ═══════════════════════════════════════════════════════════════════
+          SECTION E + F — ADS BREAKDOWN (charts-first, table collapsible)
+      ══════════════════════════════════════════════════════════════════════ */}
+      <Card className="shadow-sm">
+        <CardHeader className="pb-2 pt-5 px-5">
+          <CardTitle className="text-base">Ads Breakdown</CardTitle>
+          <CardDescription className="mt-0.5">
+            ประสิทธิภาพโฆษณาตามประเภท · ช่วงที่เลือก
+          </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-5 pb-5">
           <AdsBreakdownSection from={from} to={to} />
         </CardContent>
       </Card>
 
-      {/* P&L Breakdown */}
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>
-                {revenueBasis === 'cashin' ? 'Cash P&L Breakdown' : revenueBasis === 'bank' ? 'Bank P&L Breakdown' : 'P&L Breakdown'}
-              </CardTitle>
-              <CardDescription className="mt-1">
-                {revenueBasis === 'cashin'
-                  ? 'Revenue = เงินรับจริงจาก Settlement'
-                  : revenueBasis === 'bank'
-                  ? 'Revenue = Bank Inflows ที่เลือกไว้'
-                  : `Revenue = GMV · COGS basis: ${cogsBasis === 'shipped' ? 'Shipped Date' : 'Order Date'}`}
-              </CardDescription>
-            </div>
-            <div className="flex flex-col items-end gap-1">
-              {revenueBasis === 'gmv' && (gmvBasis !== 'created' || cogsBasis !== 'shipped') && (
-                <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">Mixed basis</span>
-              )}
-              {revenueBasis === 'cashin' && (
-                <span className="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">Settlement Date</span>
-              )}
-              {revenueBasis === 'bank' && (
-                <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">Bank Inflows</span>
-              )}
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-2">
-            {/* Revenue row — highlighted top line */}
-            <div className={`flex justify-between items-center rounded-lg px-3 py-2.5 ${
-              revenueBasis === 'cashin' ? 'bg-blue-50 dark:bg-blue-900/20' : revenueBasis === 'bank' ? 'bg-emerald-50 dark:bg-emerald-900/20' : 'bg-green-50 dark:bg-green-900/20'
-            }`}>
-              <span className="font-semibold text-sm">
-                {revenueBasis === 'cashin'
-                  ? 'Cash In (Settlement Date)'
-                  : revenueBasis === 'bank'
-                  ? 'Bank Inflows (Selected)'
-                  : `GMV (${gmvBasis === 'paid' ? 'Paid Date' : 'Order Date'})`}
-              </span>
-              <span className={`font-mono font-bold ${revenueBasis === 'cashin' ? 'text-blue-700 dark:text-blue-400' : revenueBasis === 'bank' ? 'text-emerald-700 dark:text-emerald-400' : 'text-green-700 dark:text-green-400'}`}>
-                ฿{formatCurrency(displayRevenue)}
-              </span>
-            </div>
+      {/* ═══════════════════════════════════════════════════════════════════
+          SECTION G — PROFIT BRIDGE / DIAGNOSTIC
+      ══════════════════════════════════════════════════════════════════════ */}
+      <div>
+        <SectionLabel>Profit Bridge — Diagnostics</SectionLabel>
+        <div className="grid gap-4 lg:grid-cols-2">
 
-            {/* Deduction rows — grouped in a subtle container */}
-            <div className="rounded-lg border bg-muted/30 overflow-hidden">
-              <div className="flex justify-between items-center px-3 py-2 border-b">
-                <span className="text-sm text-muted-foreground">Less: <span className="text-foreground">Ad Spend</span></span>
-                <span className="font-mono text-sm text-red-600">(฿{formatCurrency(summary.adSpend)})</span>
-              </div>
-              <div className="flex justify-between items-center px-3 py-2 border-b">
-                <span className="text-sm text-muted-foreground">Less: <span className="text-foreground">COGS ({cogsBasis === 'created' ? 'Order Date' : 'Shipped'})</span></span>
-                <span className="font-mono text-sm text-red-600">(฿{formatCurrency(displayCogs)})</span>
-              </div>
-              <div className="flex justify-between items-center px-3 py-2 border-b">
-                <span className="text-sm text-muted-foreground">Less: <span className="text-foreground">Operating Expenses</span></span>
-                <span className="font-mono text-sm text-red-600">(฿{formatCurrency(displayOp)})</span>
-              </div>
-              <div className="flex justify-between items-center px-3 py-2">
-                <span className="text-sm text-muted-foreground">Less: <span className="text-foreground">Tax</span></span>
-                <span className="font-mono text-sm text-red-600">(฿{formatCurrency(displayTax)})</span>
-              </div>
-            </div>
+          {/* Left: P&L reconciliation */}
+          <Card className="shadow-sm">
+            <CardHeader className="pb-2 pt-5 px-5">
+              <CardTitle className="text-base">P&L Reconciliation</CardTitle>
+              <CardDescription className="mt-0.5">Revenue → Net Profit step-by-step</CardDescription>
+            </CardHeader>
+            <CardContent className="px-5 pb-5">
+              <ProfitBridge
+                revenue={displayRevenue}
+                productSpend={summary.productSpend}
+                liveSpend={summary.liveSpend}
+                awarenessSpend={summary.awarenessSpend}
+                cogs={displayCogs}
+                operating={displayOp}
+                tax={displayTax}
+                revenueBasis={revenueBasis}
+              />
+            </CardContent>
+          </Card>
 
-            {/* Net — emphasized bottom line */}
-            <div className={`flex justify-between items-center rounded-lg px-3 py-3 border ${
-              isProfit ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800/40' : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800/40'
-            }`}>
-              <span className={`font-bold text-base ${isProfit ? 'text-green-800 dark:text-green-400' : 'text-red-800 dark:text-red-400'}`}>
-                {revenueBasis === 'cashin' || revenueBasis === 'bank' ? 'Net Cash' : 'Net Profit'}
-              </span>
-              <span className={`text-xl font-bold font-mono ${isProfit ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
-                {isProfit ? '' : '-'}฿{formatCurrency(Math.abs(displayNet))}
-              </span>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+          {/* Right: Ad spend breakdown for quick audit */}
+          <Card className="shadow-sm">
+            <CardHeader className="pb-2 pt-5 px-5">
+              <CardTitle className="text-base">Ad Spend Breakdown</CardTitle>
+              <CardDescription className="mt-0.5">แยกตามประเภทโฆษณา</CardDescription>
+            </CardHeader>
+            <CardContent className="px-5 pb-5">
+              <div className="space-y-2">
+                {/* Product */}
+                <div className="flex items-center justify-between py-2 border-b">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block w-2.5 h-2.5 rounded-full bg-violet-500" />
+                    <span className="text-sm">Product Ads</span>
+                    <span className="text-xs text-muted-foreground">(ad_daily_performance)</span>
+                  </div>
+                  <span className="font-mono text-sm font-medium">฿{formatCurrency(summary.productSpend)}</span>
+                </div>
+                {/* Live */}
+                <div className="flex items-center justify-between py-2 border-b">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block w-2.5 h-2.5 rounded-full bg-pink-500" />
+                    <span className="text-sm">Live Ads</span>
+                    <span className="text-xs text-muted-foreground">(ad_daily_performance)</span>
+                  </div>
+                  <span className="font-mono text-sm font-medium">฿{formatCurrency(summary.liveSpend)}</span>
+                </div>
+                {/* Awareness */}
+                <div className="flex items-center justify-between py-2 border-b">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-400" />
+                    <span className="text-sm">Awareness Ads</span>
+                    <span className="text-xs text-muted-foreground">(wallet_ledger)</span>
+                  </div>
+                  <span className="font-mono text-sm font-medium">฿{formatCurrency(summary.awarenessSpend)}</span>
+                </div>
+                {/* Total */}
+                <div className="flex items-center justify-between py-2 bg-muted/30 rounded-lg px-3 -mx-1 mt-1">
+                  <span className="text-sm font-semibold">Total (Blended)</span>
+                  <span className="font-mono text-sm font-bold text-purple-600 dark:text-purple-400">
+                    ฿{formatCurrency(summary.adSpend)}
+                  </span>
+                </div>
+                {/* ROAS quick view */}
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <div className="rounded-lg bg-muted/30 px-3 py-2">
+                    <p className="text-[11px] text-muted-foreground">Blended ROAS</p>
+                    <p className="text-base font-bold text-yellow-600 dark:text-yellow-400">
+                      {summary.roas > 0 ? `${summary.roas.toFixed(2)}x` : '–'}
+                    </p>
+                  </div>
+                  <div className="rounded-lg bg-muted/30 px-3 py-2">
+                    <p className="text-[11px] text-muted-foreground">Attributed ROAS</p>
+                    <p className="text-base font-bold text-violet-600 dark:text-violet-400">
+                      {summary.attributedRoas > 0 ? `${summary.attributedRoas.toFixed(2)}x` : '–'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+        </div>
+      </div>
+
     </div>
   )
 }

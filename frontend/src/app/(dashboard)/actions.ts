@@ -4,7 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { format, subDays, addDays, parseISO, isValid, startOfDay } from 'date-fns'
 import { getBangkokNow } from '@/lib/bangkok-time'
 import { toBangkokDateString } from '@/lib/bangkok-date-range'
-import { fetchGMVByDay, fetchGMVByDayPaid } from '@/lib/sales-metrics'
+import { fetchGMVByCreatedTime } from '@/lib/sales-metrics'
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
 
@@ -22,6 +22,11 @@ export interface MarketplaceCashIn {
 export interface PerformanceSummary {
   gmv: number
   adSpend: number
+  productSpend: number        // from ad_daily_performance WHERE campaign_type='product'
+  liveSpend: number           // from ad_daily_performance WHERE campaign_type='live'
+  awarenessSpend: number      // from wallet_ledger awareness entries
+  attributedAdSpend: number   // productSpend + liveSpend (no awareness)
+  attributedRoas: number      // attributedRevenue / attributedAdSpend (null→0)
   cogs: number
   operating: number
   tax: number
@@ -29,7 +34,6 @@ export interface PerformanceSummary {
   roas: number
   startDate: string
   endDate: string
-  gmvBasis: GmvBasis
   cogsBasis: CogsBasis
 }
 
@@ -37,8 +41,14 @@ export interface PerformanceTrendDay {
   date: string      // chart x-axis label e.g. "01/03"
   dateStr: string   // YYYY-MM-DD
   gmv: number
-  adSpend: number
+  adSpend: number   // blended
   net: number
+  productSpend: number
+  liveSpend: number
+  awarenessSpend: number
+  cogs: number
+  operating: number
+  tax: number
 }
 
 export interface AdsBreakdownRow {
@@ -53,6 +63,7 @@ export interface AdsBreakdownType {
   totalSpend: number
   totalGmv: number
   roas: number
+  awarenessSpend: number   // awareness portion in 'all' tab (0 for product/live tabs)
   spendRange: { min: number; max: number }
   roasRange: { min: number; max: number }
   byDay: AdsBreakdownRow[]
@@ -197,23 +208,101 @@ async function getAdsWalletIds(supabase: ReturnType<typeof createClient>): Promi
 /**
  * Fetch summary cards + trend chart data for Performance Dashboard.
  *
+ * Revenue basis: ALWAYS sales_orders.created_time (strict, no fallback).
+ * This is the canonical "media performance" view: each order belongs to the
+ * day the customer placed it, enabling direct correlation with ad spend.
+ *
  * Formula (Economic P&L):
- * - GMV      = sales_orders (exclude cancelled)
- * - Ad Spend = wallet_ledger SPEND/OUT from ADS wallets
+ * - GMV      = sales_orders bucketed by created_time (NOT order_date / paid_time)
+ * - Ad Spend = product_spend (ad_daily_performance) + live_spend + awareness (wallet_ledger)
  * - COGS     = inventory_cogs_allocations.amount
  * - Operating = expenses WHERE category = 'Operating'
  * - Tax       = expenses WHERE category = 'Tax'
  * - Net       = GMV - AdSpend - COGS - Operating - Tax
- * - ROAS      = GMV / AdSpend
+ * - ROAS      = GMV / Blended AdSpend
  *
- * @param fromDate YYYY-MM-DD (Bangkok). Defaults to 6 days ago.
- * @param toDate   YYYY-MM-DD (Bangkok). Defaults to today.
+ * @param fromDate  YYYY-MM-DD (Bangkok). Defaults to 6 days ago.
+ * @param toDate    YYYY-MM-DD (Bangkok). Defaults to today.
+ * @param cogsBasis 'shipped' (default) | 'created'
+ * @param opState   Optional picker state for operating expenses (same filter as cards).
+ * @param taxState  Optional picker state for tax expenses (same filter as cards).
  */
+
+// Shared picker-state type for expense queries (matches getExpensePickerTotal's state param)
+type ExpensePickerInput = {
+  mode: 'all' | 'some'
+  category?: string
+  status?: 'All' | 'DRAFT' | 'PAID'
+  subcategory?: string
+  q?: string
+  selectedIds?: string[]
+  excludedIds?: string[]
+}
+
+/**
+ * Fetch expenses per Bangkok calendar day, applying the same picker-state filters as
+ * getExpensePickerTotal. Returns a Map<YYYY-MM-DD, amount> for use in trend building.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function buildExpensesByDay(
+  supabase: any,
+  from: string,
+  to: string,
+  state: ExpensePickerInput | undefined,
+  defaultCategory: string,
+): Promise<Map<string, number>> {
+  if (state?.mode === 'some') {
+    const ids = state.selectedIds ?? []
+    if (ids.length === 0) return new Map()
+    const { data, error } = await supabase
+      .from('expenses')
+      .select('expense_date, amount')
+      .in('id', ids)
+      .gte('expense_date', from)
+      .lte('expense_date', to)
+      .range(0, Math.min(ids.length + 99, 4999))
+    if (error) throw new Error(`Expense picker (ids) failed: ${error.message}`)
+    const m = new Map<string, number>()
+    for (const row of (data ?? [])) {
+      m.set(row.expense_date, (m.get(row.expense_date) || 0) + Math.max(0, (row.amount as number) || 0))
+    }
+    return m
+  }
+
+  // mode = 'all'
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let query: any = supabase
+    .from('expenses')
+    .select('expense_date, amount')
+    .gte('expense_date', from)
+    .lte('expense_date', to)
+
+  const cat = state?.category ?? defaultCategory
+  if (cat && cat !== 'ALL') query = query.eq('category', cat)
+  if (state?.status && state.status !== 'All') query = query.eq('expense_status', state.status)
+  if (state?.subcategory && state.subcategory !== 'ALL') query = query.eq('subcategory', state.subcategory)
+  if (state?.q?.trim()) query = query.or(`description.ilike.%${state.q.trim()}%,notes.ilike.%${state.q.trim()}%`)
+  if ((state?.excludedIds ?? []).length > 0) {
+    query = query.filter('id', 'not.in', `(${state!.excludedIds!.join(',')})`)
+  }
+  query = query.range(0, 9999)
+
+  const { data, error } = await query
+  if (error) throw new Error(`Expense query (${defaultCategory}) failed: ${error.message}`)
+
+  const m = new Map<string, number>()
+  for (const row of (data ?? [])) {
+    m.set(row.expense_date, (m.get(row.expense_date) || 0) + Math.max(0, (row.amount as number) || 0))
+  }
+  return m
+}
+
 export async function getPerformanceDashboard(
   fromDate?: string,
   toDate?: string,
-  gmvBasis: GmvBasis  = 'created',
-  cogsBasis: CogsBasis = 'shipped'
+  cogsBasis: CogsBasis = 'shipped',
+  opState?: ExpensePickerInput,
+  taxState?: ExpensePickerInput,
 ): Promise<{ success: boolean; data?: PerformanceDashboardData; error?: string }> {
   try {
     const supabase = createClient()
@@ -256,14 +345,22 @@ export async function getPerformanceDashboard(
           })
 
     // Fetch all sources in parallel
-    // GMV branches on gmvBasis; COGS branches on cogsBasis (both already Promises)
-    const [gmvByDate, cogsByDate, adRes, opRes, taxRes] = await Promise.all([
-      gmvBasis === 'paid'
-        ? fetchGMVByDayPaid(supabase, startDateStr, endDateStr)
-        : fetchGMVByDay(supabase, startDateStr, endDateStr),
+    // Revenue: strict created_time (no fallback). COGS branches on cogsBasis.
+    // Operating/Tax: use picker-state filters so trend matches card totals exactly.
+    const [gmvByDate, cogsByDate, adPerfRes, awarenessRes, opByDate, taxByDate] = await Promise.all([
+      fetchGMVByCreatedTime(supabase, startDateStr, endDateStr),
 
       cogsMapPromise,
 
+      // Product + Live spend + revenue from ad_daily_performance
+      supabase
+        .from('ad_daily_performance')
+        .select('ad_date, campaign_type, spend, revenue')
+        .gte('ad_date', startDateStr)
+        .lte('ad_date', endDateStr)
+        .in('campaign_type', ['product', 'live']),
+
+      // Tiger awareness spend from wallet_ledger
       adsWalletIds.length > 0
         ? supabase
             .from('wallet_ledger')
@@ -271,44 +368,50 @@ export async function getPerformanceDashboard(
             .in('wallet_id', adsWalletIds)
             .eq('entry_type', 'SPEND')
             .eq('direction', 'OUT')
+            .ilike('note', '%Awareness Spend%')
             .gte('date', startDateStr)
             .lte('date', endDateStr)
         : Promise.resolve({ data: [] as Array<{ date: string; amount: number }>, error: null }),
 
-      supabase
-        .from('expenses')
-        .select('expense_date, amount')
-        .gte('expense_date', startDateStr)
-        .lte('expense_date', endDateStr)
-        .eq('category', 'Operating'),
+      // Operating expenses — applies picker state so chart matches cards
+      buildExpensesByDay(supabase, startDateStr, endDateStr, opState, 'Operating'),
 
-      supabase
-        .from('expenses')
-        .select('expense_date, amount')
-        .gte('expense_date', startDateStr)
-        .lte('expense_date', endDateStr)
-        .eq('category', 'Tax'),
+      // Tax expenses — applies picker state so chart matches cards
+      buildExpensesByDay(supabase, startDateStr, endDateStr, taxState, 'Tax'),
     ])
 
-    if (adRes.error) throw new Error(`Wallet spend query failed: ${adRes.error.message}`)
-    if (opRes.error) throw new Error(`Operating expenses query failed: ${opRes.error.message}`)
-    if (taxRes.error) throw new Error(`Tax expenses query failed: ${taxRes.error.message}`)
+    if (adPerfRes.error)    throw new Error(`Ad performance query failed: ${adPerfRes.error.message}`)
+    if (awarenessRes.error) throw new Error(`Awareness wallet query failed: ${awarenessRes.error.message}`)
 
-    // Aggregate ad spend, operating, and tax per day
-    // (GMV and COGS are already Maps from their respective fetch functions)
-    const adByDate  = new Map<string, number>()
-    const opByDate  = new Map<string, number>()
-    const taxByDate = new Map<string, number>()
+    // Aggregate product/live spend, attributed revenue, and awareness per day
+    // (GMV, COGS, opByDate, taxByDate are already Maps from their respective fetch functions)
+    const productByDate           = new Map<string, number>()
+    const liveByDate              = new Map<string, number>()
+    const attributedRevenueByDate = new Map<string, number>()
 
-    adRes.data?.forEach((row) => {
-      adByDate.set(row.date, (adByDate.get(row.date) || 0) + Math.max(0, row.amount || 0))
+    adPerfRes.data?.forEach((row) => {
+      const d = row.ad_date as string
+      if (row.campaign_type === 'product') {
+        productByDate.set(d, (productByDate.get(d) || 0) + Math.max(0, (row.spend as number) || 0))
+      } else if (row.campaign_type === 'live') {
+        liveByDate.set(d, (liveByDate.get(d) || 0) + Math.max(0, (row.spend as number) || 0))
+      }
+      const rev = (row.revenue as number) || 0
+      if (rev > 0) {
+        attributedRevenueByDate.set(d, (attributedRevenueByDate.get(d) || 0) + Math.max(0, rev))
+      }
     })
-    opRes.data?.forEach((row) => {
-      opByDate.set(row.expense_date, (opByDate.get(row.expense_date) || 0) + Math.max(0, row.amount || 0))
+
+    const awarenessByDate = new Map<string, number>()
+    awarenessRes.data?.forEach((row) => {
+      awarenessByDate.set(row.date, (awarenessByDate.get(row.date) || 0) + Math.max(0, row.amount || 0))
     })
-    taxRes.data?.forEach((row) => {
-      taxByDate.set(row.expense_date, (taxByDate.get(row.expense_date) || 0) + Math.max(0, row.amount || 0))
-    })
+
+    // Build blended adByDate (for trend & summary)
+    const adByDate = new Map<string, number>()
+    productByDate.forEach((v, d)   => adByDate.set(d, (adByDate.get(d) || 0) + v))
+    liveByDate.forEach((v, d)      => adByDate.set(d, (adByDate.get(d) || 0) + v))
+    awarenessByDate.forEach((v, d) => adByDate.set(d, (adByDate.get(d) || 0) + v))
 
     // Build trend array
     const trend: PerformanceTrendDay[] = safeDays.map((d) => {
@@ -319,32 +422,67 @@ export async function getPerformanceDashboard(
       const op       = round2(opByDate.get(dateStr) || 0)
       const tax      = round2(taxByDate.get(dateStr) || 0)
       const net      = round2(gmv - adSpend - cogs - op - tax)
-      return { date: format(d, 'dd/MM'), dateStr, gmv, adSpend, net }
+      return {
+        date: format(d, 'dd/MM'), dateStr,
+        gmv, adSpend, net,
+        productSpend: round2(productByDate.get(dateStr) || 0),
+        liveSpend:    round2(liveByDate.get(dateStr) || 0),
+        awarenessSpend: round2(awarenessByDate.get(dateStr) || 0),
+        cogs,
+        operating: op,
+        tax,
+      }
     })
 
     // Summary totals
-    const totalGMV     = safeDays.reduce((s, d) => s + Math.max(0, gmvByDate.get(format(d, 'yyyy-MM-dd'))   || 0), 0)
-    const totalAdSpend = safeDays.reduce((s, d) => s + Math.max(0, adByDate.get(format(d, 'yyyy-MM-dd'))    || 0), 0)
-    const totalCOGS    = safeDays.reduce((s, d) => s + Math.max(0, cogsByDate.get(format(d, 'yyyy-MM-dd'))  || 0), 0)
-    const totalOp      = safeDays.reduce((s, d) => s + Math.max(0, opByDate.get(format(d, 'yyyy-MM-dd'))    || 0), 0)
-    const totalTax     = safeDays.reduce((s, d) => s + Math.max(0, taxByDate.get(format(d, 'yyyy-MM-dd'))   || 0), 0)
+    const totalGMV            = safeDays.reduce((s, d) => s + Math.max(0, gmvByDate.get(format(d, 'yyyy-MM-dd'))     || 0), 0)
+    const totalProductSpend   = safeDays.reduce((s, d) => s + (productByDate.get(format(d, 'yyyy-MM-dd'))            || 0), 0)
+    const totalLiveSpend      = safeDays.reduce((s, d) => s + (liveByDate.get(format(d, 'yyyy-MM-dd'))               || 0), 0)
+    const totalAwarenessSpend = safeDays.reduce((s, d) => s + (awarenessByDate.get(format(d, 'yyyy-MM-dd'))          || 0), 0)
+    const totalAdSpend        = totalProductSpend + totalLiveSpend + totalAwarenessSpend  // blended
+    const totalAttributedSpend   = totalProductSpend + totalLiveSpend
+    const totalAttributedRevenue = safeDays.reduce((s, d) => s + (attributedRevenueByDate.get(format(d, 'yyyy-MM-dd')) || 0), 0)
+    const totalCOGS            = safeDays.reduce((s, d) => s + Math.max(0, cogsByDate.get(format(d, 'yyyy-MM-dd'))   || 0), 0)
+    const totalOp              = safeDays.reduce((s, d) => s + Math.max(0, opByDate.get(format(d, 'yyyy-MM-dd'))     || 0), 0)
+    const totalTax             = safeDays.reduce((s, d) => s + Math.max(0, taxByDate.get(format(d, 'yyyy-MM-dd'))    || 0), 0)
+
+    const summary: PerformanceSummary = {
+      gmv:               round2(totalGMV),
+      adSpend:           round2(totalAdSpend),           // blended
+      productSpend:      round2(totalProductSpend),
+      liveSpend:         round2(totalLiveSpend),
+      awarenessSpend:    round2(totalAwarenessSpend),
+      attributedAdSpend: round2(totalAttributedSpend),
+      attributedRoas:    totalAttributedSpend > 0 ? round2(totalAttributedRevenue / totalAttributedSpend) : 0,
+      cogs:              round2(totalCOGS),
+      operating:         round2(totalOp),
+      tax:               round2(totalTax),
+      netProfit:         round2(totalGMV - totalAdSpend - totalCOGS - totalOp - totalTax),
+      roas:              totalAdSpend > 0 ? round2(totalGMV / totalAdSpend) : 0,  // blended ROAS
+      startDate:  startDateStr,
+      endDate:    endDateStr,
+      cogsBasis,
+    }
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[PerformanceDashboard] metrics', {
+        range: `${startDateStr} → ${endDateStr}`,
+        revenue: round2(totalGMV),
+        product_spend: round2(totalProductSpend),
+        live_spend: round2(totalLiveSpend),
+        awareness_spend: round2(totalAwarenessSpend),
+        blended_spend: round2(totalAdSpend),
+        attributed_spend: round2(totalAttributedSpend),
+        attributed_revenue: round2(totalAttributedRevenue),
+        blended_roas: totalAdSpend > 0 ? round2(totalGMV / totalAdSpend) : null,
+        attributed_roas: totalAttributedSpend > 0 ? round2(totalAttributedRevenue / totalAttributedSpend) : null,
+      })
+    }
 
     return {
       success: true,
       data: {
-        summary: {
-          gmv:        round2(totalGMV),
-          adSpend:    round2(totalAdSpend),
-          cogs:       round2(totalCOGS),
-          operating:  round2(totalOp),
-          tax:        round2(totalTax),
-          netProfit:  round2(totalGMV - totalAdSpend - totalCOGS - totalOp - totalTax),
-          roas:       totalAdSpend > 0 ? round2(totalGMV / totalAdSpend) : 0,
-          startDate:  startDateStr,
-          endDate:    endDateStr,
-          gmvBasis,
-          cogsBasis,
-        },
+        summary,
         trend,
       },
     }
@@ -368,12 +506,12 @@ export async function getPerformanceDashboard(
  *
  * @param from YYYY-MM-DD start date (Bangkok)
  * @param to   YYYY-MM-DD end date (Bangkok)
- * @param tab  'all' | 'product' | 'live'
+ * @param tab  'all' | 'product' | 'live' | 'awareness'
  */
 export async function getAdsBreakdown(
   from: string,
   to: string,
-  tab: 'all' | 'product' | 'live'
+  tab: 'all' | 'product' | 'live' | 'awareness'
 ): Promise<{ success: boolean; data?: AdsBreakdownType; error?: string }> {
   try {
     const supabase = createClient()
@@ -390,75 +528,94 @@ export async function getAdsBreakdown(
       return { success: false, error: 'ช่วงวันที่ไม่ถูกต้อง' }
     }
 
-    // Fetch ADS wallet IDs first
+    // Fetch ADS wallet IDs first (needed for awareness query)
     const adsWalletIds = await getAdsWalletIds(supabase)
 
-    // Build spend query from wallet_ledger with optional note filter for product/live
-    const spendPromise = adsWalletIds.length > 0
-      ? (() => {
+    // ad_daily_performance query: skip for 'awareness' tab
+    const adPerfPromise = tab === 'awareness'
+      ? Promise.resolve({ data: [] as Array<{ad_date: string; campaign_type: string; spend: number; revenue: number}>, error: null })
+      : (() => {
           let q = supabase
-            .from('wallet_ledger')
-            .select('date, amount')
-            .in('wallet_id', adsWalletIds)
-            .eq('entry_type', 'SPEND')
-            .eq('direction', 'OUT')
-            .gte('date', from)
-            .lte('date', to)
-          if (tab === 'product') q = q.ilike('note', 'Product Ads Spend%')
-          if (tab === 'live')    q = q.ilike('note', 'Live Ads Spend%')
+            .from('ad_daily_performance')
+            .select('ad_date, campaign_type, spend, revenue')
+            .gte('ad_date', from)
+            .lte('ad_date', to)
+          if (tab === 'product') q = q.eq('campaign_type', 'product')
+          if (tab === 'live')    q = q.eq('campaign_type', 'live')
+          // tab === 'all' → no campaign_type filter (gets both)
           return q
         })()
+
+    // Awareness query: run for 'all' AND 'awareness' tabs
+    const awarenessPromise = ((tab === 'all' || tab === 'awareness') && adsWalletIds.length > 0)
+      ? supabase
+          .from('wallet_ledger')
+          .select('date, amount')
+          .in('wallet_id', adsWalletIds)
+          .eq('entry_type', 'SPEND')
+          .eq('direction', 'OUT')
+          .ilike('note', '%Awareness Spend%')
+          .gte('date', from)
+          .lte('date', to)
       : Promise.resolve({ data: [] as Array<{ date: string; amount: number }>, error: null })
 
-    // Fetch revenue from ad_daily_performance (optional — may have 0 rows)
-    let revenueQuery = supabase
-      .from('ad_daily_performance')
-      .select('ad_date, revenue')
-      .gte('ad_date', from)
-      .lte('ad_date', to)
-    if (tab !== 'all') {
-      revenueQuery = revenueQuery.eq('campaign_type', tab)
-    }
+    const [adPerfRes, awarenessRes] = await Promise.all([adPerfPromise, awarenessPromise])
 
-    const [spendRes, revenueRes] = await Promise.all([spendPromise, revenueQuery])
+    if (adPerfRes.error)    throw new Error(`Ad performance query failed: ${adPerfRes.error.message}`)
+    if (awarenessRes.error) throw new Error(`Awareness wallet query failed: ${awarenessRes.error.message}`)
 
-    if (spendRes.error)   throw new Error(`Wallet spend query failed: ${spendRes.error.message}`)
-    if (revenueRes.error) throw new Error(`Revenue query failed: ${revenueRes.error.message}`)
+    const hasRevenue = (adPerfRes.data ?? []).some((r) => (r.revenue as number) > 0)
 
-    const hasRevenue = (revenueRes.data?.length ?? 0) > 0
-
-    // Aggregate spend per date
-    const spendByDate = new Map<string, number>()
-    for (const row of spendRes.data ?? []) {
-      spendByDate.set(row.date, (spendByDate.get(row.date) || 0) + Math.max(0, row.amount || 0))
-    }
-
-    // Aggregate revenue per date (only when hasRevenue)
+    // Attributed spend (product+live from ad_daily_performance)
+    const attributedSpendByDate = new Map<string, number>()
     const gmvByDate = new Map<string, number>()
-    if (hasRevenue) {
-      for (const row of revenueRes.data ?? []) {
-        gmvByDate.set(row.ad_date, (gmvByDate.get(row.ad_date) || 0) + Math.max(0, row.revenue || 0))
+
+    for (const row of adPerfRes.data ?? []) {
+      const d = row.ad_date as string
+      attributedSpendByDate.set(d, (attributedSpendByDate.get(d) || 0) + Math.max(0, (row.spend as number) || 0))
+      if (hasRevenue) {
+        const rev = (row.revenue as number) || 0
+        if (rev > 0) gmvByDate.set(d, (gmvByDate.get(d) || 0) + Math.max(0, rev))
       }
     }
 
+    // Awareness (only in 'all' tab)
+    const awarenessByDate = new Map<string, number>()
+    for (const row of awarenessRes.data ?? []) {
+      awarenessByDate.set(row.date, (awarenessByDate.get(row.date) || 0) + Math.max(0, row.amount || 0))
+    }
+
+    // Blended spend per day = attributed + awareness
+    const spendByDate = new Map<string, number>()
+    attributedSpendByDate.forEach((v, d) => spendByDate.set(d, (spendByDate.get(d) || 0) + v))
+    awarenessByDate.forEach((v, d)       => spendByDate.set(d, (spendByDate.get(d) || 0) + v))
+
     // Build byDay for full date range
+    // ROAS per day uses gmv / attributedSpend (not blended spend)
     const safeDays = buildDateRange(from, to)
     const byDay: AdsBreakdownRow[] = safeDays.map((d) => {
-      const dateStr = format(d, 'yyyy-MM-dd')
-      const spend   = round2(spendByDate.get(dateStr) ?? 0)
-      const gmv     = hasRevenue ? round2(gmvByDate.get(dateStr) ?? 0) : 0
+      const dateStr   = format(d, 'yyyy-MM-dd')
+      const spend     = round2(spendByDate.get(dateStr) ?? 0)           // blended
+      const attrSpend = round2(attributedSpendByDate.get(dateStr) ?? 0)
+      const gmv       = hasRevenue ? round2(gmvByDate.get(dateStr) ?? 0) : 0
       return {
         dateStr,
         dayLabel: format(d, 'dd/MM'),
         spend,
         gmv,
-        roas: spend > 0 && gmv > 0 ? round2(gmv / spend) : 0,
+        roas: attrSpend > 0 && gmv > 0 ? round2(gmv / attrSpend) : 0,
       }
     })
 
-    const totalSpend = round2(byDay.reduce((s, r) => s + r.spend, 0))
-    const totalGmv   = round2(byDay.reduce((s, r) => s + r.gmv, 0))
-    const totalRoas  = totalSpend > 0 && totalGmv > 0 ? round2(totalGmv / totalSpend) : 0
+    const totalSpend      = round2(byDay.reduce((s, r) => s + r.spend, 0))
+    const totalGmv        = round2(byDay.reduce((s, r) => s + r.gmv, 0))
+    let _attrSpendAcc = 0
+    attributedSpendByDate.forEach((v) => { _attrSpendAcc += v })
+    const totalAttrSpend  = round2(_attrSpendAcc)
+    const totalRoas       = totalAttrSpend > 0 && totalGmv > 0 ? round2(totalGmv / totalAttrSpend) : 0
+    let _awarenessAcc = 0
+    awarenessByDate.forEach((v) => { _awarenessAcc += v })
+    const totalAwarenessSp = round2(_awarenessAcc)
 
     const activeDays     = byDay.filter((r) => r.spend > 0)
     const activeRoasDays = activeDays.filter((r) => r.roas > 0)
@@ -471,9 +628,30 @@ export async function getAdsBreakdown(
       ? { min: Math.min(...activeRoasDays.map((r) => r.roas)), max: Math.max(...activeRoasDays.map((r) => r.roas)) }
       : { min: 0, max: 0 }
 
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[AdsBreakdown] metrics', {
+        tab,
+        range: `${from} → ${to}`,
+        total_spend: totalSpend,
+        attributed_spend: totalAttrSpend,
+        awareness_spend: totalAwarenessSp,
+        attributed_gmv: totalGmv,
+        attributed_roas: totalRoas,
+      })
+    }
+
     return {
       success: true,
-      data: { totalSpend, totalGmv, roas: totalRoas, spendRange, roasRange, byDay, hasRevenue },
+      data: {
+        totalSpend,
+        totalGmv,
+        roas: totalRoas,
+        awarenessSpend: totalAwarenessSp,
+        spendRange,
+        roasRange,
+        byDay,
+        hasRevenue,
+      },
     }
   } catch (error) {
     console.error('[getAdsBreakdown] error:', error)
