@@ -170,8 +170,9 @@ export default async function PerformanceDashboardPage({
       ══════════════════════════════════════════════════════════════════════ */}
       <div>
         <SectionLabel>Business Performance</SectionLabel>
-        {/* Desktop: 3-col × 2 rows — primary (Revenue/Ads/COGS) + secondary (Op/Tax/Net) */}
-        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 items-start">
+        {/* Desktop: 3-col × 2 rows — primary (Revenue/Ads/COGS) + secondary (Op/Tax/Net)
+            lg:items-stretch: cards in the same row are equal height (structured grid) */}
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 items-start lg:items-stretch">
 
           {/* Revenue */}
           {revenueBasis === 'bank' ? (
