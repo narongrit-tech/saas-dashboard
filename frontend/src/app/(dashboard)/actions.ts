@@ -327,7 +327,7 @@ export async function getPerformanceDashboard(
     const adsWalletIds = await getAdsWalletIds(supabase)
 
     // COGS promise — normalised to Map<string,number> for both modes
-    const cogsMapPromise: Promise<Map<string, number>> = cogsBasis === 'created'
+    const cogsMapPromise = cogsBasis === 'created'
       ? fetchCOGSByCreatedDate(supabase, startDateStr, endDateStr)
       : supabase
           .from('inventory_cogs_allocations')
