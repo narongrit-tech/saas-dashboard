@@ -458,9 +458,9 @@ export default function ExpensesPage() {
   const hasSelection = selectedIds.size > 0 || selectionMode === 'filtered'
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full min-w-0">
       <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold">Expenses</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold">Expenses</h1>
       </div>
 
       {/* Filters */}
@@ -648,7 +648,8 @@ export default function ExpensesPage() {
       )}
 
       {/* Table */}
-      <div className="rounded-md border bg-white">
+      <div className="overflow-x-auto -mx-4 sm:mx-0">
+      <div className="rounded-md border bg-white min-w-[700px] sm:min-w-0">
         <Table>
           <TableHeader>
             <TableRow>
@@ -760,6 +761,7 @@ export default function ExpensesPage() {
             )}
           </TableBody>
         </Table>
+      </div>
       </div>
 
       {/* Pagination */}

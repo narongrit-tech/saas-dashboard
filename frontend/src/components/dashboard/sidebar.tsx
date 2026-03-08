@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
@@ -34,7 +34,7 @@ import {
 interface MenuItem {
   title: string
   href: string
-  icon: any
+  icon: React.ElementType
 }
 
 interface MenuGroup {
@@ -173,15 +173,19 @@ const menuGroups: MenuGroup[] = [
   },
 ]
 
-export function Sidebar() {
+interface SidebarContentProps {
+  onNavigate?: () => void
+}
+
+export function SidebarContent({ onNavigate }: SidebarContentProps) {
   const pathname = usePathname()
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
 
-  function isItemActive(href: string): boolean {
+  const isItemActive = useCallback((href: string): boolean => {
     // Settings sub-pages use startsWith so /settings/general is active on that path
     if (href.startsWith('/settings/')) return pathname === href || pathname.startsWith(href + '/')
     return pathname === href
-  }
+  }, [pathname])
 
   // Initialize expanded state and auto-expand group with active route
   useEffect(() => {
@@ -196,7 +200,7 @@ export function Sidebar() {
     })
 
     setExpandedGroups(initialExpanded)
-  }, [pathname])
+  }, [pathname, isItemActive])
 
   function toggleGroup(groupTitle: string) {
     setExpandedGroups((prev) => ({
@@ -206,8 +210,8 @@ export function Sidebar() {
   }
 
   return (
-    <div className="flex h-full w-64 flex-col border-r bg-card">
-      <div className="flex h-16 items-center border-b px-6">
+    <div className="flex h-full w-full flex-col bg-card">
+      <div className="flex h-16 items-center border-b px-6 shrink-0">
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
             <svg
@@ -264,6 +268,7 @@ export function Sidebar() {
                       <Link
                         key={item.href}
                         href={item.href}
+                        onClick={onNavigate}
                         className={cn(
                           'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
                           isActive
@@ -283,5 +288,14 @@ export function Sidebar() {
         })}
       </nav>
     </div>
+  )
+}
+
+/** Legacy export — desktop-only sidebar wrapper (used nowhere now but kept for safety) */
+export function Sidebar() {
+  return (
+    <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 border-r bg-card z-20">
+      <SidebarContent />
+    </aside>
   )
 }

@@ -173,8 +173,8 @@ export default function CompanyCashflowPage() {
       )}
 
       {/* Date Range Filter */}
-      <div className="flex items-center gap-4">
-        <div className="flex-1">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex-1 min-w-[200px]">
           <DateRangePicker
             value={dateRange}
             onChange={setDateRange}
@@ -223,7 +223,7 @@ export default function CompanyCashflowPage() {
 
       {/* Loading State */}
       {loading && (
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
           {Array.from({ length: 3 }).map((_, i) => (
             <Card key={i}>
               <CardHeader>
@@ -240,7 +240,7 @@ export default function CompanyCashflowPage() {
       {/* Summary Cards */}
       {!loading && data && (
         <>
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
             {/* Cash In */}
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">

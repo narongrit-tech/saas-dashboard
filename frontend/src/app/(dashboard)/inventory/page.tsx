@@ -8,16 +8,16 @@ import { MovementsTab } from '@/components/inventory/MovementsTab'
 
 export default function InventoryPage() {
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full min-w-0">
       <div>
-        <h1 className="text-3xl font-bold">Inventory & COGS</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold">Inventory & COGS</h1>
         <p className="text-muted-foreground mt-1">
           จัดการสินค้า, Opening Balance, Bundle และ COGS Allocations (FIFO/AVG)
         </p>
       </div>
 
       <Tabs defaultValue="products" className="space-y-4">
-        <TabsList>
+        <TabsList className="flex-wrap h-auto gap-1">
           <TabsTrigger value="products">Products</TabsTrigger>
           <TabsTrigger value="opening-balance">Opening Balance</TabsTrigger>
           <TabsTrigger value="bundles">Bundles</TabsTrigger>

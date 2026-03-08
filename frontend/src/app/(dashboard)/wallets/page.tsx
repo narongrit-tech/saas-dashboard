@@ -317,9 +317,9 @@ export default function WalletsPage() {
   const selectedWallet = wallets.find((w) => w.id === selectedWalletId)
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full min-w-0">
       <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold flex items-center gap-2">
+        <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2">
           <WalletIcon className="h-8 w-8" />
           Wallets
         </h1>
@@ -346,7 +346,7 @@ export default function WalletsPage() {
 
       {/* Balance Summary Cards */}
       {selectedWalletId && walletBalance && (
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Opening Balance</CardTitle>
@@ -538,7 +538,8 @@ export default function WalletsPage() {
 
       {/* Table */}
       {selectedWalletId && (
-        <div className="rounded-md border bg-white">
+        <div className="overflow-x-auto -mx-4 sm:mx-0">
+        <div className="rounded-md border bg-white min-w-[700px] sm:min-w-0">
           <Table>
             <TableHeader>
               <TableRow>
@@ -642,6 +643,7 @@ export default function WalletsPage() {
               )}
             </TableBody>
           </Table>
+        </div>
         </div>
       )}
 

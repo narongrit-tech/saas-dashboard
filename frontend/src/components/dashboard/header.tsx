@@ -1,6 +1,6 @@
 'use client'
 
-import { LogOut, User } from 'lucide-react'
+import { LogOut, Menu, User } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -20,9 +20,10 @@ interface HeaderProps {
     email?: string
     name?: string
   }
+  onMenuClick?: () => void
 }
 
-export function Header({ title, user }: HeaderProps) {
+export function Header({ title, user, onMenuClick }: HeaderProps) {
   const router = useRouter()
   const supabase = createClient()
 
@@ -33,15 +34,27 @@ export function Header({ title, user }: HeaderProps) {
   }
 
   return (
-    <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b bg-card px-6">
-      <h1 className="text-2xl font-bold">{title}</h1>
+    <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b bg-card px-4 sm:px-6">
+      <div className="flex items-center gap-3">
+        {/* Hamburger — visible only on mobile */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="lg:hidden"
+          onClick={onMenuClick}
+          aria-label="Open menu"
+        >
+          <Menu className="h-5 w-5" />
+        </Button>
+        <h1 className="text-xl font-bold sm:text-2xl">{title}</h1>
+      </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-2 sm:gap-4">
         <NotificationBell />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="flex items-center gap-2">
+            <Button variant="ghost" className="flex items-center gap-2 px-2 sm:px-3">
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10">
                 <User className="h-4 w-4 text-primary" />
               </div>
