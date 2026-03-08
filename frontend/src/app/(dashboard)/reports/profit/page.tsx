@@ -559,7 +559,9 @@ export default function ProfitReportsPage() {
               <span>Loading product profit...</span>
             </div>
           ) : d1bData ? (
-            <div>Data loaded (TODO: Render table)</div>
+            <div className="text-center text-muted-foreground py-8">
+              ข้อมูลโหลดสำเร็จ — ตารางอยู่ระหว่างพัฒนา
+            </div>
           ) : dateRange ? (
             <div className="text-center text-muted-foreground py-8">No data available</div>
           ) : (
@@ -589,7 +591,9 @@ export default function ProfitReportsPage() {
               <span>Loading platform-attributed data...</span>
             </div>
           ) : d1aData ? (
-            <div>Data loaded (TODO: Render table)</div>
+            <div className="text-center text-muted-foreground py-8">
+              ข้อมูลโหลดสำเร็จ — ตารางอยู่ระหว่างพัฒนา
+            </div>
           ) : (
             <div className="text-center text-muted-foreground py-8">No data available</div>
           )}
@@ -615,7 +619,9 @@ export default function ProfitReportsPage() {
               <span>Loading source split data...</span>
             </div>
           ) : d1cData ? (
-            <div>Data loaded (TODO: Render table)</div>
+            <div className="text-center text-muted-foreground py-8">
+              ข้อมูลโหลดสำเร็จ — ตารางอยู่ระหว่างพัฒนา
+            </div>
           ) : (
             <div className="text-center text-muted-foreground py-8">No data available</div>
           )}

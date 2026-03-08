@@ -546,6 +546,15 @@ export default function ImportBankStatementDialog({
 
         {step === 'preview' && preview && (
           <div className="space-y-4">
+            <Alert className="border-amber-300 bg-amber-50">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              <AlertDescription className="text-amber-800 text-sm">
+                การ import จะ<strong>ลบ transactions เดิม</strong>ในช่วงวันที่{' '}
+                {preview.date_range.start}–{preview.date_range.end} ทั้งหมดก่อน แล้วแทนที่ด้วยข้อมูลใหม่
+                {' '}หาก transactions เหล่านั้นถูกแท็กเป็น Revenue (Bank Inflows) ไว้แล้ว
+                <strong> tag จะถูกลบออกด้วย</strong> ตรวจสอบให้แน่ใจก่อนดำเนินการ
+              </AlertDescription>
+            </Alert>
             <div className="grid grid-cols-3 gap-4">
               <div className="border p-3 rounded">
                 <p className="text-sm text-muted-foreground">Date Range</p>
