@@ -86,6 +86,27 @@ export function DualCalendar({
     setLeftMonth(left);
   };
 
+  // When singleMonth, override cell classes so the grid expands to full width
+  const singleMonthClassNames = singleMonth
+    ? {
+        head_cell:
+          'flex-1 text-muted-foreground rounded-md font-normal text-[0.8rem] text-center',
+        cell:
+          'flex-1 h-9 text-center text-sm p-0 relative ' +
+          '[&:has([aria-selected].day-range-end)]:rounded-r-md ' +
+          '[&:has([aria-selected].day-outside)]:bg-accent/50 ' +
+          '[&:has([aria-selected])]:bg-accent ' +
+          'first:[&:has([aria-selected])]:rounded-l-md ' +
+          'last:[&:has([aria-selected])]:rounded-r-md ' +
+          'focus-within:relative focus-within:z-20',
+        day: 'w-full h-9 p-0 font-normal aria-selected:opacity-100 ' +
+          'inline-flex items-center justify-center rounded-md text-sm ' +
+          'hover:bg-accent hover:text-accent-foreground ' +
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ' +
+          'disabled:pointer-events-none disabled:opacity-50',
+      }
+    : undefined;
+
   return (
     <div className={`flex flex-col gap-2 ${className || ''}`}>
       {/* Month/Year Navigation */}
@@ -128,7 +149,7 @@ export function DualCalendar({
         </Button>
       </div>
 
-      {/* Calendar */}
+      {/* Calendar — full-width when singleMonth */}
       <Calendar
         mode="range"
         selected={value}
@@ -137,7 +158,8 @@ export function DualCalendar({
         month={leftMonth}
         onMonthChange={setLeftMonth}
         disabled={disabledMatcher as Parameters<typeof Calendar>[0]['disabled']}
-        className="rounded-md border"
+        className={singleMonth ? 'w-full rounded-md border p-2' : 'rounded-md border'}
+        classNames={singleMonthClassNames}
       />
 
       {value?.from && !value?.to && (

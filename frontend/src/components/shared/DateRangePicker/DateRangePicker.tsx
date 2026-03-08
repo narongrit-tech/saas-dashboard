@@ -266,42 +266,50 @@ export function DateRangePicker({
       <>
         {triggerButton}
         <Sheet open={isOpen} onOpenChange={handleOpenChange}>
+          {/*
+           * max-h-[85vh]: adaptive height — compact for preset mode,
+           * grows for custom-calendar mode; never taller than 85vh.
+           */}
           <SheetContent
             side="bottom"
-            className="h-[90vh] flex flex-col p-0 gap-0"
+            className="max-h-[85vh] flex flex-col p-0 gap-0"
           >
             {/* Header */}
             <div className="flex-shrink-0 px-5 pt-5 pb-3 border-b pr-12">
               <p className="text-base font-semibold">เลือกช่วงวันที่</p>
             </div>
 
-            {/* Scrollable body */}
-            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-              {/* Step 1: Preset dropdown */}
-              <Select
-                value={selectedPreset ?? ''}
-                onValueChange={handleMobilePresetChange}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="เลือกช่วงเวลา" />
-                </SelectTrigger>
-                <SelectContent>
-                  {presets.map((preset) => (
-                    <SelectItem key={preset.key} value={preset.key}>
-                      {preset.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            {/* Scrollable body — split into two zones to control padding per section */}
+            <div className="flex-1 overflow-y-auto">
+              {/* Preset dropdown: normal side padding */}
+              <div className="px-5 pt-4 pb-3">
+                <Select
+                  value={selectedPreset ?? ''}
+                  onValueChange={handleMobilePresetChange}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="เลือกช่วงเวลา" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {presets.map((preset) => (
+                      <SelectItem key={preset.key} value={preset.key}>
+                        {preset.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-              {/* Step 2: Calendar — only for กำหนดเอง */}
+              {/* Calendar — minimal side padding so it uses full horizontal width */}
               {showCalendar && (
-                <DualCalendar
-                  value={draft}
-                  onChange={handleDateSelect}
-                  disabled={disabledMatcher}
-                  singleMonth
-                />
+                <div className="px-2 pb-4">
+                  <DualCalendar
+                    value={draft}
+                    onChange={handleDateSelect}
+                    disabled={disabledMatcher}
+                    singleMonth
+                  />
+                </div>
               )}
             </div>
 
