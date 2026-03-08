@@ -105,16 +105,22 @@ Changes:
 
 ---
 
+### Affiliate Performance Report
+Route: /reports/affiliate
+Spec: docs/ui-mobile/06-affiliate-performance-report.md
+Changes:
+- Compact header (text-xl sm:text-2xl)
+- Filters: inline DateRangePicker (no Card wrapper)
+- KPI cards: grid-cols-2 on mobile, md:grid-cols-4 on desktop
+- Charts: responsive height, donut labels hidden on mobile
+- Internal Affiliates: card list on mobile, table on desktop
+- External Top 10: card list on mobile, table on desktop
+
+---
+
 ## Pending
 
-### Affiliate Performance Report
-Route: /affiliates (report tab or sub-route — verify actual route)
-Spec: docs/ui-mobile/06-affiliate-performance-report.md
-Required:
-- compact header
-- KPI cards responsive
-- charts sized for mobile
-- performance tables become cards on mobile
+(none — all pages completed)
 
 ---
 
@@ -134,8 +140,8 @@ Purpose:
 
 ## Next Page To Improve
 
-Affiliate Performance Report
-Spec: docs/ui-mobile/06-affiliate-performance-report.md
+Mobile Command Center (/mobile/home, /mobile/import, /mobile/jobs)
+Spec: docs/ui-mobile/07-mobile-command-center.md
 
 ---
 

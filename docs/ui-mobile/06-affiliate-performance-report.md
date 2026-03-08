@@ -1,6 +1,18 @@
 # Affiliate Performance Report Page
 
-Status: Pending
+Status: Completed
+Date: 2026-03-08
+
+Changes implemented:
+
+* Header: text-xl sm:text-2xl, compact spacing (space-y-4)
+* Filters: removed Card wrapper, inline DateRangePicker
+* KPI cards: grid-cols-2 gap-3 on mobile, md:grid-cols-4 on desktop
+* Donut chart: responsive height h-[220px] sm:h-[350px], labels hidden on mobile
+* Bar chart: min-height 250px, YAxis width reduced for mobile readability
+* Internal Affiliates: card list on mobile (channel, GMV, orders, commissions), table on desktop
+* External Top 10: card list on mobile (rank badge, channel, commissions), table on desktop
+* Desktop layout unchanged
 
 Route: /affiliates/report (or /overview, verify actual route)
 
