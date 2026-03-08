@@ -29,7 +29,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
-import { ChevronLeft, ChevronRight, Download, FileUp, Plus, Pencil, Trash2, Eye, RotateCcw, Package, Link, ChevronDown, ChevronUp } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, FileUp, Plus, Pencil, Trash2, Eye, RotateCcw, Package, Link, ChevronDown, ChevronUp, SlidersHorizontal } from 'lucide-react'
 import { AddOrderDialog } from '@/components/sales/AddOrderDialog'
 import { EditOrderDialog } from '@/components/sales/EditOrderDialog'
 import { DeleteConfirmDialog } from '@/components/shared/DeleteConfirmDialog'
@@ -43,6 +43,11 @@ import { AttributionBadge } from '@/components/sales/AttributionBadge'
 import { batchFetchAttributions } from '@/app/(dashboard)/sales/attribution-actions'
 import { OrderAttribution } from '@/types/profit-reports'
 import { deleteOrder, exportSalesOrders } from '@/app/(dashboard)/sales/actions'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 
 const PLATFORMS = [
   { value: 'all', label: 'All Platforms' },
@@ -753,54 +758,6 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
       )}
 
       <div className="space-y-4">
-        {/* View Toggle */}
-        <div className="flex items-center gap-4 p-3 border rounded-lg bg-purple-50 dark:bg-purple-950">
-          <label className="text-sm font-medium">มุมมอง:</label>
-          <div className="flex items-center gap-2">
-            <Button
-              variant={view === 'order' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => handleViewChange('order')}
-            >
-              Order View (1 row per order)
-            </Button>
-            <Button
-              variant={view === 'line' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => handleViewChange('line')}
-            >
-              Line View (raw lines)
-            </Button>
-          </div>
-          <span className="text-xs text-muted-foreground ml-auto">
-            {view === 'order' ? 'แสดง 1 แถวต่อออเดอร์ (รวม SKU หลายตัว)' : 'แสดงทุก line items (1 แถวต่อ SKU)'}
-          </span>
-        </div>
-
-        {/* Date Basis Selector */}
-        <div className="flex items-center gap-4 p-3 border rounded-lg bg-blue-50 dark:bg-blue-950">
-          <label className="text-sm font-medium">กรองวันที่ตาม:</label>
-          <div className="flex items-center gap-2">
-            <Button
-              variant={dateBasis === 'order' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => handleDateBasisChange('order')}
-            >
-              วันสั่งซื้อ (Order Date)
-            </Button>
-            <Button
-              variant={dateBasis === 'paid' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => handleDateBasisChange('paid')}
-            >
-              วันชำระเงิน (Paid Date)
-            </Button>
-          </div>
-          <span className="text-xs text-muted-foreground ml-auto">
-            {dateBasis === 'order' ? 'แสดงทุกออเดอร์ตามวันที่สั่ง' : 'แสดงเฉพาะออเดอร์ที่ชำระเงินแล้ว'}
-          </span>
-        </div>
-
         {/* Filters Row 1 */}
         <div className="flex flex-col gap-4 md:flex-row md:items-end">
           <div className="flex-1 space-y-2">
@@ -887,6 +844,74 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
               value={filters.search || ''}
               onChange={(e) => handleFilterChange('search', e.target.value || undefined)}
             />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium invisible">การแสดงผล</label>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="w-full md:w-auto">
+                  <SlidersHorizontal className="mr-2 h-4 w-4" />
+                  การแสดงผล
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    {view === 'order' ? 'Order' : 'Line'} · {dateBasis === 'order' ? 'Order Date' : 'Paid Date'}
+                  </span>
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-72" align="end">
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">มุมมอง</p>
+                    <div className="flex gap-2">
+                      <Button
+                        variant={view === 'order' ? 'default' : 'outline'}
+                        size="sm"
+                        className="flex-1"
+                        onClick={() => handleViewChange('order')}
+                      >
+                        Order View
+                      </Button>
+                      <Button
+                        variant={view === 'line' ? 'default' : 'outline'}
+                        size="sm"
+                        className="flex-1"
+                        onClick={() => handleViewChange('line')}
+                      >
+                        Line View
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {view === 'order' ? '1 แถวต่อออเดอร์ (รวม SKU หลายตัว)' : 'ทุก line items (1 แถวต่อ SKU)'}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">กรองวันที่ตาม</p>
+                    <div className="flex gap-2">
+                      <Button
+                        variant={dateBasis === 'order' ? 'default' : 'outline'}
+                        size="sm"
+                        className="flex-1"
+                        onClick={() => handleDateBasisChange('order')}
+                      >
+                        Order Date
+                      </Button>
+                      <Button
+                        variant={dateBasis === 'paid' ? 'default' : 'outline'}
+                        size="sm"
+                        className="flex-1"
+                        onClick={() => handleDateBasisChange('paid')}
+                      >
+                        Paid Date
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {dateBasis === 'order' ? 'แสดงทุกออเดอร์ตามวันที่สั่ง' : 'แสดงเฉพาะออเดอร์ที่ชำระเงินแล้ว'}
+                    </p>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
         </div>
       </div>

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { CalendarIcon } from 'lucide-react';
 import { DateRange } from 'react-day-picker';
@@ -16,11 +17,6 @@ import { DateRangePickerProps, PresetConfig, DateRangeResult } from './types';
 import { PresetsPanel } from './PresetsPanel';
 import { DualCalendar } from './DualCalendar';
 import { Footer } from './Footer';
-import {
-  getRecentSelections,
-  saveRecentSelection,
-  RecentSelection,
-} from '@/app/actions/recent-date-selections';
 
 /**
  * Default presets (Thai labels)
@@ -152,15 +148,14 @@ const DEFAULT_PRESETS: PresetConfig[] = [
 ];
 
 /**
- * Date Range Picker Component (Phase 2: Modular + Recently Used)
+ * Date Range Picker Component
  *
  * Features:
  * - Draft + Confirmation pattern (prevents unwanted API calls)
  * - Preset panel + Dual calendar layout
  * - Bangkok timezone support
- * - Recently Used (database-backed, max 3 items)
  * - Month/Year dropdown navigation
- * - Modular component architecture
+ * - Mobile: bottom Sheet; Desktop: Popover
  */
 export function DateRangePicker({
   value,
@@ -178,7 +173,7 @@ export function DateRangePicker({
     to: value?.endDate || getBangkokNow(),
   }));
 
-  // Draft state (temporary selection in popover)
+  // Draft state (temporary selection in popover/sheet)
   const [draft, setDraft] = useState<DateRange | undefined>(() => ({
     from: value?.startDate || getBangkokNow(),
     to: value?.endDate || getBangkokNow(),
@@ -187,11 +182,18 @@ export function DateRangePicker({
   // Selected preset tracking
   const [selectedPreset, setSelectedPreset] = useState<string | undefined>(value?.preset);
 
-  // Popover open state
+  // Open state (shared between Popover and Sheet)
   const [isOpen, setIsOpen] = useState(false);
 
-  // Recently Used state
-  const [recentlyUsed, setRecentlyUsed] = useState<RecentSelection[]>([]);
+  // Mobile detection
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768);
+    check();
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, []);
 
   // Sync applied state when value prop changes (controlled component)
   useEffect(() => {
@@ -203,45 +205,21 @@ export function DateRangePicker({
     }
   }, [value]);
 
-  // Load recently used on mount
-  useEffect(() => {
-    loadRecentSelections();
-  }, []);
-
   /**
-   * Load recently used selections from database
-   */
-  const loadRecentSelections = async () => {
-    try {
-      const selections = await getRecentSelections();
-      setRecentlyUsed(selections);
-    } catch (error) {
-      console.error('[DateRangePicker] Failed to load recent selections:', error);
-      // Fail silently - return empty array
-      setRecentlyUsed([]);
-    }
-  };
-
-  /**
-   * Handle popover open/close
-   * Reset draft to applied when opening
+   * Handle open/close — reset draft to applied when opening
    */
   const handleOpenChange = (open: boolean) => {
     if (open) {
-      // Reset draft to current applied value
       setDraft({
         from: applied.from,
         to: applied.to,
       });
-      // Reload recently used
-      loadRecentSelections();
     }
     setIsOpen(open);
   };
 
   /**
-   * Handle preset click
-   * Updates draft state only (no onChange call)
+   * Handle preset click — updates draft only
    */
   const handlePresetClick = (preset: PresetConfig) => {
     const range = preset.getValue();
@@ -253,22 +231,7 @@ export function DateRangePicker({
   };
 
   /**
-   * Handle recently used click
-   */
-  const handleRecentClick = (recent: RecentSelection) => {
-    const startDate = new Date(recent.startDate);
-    const endDate = new Date(recent.endDate);
-
-    setDraft({
-      from: startOfDayBangkok(startDate),
-      to: endOfDayBangkok(endDate),
-    });
-    setSelectedPreset(recent.preset || 'custom');
-  };
-
-  /**
-   * Handle calendar date selection
-   * Updates draft state only (no onChange call)
+   * Handle calendar date selection — updates draft only
    */
   const handleDateSelect = (range: DateRange | undefined) => {
     if (!range) {
@@ -290,65 +253,33 @@ export function DateRangePicker({
   };
 
   /**
-   * Handle confirm button click
-   * This is the ONLY place where onChange is called
+   * Handle confirm — the ONLY place where onChange is called
    */
-  const handleConfirm = async () => {
+  const handleConfirm = () => {
     if (!draft?.from || !draft?.to) {
       return; // Require both dates
     }
 
-    // Update applied state
     setApplied(draft);
 
-    // Call parent onChange (single call, explicit)
     onChange({
       startDate: draft.from,
       endDate: draft.to,
       preset: selectedPreset,
     });
 
-    // Save to recently used (async, non-blocking)
-    try {
-      const label = formatDateRangeLabel(draft.from, draft.to);
-      await saveRecentSelection({
-        label,
-        startDate: toBangkokDateString(draft.from),
-        endDate: toBangkokDateString(draft.to),
-        preset: selectedPreset !== 'custom' ? selectedPreset : undefined,
-      });
-
-      // Refresh recently used list
-      await loadRecentSelections();
-    } catch (error) {
-      console.error('[DateRangePicker] Failed to save recent selection:', error);
-      // Don't block user flow if save fails
-    }
-
-    // Close popover
     setIsOpen(false);
   };
 
   /**
-   * Handle cancel button click
-   * Discard draft and close popover
+   * Handle cancel — discard draft and close
    */
   const handleCancel = () => {
-    // Reset draft to applied (discard changes)
     setDraft({
       from: applied.from,
       to: applied.to,
     });
     setIsOpen(false);
-  };
-
-  /**
-   * Format date range label for display (for recently used)
-   */
-  const formatDateRangeLabel = (startDate: Date, endDate: Date): string => {
-    const start = format(startDate, 'dd MMM yyyy');
-    const end = format(endDate, 'dd MMM yyyy');
-    return `${start} – ${end}`;
   };
 
   /**
@@ -383,17 +314,95 @@ export function DateRangePicker({
     return `${start} – ${end}`;
   };
 
+  const triggerButton = (
+    <Button
+      variant="outline"
+      className="w-full justify-start text-left font-normal md:min-w-[280px] md:w-auto"
+      aria-label="เลือกช่วงวันที่"
+      onClick={() => handleOpenChange(true)}
+    >
+      <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+      <span className="truncate">{formatTriggerDisplay()}</span>
+    </Button>
+  );
+
+  const pickerContent = (
+    <>
+      {/* Presets + Calendar */}
+      <div className="flex flex-col gap-4 md:flex-row md:gap-4">
+        {/* Presets panel — horizontal scroll on mobile, vertical list on desktop */}
+        <div className="md:w-[160px] md:shrink-0">
+          <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 px-1">ช่วงเวลา</p>
+          {/* Mobile: horizontal pills; Desktop: vertical list */}
+          <div className="flex flex-wrap gap-1.5 md:hidden">
+            {presets.map((preset) => (
+              <Button
+                key={preset.key}
+                variant={selectedPreset === preset.key ? 'default' : 'outline'}
+                size="sm"
+                className="text-xs h-7 px-2.5"
+                onClick={() => handlePresetClick(preset)}
+              >
+                {preset.label}
+              </Button>
+            ))}
+          </div>
+          <div className="hidden md:block">
+            <PresetsPanel
+              presets={presets}
+              selectedPreset={selectedPreset}
+              onPresetClick={handlePresetClick}
+            />
+          </div>
+        </div>
+
+        {/* Calendar — single month on mobile, dual on desktop */}
+        <div className="min-w-0">
+          <DualCalendar
+            value={draft}
+            onChange={handleDateSelect}
+            disabled={{
+              after: allowFutureDates ? maxDate : (maxDate || getBangkokNow()),
+              before: minDate,
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Footer */}
+      <Footer
+        onCancel={handleCancel}
+        onConfirm={handleConfirm}
+        isConfirmDisabled={isConfirmDisabled}
+        timezone={timezone}
+        className="mt-4 pt-4 border-t"
+      />
+    </>
+  );
+
+  // Mobile: Sheet (bottom drawer)
+  if (isMobile) {
+    return (
+      <>
+        {triggerButton}
+        <Sheet open={isOpen} onOpenChange={handleOpenChange}>
+          <SheetContent
+            side="bottom"
+            className="h-[90vh] overflow-y-auto px-4 pb-6 pt-6"
+          >
+            <p className="text-sm font-semibold mb-4">เลือกช่วงวันที่</p>
+            {pickerContent}
+          </SheetContent>
+        </Sheet>
+      </>
+    );
+  }
+
+  // Desktop: Popover
   return (
     <Popover open={isOpen} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          className="min-w-[280px] justify-start text-left font-normal"
-          aria-label="เลือกช่วงวันที่"
-        >
-          <CalendarIcon className="mr-2 h-4 w-4" />
-          {formatTriggerDisplay()}
-        </Button>
+        {triggerButton}
       </PopoverTrigger>
       <PopoverContent
         className="w-auto p-4"
@@ -401,17 +410,15 @@ export function DateRangePicker({
         role="dialog"
         aria-label="เลือกช่วงวันที่"
       >
-        <div className="grid grid-cols-[180px_1fr] gap-4">
-          {/* Left: Presets Panel (with Recently Used) */}
+        <div className="grid grid-cols-[160px_1fr] gap-4">
+          {/* Left: Presets Panel */}
           <PresetsPanel
             presets={presets}
-            recentlyUsed={recentlyUsed}
             selectedPreset={selectedPreset}
             onPresetClick={handlePresetClick}
-            onRecentClick={handleRecentClick}
           />
 
-          {/* Right: Dual Calendar (with Month/Year dropdown) */}
+          {/* Right: Dual Calendar */}
           <DualCalendar
             value={draft}
             onChange={handleDateSelect}

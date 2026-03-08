@@ -139,20 +139,27 @@ export default async function PerformanceDashboardPage({
       {/* ═══════════════════════════════════════════════════════════════════
           SECTION A — HEADER + CONTROLS
       ══════════════════════════════════════════════════════════════════════ */}
-      <div className="rounded-xl border bg-card px-5 py-4 shadow-sm">
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">Performance Dashboard</h1>
-            <p className="text-muted-foreground text-sm mt-0.5">
-              {summary.startDate} – {summary.endDate}
-              <span className="mx-1.5 text-muted-foreground/50">·</span>
-              <span className="text-xs">Asia/Bangkok</span>
-            </p>
-          </div>
-          <div className="flex flex-col items-end gap-2">
-            <DateRangePickerClient from={from} to={to} />
-            <BasisToggleClient cogsBasis={cogsBasis} revenueBasis={revenueBasis} />
-          </div>
+      <div className="rounded-xl border bg-card px-4 py-4 shadow-sm sm:px-5">
+        {/* Title row */}
+        <div className="flex items-center justify-between gap-2">
+          <h1 className="text-xl font-bold tracking-tight sm:text-2xl">Performance Dashboard</h1>
+        </div>
+
+        {/* Meta row */}
+        <p className="text-muted-foreground text-xs mt-0.5">
+          {summary.startDate} – {summary.endDate}
+          <span className="mx-1.5 text-muted-foreground/40">·</span>
+          Asia/Bangkok
+        </p>
+
+        {/* Date picker — full-width on mobile */}
+        <div className="mt-3">
+          <DateRangePickerClient from={from} to={to} />
+        </div>
+
+        {/* Basis toggles */}
+        <div className="mt-2.5 pt-2.5 border-t">
+          <BasisToggleClient cogsBasis={cogsBasis} revenueBasis={revenueBasis} />
         </div>
       </div>
 
