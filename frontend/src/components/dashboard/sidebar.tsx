@@ -29,6 +29,7 @@ import {
   Key,
   Calculator,
   Lock,
+  Zap,
 } from 'lucide-react'
 
 interface MenuItem {
@@ -48,6 +49,11 @@ const menuGroups: MenuGroup[] = [
     title: 'Overview',
     defaultExpanded: true,
     items: [
+      {
+        title: 'Quick Actions',
+        href: '/quick-actions',
+        icon: Zap,
+      },
       {
         title: 'Dashboard',
         href: '/',
