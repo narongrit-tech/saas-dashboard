@@ -192,17 +192,24 @@ export default function AffiliatesPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold">Internal Affiliates</h1>
-        <Button onClick={handleAdd}>
+        <h1 className="text-xl font-bold leading-tight sm:text-2xl">Internal Affiliates</h1>
+        <Button className="hidden sm:flex" onClick={handleAdd}>
           <Plus className="mr-2 h-4 w-4" />
           Add Affiliate
         </Button>
       </div>
 
+      {/* Mobile: full-width Add button */}
+      <Button className="w-full sm:hidden" onClick={handleAdd}>
+        <Plus className="mr-2 h-4 w-4" />
+        Add Affiliate
+      </Button>
+
       {/* Search */}
-      <div className="flex items-center gap-2 max-w-md">
-        <Search className="h-4 w-4 text-muted-foreground" />
+      <div className="flex items-center gap-2 sticky top-0 bg-background z-10 py-2">
+        <Search className="h-4 w-4 text-muted-foreground shrink-0" />
         <Input
+          className="w-full"
           placeholder="ค้นหา Channel ID หรือชื่อ..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
@@ -216,8 +223,60 @@ export default function AffiliatesPage() {
         </div>
       )}
 
-      {/* Table */}
-      <div className="rounded-md border bg-white">
+      {/* Mobile: card list */}
+      <div className="sm:hidden divide-y rounded-md border bg-white">
+        {loading ? (
+          Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="px-4 py-3 space-y-2">
+              <div className="h-4 w-32 animate-pulse rounded bg-gray-200" />
+              <div className="h-3 w-24 animate-pulse rounded bg-gray-200" />
+            </div>
+          ))
+        ) : filteredAffiliates.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-10 text-muted-foreground space-y-2">
+            <UserCheck className="h-10 w-10" />
+            <p className="font-medium">ยังไม่มี Affiliate</p>
+            <p className="text-sm">กด "Add Affiliate" เพื่อเพิ่มรายการแรก</p>
+          </div>
+        ) : (
+          filteredAffiliates.map((affiliate) => (
+            <div key={affiliate.id} className="px-4 py-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="font-mono text-sm font-medium">{affiliate.channel_id}</span>
+                  {affiliate.display_name && (
+                    <span className="ml-2 text-sm text-muted-foreground">{affiliate.display_name}</span>
+                  )}
+                </div>
+                <Checkbox
+                  checked={affiliate.is_active}
+                  onCheckedChange={() => handleToggleActive(affiliate)}
+                  disabled={processing}
+                />
+              </div>
+              {affiliate.notes && (
+                <p className="text-xs text-muted-foreground truncate">{affiliate.notes}</p>
+              )}
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">
+                  {new Date(affiliate.created_at).toLocaleDateString('th-TH', { year: 'numeric', month: 'short', day: 'numeric' })}
+                </span>
+                <div className="flex gap-1">
+                  <Button variant="ghost" size="sm" onClick={() => handleEdit(affiliate)} title="แก้ไข">
+                    <Pencil className="h-4 w-4" />
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => handleDeleteClick(affiliate)} title="ลบ" className="text-red-600 hover:text-red-700 hover:bg-red-50">
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Desktop: table */}
+      <div className="hidden sm:block rounded-md border bg-white">
         <Table>
           <TableHeader>
             <TableRow>

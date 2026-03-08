@@ -460,7 +460,7 @@ export default function ExpensesPage() {
   return (
     <div className="space-y-6 w-full min-w-0">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl sm:text-3xl font-bold">Expenses</h1>
+        <h1 className="text-xl font-bold leading-tight sm:text-2xl">Expenses</h1>
       </div>
 
       {/* Filters */}
@@ -558,13 +558,14 @@ export default function ExpensesPage() {
         </Button>
         <Button
           variant="outline"
+          className="hidden lg:flex"
           onClick={handleDownloadTemplate}
           disabled={downloadTemplateLoading}
         >
           <FileDown className="mr-2 h-4 w-4" />
           {downloadTemplateLoading ? 'กำลังดาวน์โหลด...' : 'Download Template'}
         </Button>
-        <Button variant="outline" onClick={() => setShowImportDialog(true)}>
+        <Button variant="outline" className="hidden lg:flex" onClick={() => setShowImportDialog(true)}>
           <FileUp className="mr-2 h-4 w-4" />
           Import
         </Button>
@@ -647,8 +648,63 @@ export default function ExpensesPage() {
         </div>
       )}
 
-      {/* Table */}
-      <div className="overflow-x-auto -mx-4 sm:mx-0">
+      {/* Mobile: card list */}
+      <div className="sm:hidden divide-y rounded-md border bg-white">
+        {loading ? (
+          Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="px-4 py-3 space-y-2">
+              <div className="h-4 w-32 animate-pulse rounded bg-gray-200" />
+              <div className="h-3 w-24 animate-pulse rounded bg-gray-200" />
+            </div>
+          ))
+        ) : displayedExpenses.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-10 text-muted-foreground space-y-1">
+            <p className="font-medium">ไม่พบข้อมูล</p>
+            <p className="text-sm">ยังไม่มีรายการค่าใช้จ่าย</p>
+          </div>
+        ) : (
+          displayedExpenses.map((expense) => (
+            <div key={expense.id} className="px-4 py-3 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Checkbox
+                    checked={selectedIds.has(expense.id)}
+                    onCheckedChange={(checked) => handleSelectRow(expense.id, checked as boolean)}
+                  />
+                  <span className="text-sm font-medium truncate">{formatDate(expense.expense_date)}</span>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <StatusBadge status={expense.expense_status ?? 'PAID'} />
+                  {expense.expense_status !== 'PAID' && (
+                    <Button variant="ghost" size="sm" onClick={() => handleConfirmPaidClick(expense)} className="text-green-600 hover:text-green-700 hover:bg-green-50 h-7 w-7 p-0">
+                      <CheckCircle className="h-4 w-4" />
+                    </Button>
+                  )}
+                  <Button variant="ghost" size="sm" onClick={() => handleEdit(expense)} className="h-7 w-7 p-0">
+                    <Pencil className="h-4 w-4" />
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => handleDeleteClick(expense)} className="text-red-600 hover:text-red-700 hover:bg-red-50 h-7 w-7 p-0">
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {getCategoryBadge(expense.category)}
+                {expense.subcategory && <span className="text-xs text-muted-foreground">{expense.subcategory}</span>}
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground truncate max-w-[60%]">
+                  {expense.description || expense.notes || '-'}
+                </span>
+                <span className="text-sm font-semibold text-red-600">฿{formatCurrency(expense.amount)}</span>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Desktop: table */}
+      <div className="hidden sm:block overflow-x-auto -mx-4 sm:mx-0">
       <div className="rounded-md border bg-white min-w-[700px] sm:min-w-0">
         <Table>
           <TableHeader>

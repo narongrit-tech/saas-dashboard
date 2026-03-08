@@ -13,8 +13,8 @@ export default function BankPage() {
   return (
     <div className="space-y-6 w-full min-w-0">
       <div>
-        <h1 className="text-2xl sm:text-3xl font-bold">Bank Statement</h1>
-        <p className="text-muted-foreground mt-2">
+        <h1 className="text-xl font-bold leading-tight sm:text-2xl">Bank Statement</h1>
+        <p className="text-sm text-muted-foreground mt-1">
           Import bank statements and track company cash flow
         </p>
       </div>

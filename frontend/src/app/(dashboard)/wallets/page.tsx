@@ -319,8 +319,8 @@ export default function WalletsPage() {
   return (
     <div className="space-y-6 w-full min-w-0">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2">
-          <WalletIcon className="h-8 w-8" />
+        <h1 className="text-xl font-bold leading-tight sm:text-2xl flex items-center gap-2">
+          <WalletIcon className="h-6 w-6 sm:h-7 sm:w-7" />
           Wallets
         </h1>
       </div>
@@ -488,7 +488,7 @@ export default function WalletsPage() {
                 <Button
                   variant="secondary"
                   onClick={() => setShowPerformanceAdsImportDialog(true)}
-                  className="bg-green-600 hover:bg-green-700 text-white"
+                  className="hidden lg:flex bg-green-600 hover:bg-green-700 text-white"
                 >
                   <Upload className="mr-2 h-4 w-4" />
                   Import Performance Ads
@@ -502,7 +502,7 @@ export default function WalletsPage() {
                 <Button
                   variant="secondary"
                   onClick={() => setShowTigerImportDialog(true)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                  className="hidden lg:flex bg-blue-600 hover:bg-blue-700 text-white"
                 >
                   <Upload className="mr-2 h-4 w-4" />
                   Import Awareness Ads (Monthly)
@@ -512,7 +512,7 @@ export default function WalletsPage() {
             <Button
               variant="secondary"
               onClick={() => setShowShopeeWalletImportDialog(true)}
-              className="bg-orange-500 hover:bg-orange-600 text-white"
+              className="hidden lg:flex bg-orange-500 hover:bg-orange-600 text-white"
             >
               <Upload className="mr-2 h-4 w-4" />
               Import Shopee Wallet
@@ -536,9 +536,56 @@ export default function WalletsPage() {
         </div>
       )}
 
-      {/* Table */}
+      {/* Mobile: card list */}
       {selectedWalletId && (
-        <div className="overflow-x-auto -mx-4 sm:mx-0">
+        <div className="sm:hidden divide-y rounded-md border bg-white">
+          {loading ? (
+            Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="px-4 py-3 space-y-2">
+                <div className="h-4 w-28 animate-pulse rounded bg-gray-200" />
+                <div className="h-3 w-20 animate-pulse rounded bg-gray-200" />
+              </div>
+            ))
+          ) : ledgerEntries.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-10 text-muted-foreground space-y-1">
+              <p className="font-medium">ไม่พบข้อมูล</p>
+              <p className="text-sm">ยังไม่มีรายการ transaction</p>
+            </div>
+          ) : (
+            ledgerEntries.map((entry) => (
+              <div key={entry.id} className="px-4 py-3 space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    {getEntryTypeBadge(entry.entry_type)}
+                    <Badge variant={entry.direction === 'IN' ? 'default' : 'secondary'} className="text-xs">
+                      {entry.direction}
+                    </Badge>
+                  </div>
+                  <span className={`font-mono font-semibold text-sm ${entry.direction === 'IN' ? 'text-green-600' : 'text-red-600'}`}>
+                    {entry.direction === 'IN' ? '+' : '-'}฿{formatCurrency(entry.amount)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">{formatDate(entry.date)}</span>
+                  <div className="flex gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => handleEdit(entry)} disabled={entry.source === 'IMPORTED'} className="h-7 w-7 p-0">
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => handleDeleteClick(entry)} disabled={entry.source === 'IMPORTED'} className="text-red-600 hover:text-red-700 hover:bg-red-50 h-7 w-7 p-0">
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+                {entry.note && <p className="text-xs text-muted-foreground truncate">{entry.note}</p>}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {/* Desktop: table */}
+      {selectedWalletId && (
+        <div className="hidden sm:block overflow-x-auto -mx-4 sm:mx-0">
         <div className="rounded-md border bg-white min-w-[700px] sm:min-w-0">
           <Table>
             <TableHeader>

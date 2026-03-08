@@ -709,7 +709,7 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold">Sales Orders</h1>
+        <h1 className="text-xl font-bold leading-tight sm:text-2xl">Sales Orders</h1>
       </div>
 
       <GMVCards
@@ -922,11 +922,11 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
           <Plus className="mr-2 h-4 w-4" />
           Add Order
         </Button>
-        <Button variant="outline" onClick={() => setShowImportDialog(true)}>
+        <Button variant="outline" className="hidden lg:flex" onClick={() => setShowImportDialog(true)}>
           <FileUp className="mr-2 h-4 w-4" />
           Import TikTok
         </Button>
-        <Button variant="outline" onClick={() => setShowShopeeImportDialog(true)}>
+        <Button variant="outline" className="hidden lg:flex" onClick={() => setShowShopeeImportDialog(true)}>
           <FileUp className="mr-2 h-4 w-4" />
           Import Shopee
         </Button>
@@ -1008,28 +1008,50 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
             ) : mainSkuOutflow.length === 0 ? (
               <p className="text-sm text-muted-foreground py-2">ไม่พบข้อมูล (ตาม filter ที่เลือก)</p>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-left text-xs text-muted-foreground">
-                      <th className="pb-2 pr-4 font-medium">#</th>
-                      <th className="pb-2 pr-6 font-medium">SKU</th>
-                      <th className="pb-2 pr-4 text-right font-medium">Qty Out</th>
-                      <th className="pb-2 text-right font-medium">Orders</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {mainSkuOutflow.map((row, idx) => (
-                      <tr key={row.sku} className="border-b last:border-0 hover:bg-gray-50 dark:hover:bg-gray-800">
-                        <td className="py-1.5 pr-4 text-muted-foreground">{idx + 1}</td>
-                        <td className="py-1.5 pr-6 font-mono font-medium">{row.sku}</td>
-                        <td className="py-1.5 pr-4 text-right tabular-nums">{row.qty_out.toLocaleString()}</td>
-                        <td className="py-1.5 text-right tabular-nums text-muted-foreground">{row.orders_count}</td>
+              <>
+                {/* Mobile: cards */}
+                <div className="sm:hidden grid grid-cols-2 gap-2">
+                  {mainSkuOutflow.map((row, idx) => (
+                    <div key={row.sku} className="rounded-md border px-3 py-2 text-sm">
+                      <div className="flex items-center gap-1 mb-1">
+                        <span className="text-xs text-muted-foreground">{idx + 1}.</span>
+                        <span className="font-mono font-medium truncate">{row.sku}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-muted-foreground">Qty</span>
+                        <span className="tabular-nums font-medium">{row.qty_out.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-muted-foreground">Orders</span>
+                        <span className="tabular-nums text-muted-foreground">{row.orders_count}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {/* Desktop: table */}
+                <div className="hidden sm:block overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b text-left text-xs text-muted-foreground">
+                        <th className="pb-2 pr-4 font-medium">#</th>
+                        <th className="pb-2 pr-6 font-medium">SKU</th>
+                        <th className="pb-2 pr-4 text-right font-medium">Qty Out</th>
+                        <th className="pb-2 text-right font-medium">Orders</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {mainSkuOutflow.map((row, idx) => (
+                        <tr key={row.sku} className="border-b last:border-0 hover:bg-gray-50 dark:hover:bg-gray-800">
+                          <td className="py-1.5 pr-4 text-muted-foreground">{idx + 1}</td>
+                          <td className="py-1.5 pr-6 font-mono font-medium">{row.sku}</td>
+                          <td className="py-1.5 pr-4 text-right tabular-nums">{row.qty_out.toLocaleString()}</td>
+                          <td className="py-1.5 text-right tabular-nums text-muted-foreground">{row.orders_count}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
         )}
@@ -1042,8 +1064,35 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
         </div>
       )}
 
-      {/* Table */}
-      <div className="rounded-md border bg-white overflow-x-auto">
+      {/* Mobile: order cards (order view only) */}
+      {!loading && view === 'order' && groupedOrders.length > 0 && (
+        <div className="sm:hidden divide-y rounded-md border bg-white">
+          {groupedOrders.map((order) => (
+            <div key={order.order_id} className="px-4 py-3 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-mono text-xs font-medium truncate max-w-[55%]">
+                  {order.external_order_id || order.order_id}
+                </span>
+                <span className="font-semibold text-sm">฿{formatCurrency(order.order_amount)}</span>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-muted-foreground">{getPlatformLabel(order.source_platform || order.marketplace)}</span>
+                {getPlatformStatusBadge(order.platform_status)}
+                {getPaymentStatusBadge(order.payment_status)}
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">{formatDate(order.order_date)}</span>
+                <Button variant="ghost" size="sm" onClick={() => handleViewOrderDetail(order.order_id)} className="h-7 w-7 p-0">
+                  <Eye className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Desktop: table (+ mobile fallback for line view) */}
+      <div className={`rounded-md border bg-white overflow-x-auto ${view === 'order' ? 'hidden sm:block' : ''}`}>
         <Table>
           <TableHeader className="sticky top-0 bg-white z-10">
             {view === 'order' ? (

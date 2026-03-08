@@ -33,7 +33,7 @@ export function GMVCards({ data, loading, error, dateBasis = 'order' }: GMVCards
   // Loading state
   if (loading) {
     return (
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
         {[1, 2, 3].map((i) => (
           <Card key={i}>
             <CardHeader className="pb-3">

@@ -119,8 +119,8 @@ export default function CompanyCashflowPage() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold">Company Cashflow</h1>
-        <p className="text-muted-foreground">
+        <h1 className="text-xl font-bold leading-tight sm:text-2xl">Company Cashflow</h1>
+        <p className="text-sm text-muted-foreground">
           เงินสดคงเหลือระดับบริษัท - แสดงเงินเข้า/ออกจริง (Actual Cash Movements)
         </p>
       </div>
@@ -223,14 +223,14 @@ export default function CompanyCashflowPage() {
 
       {/* Loading State */}
       {loading && (
-        <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {Array.from({ length: 3 }).map((_, i) => (
-            <Card key={i}>
+            <Card key={i} className={i === 2 ? 'col-span-2 sm:col-span-1' : ''}>
               <CardHeader>
-                <div className="h-4 w-32 animate-pulse rounded bg-gray-200" />
+                <div className="h-4 w-24 animate-pulse rounded bg-gray-200" />
               </CardHeader>
               <CardContent>
-                <div className="h-8 w-40 animate-pulse rounded bg-gray-200" />
+                <div className="h-7 w-32 animate-pulse rounded bg-gray-200" />
               </CardContent>
             </Card>
           ))}
@@ -240,7 +240,7 @@ export default function CompanyCashflowPage() {
       {/* Summary Cards */}
       {!loading && data && (
         <>
-          <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             {/* Cash In */}
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -279,11 +279,11 @@ export default function CompanyCashflowPage() {
 
             {/* Net Cashflow */}
             <Card
-              className={
+              className={`col-span-2 sm:col-span-1 ${
                 isPositive
                   ? 'border-green-200 bg-green-50'
                   : 'border-red-200 bg-red-50'
-              }
+              }`}
             >
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">Net Cashflow</CardTitle>
@@ -317,8 +317,42 @@ export default function CompanyCashflowPage() {
             <CardHeader>
               <CardTitle>Daily Cashflow Breakdown</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
+            <CardContent className="p-0 sm:p-6">
+              {/* Mobile: card list */}
+              <div className="divide-y sm:hidden">
+                {data.daily_data.length === 0 && (
+                  <p className="px-4 py-3 text-sm text-muted-foreground">ไม่มีข้อมูลในช่วงวันที่ที่เลือก</p>
+                )}
+                {data.daily_data.map((row) => (
+                  <div key={row.date} className="px-4 py-3 space-y-2">
+                    <div className="font-medium text-sm">{formatDate(row.date)}</div>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Cash In</span>
+                        <span className="font-mono text-green-600">฿{formatCurrency(row.cash_in)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Cash Out</span>
+                        <span className="font-mono text-red-600">฿{formatCurrency(row.cash_out)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Net</span>
+                        <span className={`font-mono ${row.net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {row.net >= 0 ? '' : '-'}฿{formatCurrency(Math.abs(row.net))}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Running</span>
+                        <span className={`font-mono font-semibold ${row.running_balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {row.running_balance >= 0 ? '' : '-'}฿{formatCurrency(Math.abs(row.running_balance))}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {/* Desktop: table */}
+              <div className="hidden sm:block overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>

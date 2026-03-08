@@ -45,57 +45,76 @@ Changes:
 - Net Cash Change: full width on mobile (col-span-2), prominent
 - Daily Cash Movement: card list on mobile, table on desktop
 
----
-
-## Pending
-
 ### Sales Orders
 Route: /sales
 Spec: docs/ui-mobile/04-sales-orders.md
-Required:
-- compact header
-- filters grouped into mobile sheet
-- import buttons hidden on mobile
-- orders table becomes card list on mobile
-- SKU Outflow becomes cards on mobile
+Changes:
+- Compact header (text-xl sm:text-2xl)
+- GMV KPI cards: grid-cols-2 on mobile (GMVCards component)
+- Import TikTok + Import Shopee buttons: hidden on mobile (hidden lg:flex)
+- SKU Outflow: 2-col card grid on mobile, table on desktop
+- Orders table: mobile card list (order view), table on desktop
 
 ### Internal Affiliates
 Route: /affiliates
 Spec: docs/ui-mobile/05-internal-affiliates.md
-Required:
-- compact header
-- Add Affiliate button full width on mobile
-- search full width and sticky
-- affiliate rows become cards on mobile
+Changes:
+- Compact header (text-xl sm:text-2xl)
+- Add Affiliate button: full width on mobile, inline on desktop
+- Search bar: full width, sticky (sticky top-0 z-10)
+- Affiliate rows: card list on mobile, table on desktop
+- Active toggle still interactive on mobile
+
+### Expenses
+Route: /expenses
+Spec: (no separate spec)
+Changes:
+- Compact header (text-xl sm:text-2xl)
+- Download Template + Import buttons: hidden on mobile (hidden lg:flex)
+- Expense rows: card list on mobile (date, category badge, amount, actions), table on desktop
+
+### Wallets
+Route: /wallets
+Spec: (no separate spec)
+Changes:
+- Compact header (text-xl sm:text-2xl)
+- Import Performance Ads, Import Awareness Ads, Import Shopee Wallet: hidden on mobile
+- Ledger entries: card list on mobile (type, direction, amount, note), table on desktop
+
+### Company Cashflow
+Route: /company-cashflow
+Spec: (no separate spec)
+Changes:
+- Compact header (text-xl sm:text-2xl)
+- KPI cards: grid-cols-2 on mobile, sm:grid-cols-3 on desktop
+- Net Cashflow card: col-span-2 on mobile (full width, prominent)
+- Daily Cashflow: card list on mobile, table on desktop
+
+### Bank Statement
+Route: /bank
+Spec: (no separate spec)
+Changes:
+- Compact header (text-xl sm:text-2xl)
+
+### Bank Reconciliation
+Route: /bank-reconciliation
+Spec: (no separate spec)
+Changes:
+- Compact header (text-xl sm:text-2xl)
+- Removed container padding wrapper
+
+---
+
+## Pending
 
 ### Affiliate Performance Report
-Route: /affiliates (report tab or sub-route)
+Route: /affiliates (report tab or sub-route — verify actual route)
 Spec: docs/ui-mobile/06-affiliate-performance-report.md
 Required:
 - compact header
 - KPI cards responsive
 - charts sized for mobile
 - performance tables become cards on mobile
-
-### Expenses Page
-Route: /expenses
-Spec: (pending — not yet created)
-
-### Wallets Page
-Route: /wallets
-Spec: (pending — not yet created)
-
-### Bank Page
-Route: /bank
-Spec: (pending — not yet created)
-
-### Bank Reconciliation
-Route: /bank-reconciliation
-Spec: (pending — not yet created)
-
-### Company Cashflow
-Route: /company-cashflow
-Spec: (pending — not yet created)
 
 ---
 
@@ -115,8 +134,8 @@ Purpose:
 
 ## Next Page To Improve
 
-Sales Orders — /sales
-Spec ready at: docs/ui-mobile/04-sales-orders.md
+Affiliate Performance Report
+Spec: docs/ui-mobile/06-affiliate-performance-report.md
 
 ---
 
