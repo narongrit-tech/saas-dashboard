@@ -228,13 +228,13 @@ export function AdsPerformanceOverview() {
   }, [performance]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="flex justify-between items-start">
         <div>
-          <h1 className="text-3xl font-bold">Ads Performance Overview</h1>
-          <p className="text-muted-foreground">แยก Product GMV Max และ Live GMV Max ตามช่วงวันที่ที่เลือก</p>
+          <h1 className="text-xl font-bold leading-tight sm:text-2xl">Ads Performance</h1>
+          <p className="text-sm text-muted-foreground">Product GMV Max + Live GMV Max analytics</p>
         </div>
-        <Button onClick={handleOpenImportDialog}>
+        <Button className="hidden lg:flex" onClick={handleOpenImportDialog}>
           <Upload className="mr-2 h-4 w-4" />
           Import Ads Data (.xlsx)
         </Button>
@@ -260,14 +260,14 @@ export function AdsPerformanceOverview() {
       )}
 
       {loading && (
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
             <Card key={i}>
               <CardHeader>
-                <div className="h-4 w-32 animate-pulse rounded bg-gray-200" />
+                <div className="h-4 w-24 animate-pulse rounded bg-gray-200" />
               </CardHeader>
               <CardContent>
-                <div className="h-8 w-40 animate-pulse rounded bg-gray-200" />
+                <div className="h-7 w-32 animate-pulse rounded bg-gray-200" />
               </CardContent>
             </Card>
           ))}
@@ -275,7 +275,7 @@ export function AdsPerformanceOverview() {
       )}
 
       {!loading && summary && (
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Spend</CardTitle>
@@ -333,8 +333,37 @@ export function AdsPerformanceOverview() {
           <CardHeader>
             <CardTitle>Daily Rollup</CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
+          <CardContent className="p-0 sm:p-6">
+            {/* Mobile: card list */}
+            <div className="divide-y sm:hidden">
+              {dailyRollup.map((row) => (
+                <div key={row.ad_date} className="px-4 py-3 space-y-2">
+                  <div className="font-medium text-sm">{formatDate(row.ad_date)}</div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Spend</span>
+                      <span className="font-mono text-red-600">฿{formatCurrency(row.spend)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Orders</span>
+                      <span className="font-mono">{row.orders.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">GMV</span>
+                      <span className="font-mono text-green-600">฿{formatCurrency(row.revenue)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">ROAS</span>
+                      <span className={`font-mono font-semibold ${row.roas >= 1 ? 'text-green-600' : 'text-red-600'}`}>
+                        {row.roas.toFixed(2)}x
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {/* Desktop: table */}
+            <div className="hidden sm:block overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="border-b">
                   <tr className="text-left">
@@ -369,8 +398,49 @@ export function AdsPerformanceOverview() {
           <CardHeader>
             <CardTitle>Campaign Breakdown</CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
+          <CardContent className="p-0 sm:p-6">
+            {/* Mobile: stacked cards */}
+            <div className="divide-y sm:hidden">
+              {performance.map((row, idx) => (
+                <div key={`${row.ad_date}-${row.campaign_name || 'unknown'}-${idx}`} className="px-4 py-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">{formatDate(row.ad_date)}</span>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-xs ${
+                        row.campaign_type === 'live'
+                          ? 'bg-purple-100 text-purple-700'
+                          : 'bg-blue-100 text-blue-700'
+                      }`}
+                    >
+                      {row.campaign_type || '-'}
+                    </span>
+                  </div>
+                  <div className="text-xs text-muted-foreground truncate">{row.campaign_name || '-'}</div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Spend</span>
+                      <span className="font-mono text-red-600">฿{formatCurrency(row.spend)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Orders</span>
+                      <span className="font-mono">{row.orders.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">GMV</span>
+                      <span className="font-mono text-green-600">฿{formatCurrency(row.revenue)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">ROAS</span>
+                      <span className={`font-mono font-semibold ${(row.roi || 0) >= 1 ? 'text-green-600' : 'text-red-600'}`}>
+                        {row.roi ? `${row.roi.toFixed(2)}x` : '-'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {/* Desktop: table */}
+            <div className="hidden sm:block overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="border-b">
                   <tr className="text-left">
