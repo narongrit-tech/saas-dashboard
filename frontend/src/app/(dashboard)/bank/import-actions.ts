@@ -40,11 +40,13 @@ function generateBankTxnHash(
   description: string | null
 ): string {
   // Format: bank_account_id|txn_date|withdrawal|deposit|description
+  // IMPORTANT: use toFixed(2) to match PostgreSQL NUMERIC(15,2)::TEXT format
+  // e.g. 10000 → "10000.00" so TypeScript and PG produce identical hashes
   const hashInput = [
     bankAccountId,
     txnDate,
-    (withdrawal || 0).toString(),
-    (deposit || 0).toString(),
+    (withdrawal || 0).toFixed(2),
+    (deposit || 0).toFixed(2),
     description || '',
   ].join('|');
 
