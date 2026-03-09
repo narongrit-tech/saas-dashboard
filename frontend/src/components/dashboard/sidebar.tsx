@@ -30,6 +30,8 @@ import {
   Calculator,
   Lock,
   Zap,
+  GitFork,
+  UserCircle,
 } from 'lucide-react'
 
 interface MenuItem {
@@ -116,6 +118,8 @@ const menuGroups: MenuGroup[] = [
         href: '/company-cashflow',
         icon: Coins,
       },
+      { title: 'Cash Source Flow', href: '/cashflow/source-flow', icon: GitFork    },
+      { title: 'CEO Cash Flow',    href: '/ceo-flow',             icon: UserCircle },
       {
         title: 'Bank',
         href: '/bank',
