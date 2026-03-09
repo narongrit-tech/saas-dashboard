@@ -258,6 +258,59 @@ export async function importBankStatement(
     // Delete existing transactions based on import mode
     let deletedCount = 0;
 
+    // =========================================================================
+    // Save classifications keyed by txn_hash before delete (replace modes only)
+    // Allows restoring after delete+reinsert so user revenue classifications survive
+    // =========================================================================
+    const savedClassificationsByHash = new Map<string, {
+      created_by: string;
+      include_as_revenue: boolean;
+      revenue_channel: string | null;
+      revenue_type: string | null;
+      note: string | null;
+    }>();
+
+    if (importMode === 'replace_range' || importMode === 'replace_all') {
+      let txnHashQuery = supabase
+        .from('bank_transactions')
+        .select('id, txn_hash')
+        .eq('bank_account_id', bankAccountId)
+        .or(`created_by.eq.${user.id},created_by.is.null`);
+
+      if (importMode === 'replace_range') {
+        txnHashQuery = txnHashQuery.gte('txn_date', startDate).lte('txn_date', endDate);
+      }
+
+      const { data: txnsToDelete } = await txnHashQuery;
+
+      if (txnsToDelete && txnsToDelete.length > 0) {
+        const idsToDelete = txnsToDelete.map((t) => t.id as string);
+        const { data: classesToSave } = await supabase
+          .from('bank_txn_classifications')
+          .select('bank_transaction_id, created_by, include_as_revenue, revenue_channel, revenue_type, note')
+          .in('bank_transaction_id', idsToDelete);
+
+        if (classesToSave && classesToSave.length > 0) {
+          const hashById = new Map(
+            txnsToDelete.map((t) => [t.id as string, t.txn_hash as string | null])
+          );
+          for (const cls of classesToSave) {
+            const hash = hashById.get(cls.bank_transaction_id as string);
+            if (hash) {
+              savedClassificationsByHash.set(hash, {
+                created_by: cls.created_by as string,
+                include_as_revenue: cls.include_as_revenue as boolean,
+                revenue_channel: cls.revenue_channel as string | null,
+                revenue_type: cls.revenue_type as string | null,
+                note: cls.note as string | null,
+              });
+            }
+          }
+          console.log(`[Classifications] Saved ${savedClassificationsByHash.size} classifications for restoration`);
+        }
+      }
+    }
+
     if (importMode === 'replace_range') {
       console.log(`[Replace Range] Deleting transactions from ${startDate} to ${endDate}`);
 
@@ -483,6 +536,50 @@ export async function importBankStatement(
         .eq('id', batch.id);
 
       console.log(`[Import Finalized] Batch ${batch.id}: status=${finalStatus}, inserted=${insertedCount}, deleted=${deletedCount}`);
+    }
+
+    // =========================================================================
+    // Restore classifications after replace-mode re-import
+    // Match saved classifications to new row IDs via txn_hash
+    // =========================================================================
+    if (savedClassificationsByHash.size > 0 && insertedCount > 0) {
+      const hashesToRestore = Array.from(savedClassificationsByHash.keys());
+      const { data: newTxnsForRestore } = await supabase
+        .from('bank_transactions')
+        .select('id, txn_hash')
+        .eq('bank_account_id', bankAccountId)
+        .eq('created_by', user.id)
+        .in('txn_hash', hashesToRestore);
+
+      if (newTxnsForRestore && newTxnsForRestore.length > 0) {
+        const clsToRestore = newTxnsForRestore
+          .map((t) => {
+            const cls = savedClassificationsByHash.get(t.txn_hash as string);
+            if (!cls) return null;
+            return {
+              bank_transaction_id: t.id as string,
+              created_by: cls.created_by,
+              include_as_revenue: cls.include_as_revenue,
+              revenue_channel: cls.revenue_channel,
+              revenue_type: cls.revenue_type,
+              note: cls.note,
+              updated_at: new Date().toISOString(),
+            };
+          })
+          .filter((c): c is NonNullable<typeof c> => c !== null);
+
+        if (clsToRestore.length > 0) {
+          const { error: restoreErr } = await supabase
+            .from('bank_txn_classifications')
+            .upsert(clsToRestore, { onConflict: 'bank_transaction_id,created_by' });
+
+          if (restoreErr) {
+            console.error('[Classifications] Restore error (non-fatal):', restoreErr);
+          } else {
+            console.log(`[Classifications] Restored ${clsToRestore.length} classifications`);
+          }
+        }
+      }
     }
 
     // If import failed and no transactions were inserted, return error

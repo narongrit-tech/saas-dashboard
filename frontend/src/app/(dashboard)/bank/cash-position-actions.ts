@@ -7,7 +7,7 @@
 
 import { unstable_noStore as noStore } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
-import { format } from 'date-fns';
+import { formatBangkok } from '@/lib/bangkok-time';
 import {
   computeCashPositionFromBankTxns,
   CashPositionResult,
@@ -123,8 +123,8 @@ export async function getCashPositionFromDates(
   startDate: Date,
   endDate: Date
 ): Promise<GetCashPositionResponse> {
-  const startStr = format(startDate, 'yyyy-MM-dd');
-  const endStr = format(endDate, 'yyyy-MM-dd');
+  const startStr = formatBangkok(startDate, 'yyyy-MM-dd');
+  const endStr = formatBangkok(endDate, 'yyyy-MM-dd');
 
   return getCashPosition({
     bankAccountId,

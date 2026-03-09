@@ -23,7 +23,6 @@ import {
   SaveReportedBalanceResponse,
   BankBalanceSummary,
 } from '@/types/bank';
-import { format } from 'date-fns';
 import { formatBangkok } from '@/lib/bangkok-time';
 
 // ============================================================================
@@ -127,8 +126,8 @@ export async function getBankDailySummary(
       return { success: false, error: 'Unauthorized' };
     }
 
-    const startStr = format(startDate, 'yyyy-MM-dd');
-    const endStr = format(endDate, 'yyyy-MM-dd');
+    const startStr = formatBangkok(startDate, 'yyyy-MM-dd');
+    const endStr = formatBangkok(endDate, 'yyyy-MM-dd');
 
     // Query bank transactions for date range with pagination
     let allTransactions: any[] = [];
@@ -265,10 +264,10 @@ export async function getBankTransactions(
 
     // Date range filter
     if (filters.startDate) {
-      query = query.gte('txn_date', format(filters.startDate, 'yyyy-MM-dd'));
+      query = query.gte('txn_date', formatBangkok(filters.startDate, 'yyyy-MM-dd'));
     }
     if (filters.endDate) {
-      query = query.lte('txn_date', format(filters.endDate, 'yyyy-MM-dd'));
+      query = query.lte('txn_date', formatBangkok(filters.endDate, 'yyyy-MM-dd'));
     }
 
     // Search filter (description)
@@ -324,8 +323,8 @@ export async function exportBankTransactions(
       return { success: false, error: 'Unauthorized' };
     }
 
-    const startStr = format(startDate, 'yyyy-MM-dd');
-    const endStr = format(endDate, 'yyyy-MM-dd');
+    const startStr = formatBangkok(startDate, 'yyyy-MM-dd');
+    const endStr = formatBangkok(endDate, 'yyyy-MM-dd');
 
     // Get bank account name
     const { data: account } = await supabase
