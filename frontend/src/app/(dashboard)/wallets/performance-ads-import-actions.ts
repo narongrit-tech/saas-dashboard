@@ -245,7 +245,16 @@ export async function createAdsImportPreview(
       }
     }
 
-    // 4. Create import_batch (status='processing' → becomes 'success' after confirm)
+    // 4. Derive date range from rows for date_min / date_max / import_scope_key
+    const rowDates = input.rows
+      .map((r) => r.date)
+      .filter((d): d is string => typeof d === 'string' && d.length > 0)
+      .sort()
+    const dateStart = rowDates[0] ?? input.reportDate
+    const dateEnd = rowDates[rowDates.length - 1] ?? input.reportDate
+    const importScopeKey = `ads:tiktok:${input.campaignType}:${dateStart}:${dateEnd}`
+
+    // 5. Create import_batch (status='processing' → becomes 'success' after confirm)
     //    'processing' is an existing allowed value — no migration needed for status constraint.
     //    The preview/staging state is tracked by ad_import_staging_rows existence, not by status.
     const { data: batch, error: batchError } = await supabase
@@ -259,6 +268,9 @@ export async function createAdsImportPreview(
         row_count: input.rowCount,
         inserted_count: 0,
         status: 'processing',
+        date_min: dateStart,
+        date_max: dateEnd,
+        import_scope_key: importScopeKey,
         metadata: {
           reportDate: input.reportDate,
           adsType: input.campaignType,
@@ -279,7 +291,7 @@ export async function createAdsImportPreview(
       return { success: false, error: 'ไม่สามารถสร้าง import batch ได้' }
     }
 
-    // 5. Insert staging rows in chunks of 500
+    // 6. Insert staging rows in chunks of 500
     const CHUNK = 500
     for (let i = 0; i < input.rows.length; i += CHUNK) {
       const chunk = input.rows.slice(i, i + CHUNK).map((row, j) => ({
