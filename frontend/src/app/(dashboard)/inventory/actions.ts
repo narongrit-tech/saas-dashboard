@@ -823,16 +823,19 @@ export async function applyCOGSMTD(params: {
       const from = currentPage * PAGE_SIZE
       const to = from + PAGE_SIZE - 1
 
-      console.log(`Fetching orders page ${currentPage + 1} (${from}-${to})`)
+      console.log(`Fetching orders page ${currentPage + 1} (${from}-${to}) [by order_date]`)
 
+      // FIXED: filter by order_date (not shipped_at) so that March orders placed
+      // in the date range are found even if shipped_at falls after the range end.
+      // shipped_at IS NOT NULL ensures we only process actually-shipped orders.
       const { data: pageOrders, error: ordersError } = await supabase
         .from('sales_orders')
-        .select('id, order_id, seller_sku, quantity, shipped_at, status_group')
+        .select('id, order_id, seller_sku, quantity, shipped_at, order_date, status_group')
         .not('shipped_at', 'is', null)
         .neq('status_group', 'ยกเลิกแล้ว')
-        .gte('shipped_at', `${startDateISO}T00:00:00+07:00`)
-        .lte('shipped_at', `${endDateISO}T23:59:59+07:00`)
-        .order('shipped_at', { ascending: true })
+        .gte('order_date', `${startDateISO}T00:00:00+07:00`)
+        .lte('order_date', `${endDateISO}T23:59:59+07:00`)
+        .order('order_date', { ascending: true })
         .order('order_id', { ascending: true })
         .range(from, to)
 
@@ -864,6 +867,16 @@ export async function applyCOGSMTD(params: {
     const orders = allOrders
 
     if (!orders || orders.length === 0) {
+      console.log(`[applyCOGSMTD] DEBUG: zero candidates for order_date ${startDateISO}–${endDateISO} with shipped_at IS NOT NULL`)
+      const emptySummary = { total: 0, eligible: 0, successful: 0, skipped: 0, failed: 0, partial: 0, errors: [] as Array<{ order_id: string; reason: string }> }
+      // Finalize run record so history shows correct (zero) counts, not stale nulls
+      if (run_id) {
+        await supabase.from('inventory_cogs_apply_runs').update({ total: 0, eligible: 0, successful: 0, skipped: 0, failed: 0, partial: 0 }).eq('id', run_id)
+      }
+      if (cogs_run_id) {
+        await completeCogsRunSuccess(cogs_run_id, { ...emptySummary, skip_reasons: [] })
+        await createNotificationForRun(cogs_run_id, { total: 0, successful: 0, skipped: 0, failed: 0 })
+      }
       return {
         success: true,
         data: {
@@ -873,12 +886,14 @@ export async function applyCOGSMTD(params: {
           skipped: 0,
           failed: 0,
           errors: [],
-          message: `ไม่มี orders ที่ shipped ในช่วง ${startDateISO} ถึง ${endDateISO}`,
+          message: `ไม่มี orders (order_date ${startDateISO}–${endDateISO}) ที่ shipped แล้ว`,
         },
       }
     }
 
-    console.log(`Found ${orders.length} total shipped orders in range`)
+    console.log(`[applyCOGSMTD] DEBUG: raw orders fetched by order_date = ${orders.length}`)
+    console.log(`[applyCOGSMTD] DEBUG: orders with shipped_at (all should be non-null due to filter): ${orders.filter((o) => !!o.shipped_at).length}`)
+    console.log(`Found ${orders.length} total shipped orders in range (filtered by order_date)`)
 
     // ============================================
     // FETCH BUNDLE SKUs (to fix skip logic for partial bundle orders)
@@ -961,6 +976,15 @@ export async function applyCOGSMTD(params: {
 
       console.log(`Found ${allocatedOrderIds.size} non-bundle orders already allocated`)
     }
+
+    // Debug: unallocated candidate count before processing loop
+    const nonBundleUnallocated = orders.filter((o) => {
+      const isBundle = o.seller_sku && bundleSkuSet.has(o.seller_sku)
+      return !isBundle && !allocatedOrderIds.has(o.id)
+    }).length
+    const bundleCount = orders.filter((o) => o.seller_sku && bundleSkuSet.has(o.seller_sku)).length
+    console.log(`[applyCOGSMTD] DEBUG: bundle orders = ${bundleCount}, non-bundle unallocated = ${nonBundleUnallocated}, non-bundle already-allocated = ${allocatedOrderIds.size}`)
+    console.log(`[applyCOGSMTD] DEBUG: total eligible to process (before SKU/qty validation) = ${nonBundleUnallocated + bundleCount}`)
 
     // Prepare result summary with detailed skip reasons
     interface SkipReason {
@@ -1187,37 +1211,40 @@ export async function applyCOGSMTD(params: {
     // ============================================
     // SAVE RUN LOG TO DATABASE
     // ============================================
-    if (run_id && runItems.length > 0) {
-      console.log(`Saving ${runItems.length} run items...`)
+    if (run_id) {
+      // Insert run items (only if there are any)
+      if (runItems.length > 0) {
+        console.log(`Saving ${runItems.length} run items...`)
+        const BATCH_SIZE = 1000
+        for (let i = 0; i < runItems.length; i += BATCH_SIZE) {
+          const batch = runItems.slice(i, i + BATCH_SIZE)
+          const itemsToInsert = batch.map((item) => ({
+            run_id,
+            order_id: item.order_id,
+            sku: item.sku,
+            qty: item.qty,
+            status: item.status,
+            reason: item.reason,
+            missing_skus: item.missing_skus,
+            allocated_skus: item.allocated_skus,
+          }))
 
-      // Batch insert run items (max 1000 per batch to avoid limits)
-      const BATCH_SIZE = 1000
-      for (let i = 0; i < runItems.length; i += BATCH_SIZE) {
-        const batch = runItems.slice(i, i + BATCH_SIZE)
-        const itemsToInsert = batch.map((item) => ({
-          run_id,
-          order_id: item.order_id,
-          sku: item.sku,
-          qty: item.qty,
-          status: item.status,
-          reason: item.reason,
-          missing_skus: item.missing_skus,
-          allocated_skus: item.allocated_skus,
-        }))
+          const { error: insertError } = await supabase
+            .from('inventory_cogs_apply_run_items')
+            .insert(itemsToInsert)
 
-        const { error: insertError } = await supabase
-          .from('inventory_cogs_apply_run_items')
-          .insert(itemsToInsert)
-
-        if (insertError) {
-          console.error(`Failed to insert run items batch ${i / BATCH_SIZE + 1}:`, insertError)
-          // Non-fatal: continue
-        } else {
-          console.log(`Inserted batch ${i / BATCH_SIZE + 1} (${batch.length} items)`)
+          if (insertError) {
+            console.error(`Failed to insert run items batch ${i / BATCH_SIZE + 1}:`, insertError)
+            // Non-fatal: continue
+          } else {
+            console.log(`Inserted batch ${i / BATCH_SIZE + 1} (${batch.length} items)`)
+          }
         }
       }
 
-      // Update run with final counts
+      // Always update run with final counts (fix: was gated on runItems.length > 0
+      // which left the record at all-zeros when orders were all skipped)
+      console.log(`[applyCOGSMTD] DEBUG: final summary — total=${summary.total} eligible=${summary.eligible} successful=${summary.successful} skipped=${summary.skipped} failed=${summary.failed} partial=${summary.partial}`)
       const { error: updateError } = await supabase
         .from('inventory_cogs_apply_runs')
         .update({
