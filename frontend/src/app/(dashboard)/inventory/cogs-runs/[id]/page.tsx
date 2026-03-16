@@ -25,6 +25,9 @@ function StatusBadge({ status }: { status: string }) {
   if (status === 'failed') {
     return <Badge className="bg-red-100 text-red-800 border-red-300">ล้มเหลว</Badge>
   }
+  if (status === 'running') {
+    return <Badge className="bg-amber-100 text-amber-800 border-amber-300">กำลังทำงาน…</Badge>
+  }
   return <Badge className="bg-yellow-100 text-yellow-800 border-yellow-300">กำลังประมวลผล</Badge>
 }
 
@@ -154,6 +157,21 @@ export default async function CogsRunDetailPage({ params }: PageProps) {
           )}
         </div>
       </div>
+
+      {/* Running indicator */}
+      {run.status === 'running' && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 p-4 flex items-center gap-3">
+          <div className="h-4 w-4 rounded-full border-2 border-amber-500 border-t-transparent animate-spin shrink-0" />
+          <div>
+            <p className="text-sm font-semibold text-amber-900 dark:text-amber-100">
+              Run นี้ยังทำงานอยู่
+            </p>
+            <p className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">
+              รีเฟรชหน้านี้เพื่อดูสถานะล่าสุด ข้อมูลสรุปจะแสดงเมื่อ run เสร็จสิ้น
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Error message */}
       {run.status === 'failed' && run.error_message && (

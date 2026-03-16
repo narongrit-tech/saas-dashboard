@@ -366,3 +366,81 @@ export async function getCogsRun(id: string): Promise<CogsRun | null> {
     return null
   }
 }
+
+// ─────────────────────────────────────────────
+// 9) getActiveCogsRun
+// ─────────────────────────────────────────────
+
+/**
+ * Return the most recent cogs_allocation_runs row with status='running', or null.
+ * Read-only — used for observability UI only. Does not affect any running job.
+ */
+export async function getActiveCogsRun(): Promise<CogsRun | null> {
+  try {
+    const supabase = createClient()
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) return null
+
+    const { data, error } = await supabase
+      .from('cogs_allocation_runs')
+      .select('*')
+      .eq('created_by', user.id)
+      .eq('status', 'running')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (error) {
+      console.error('getActiveCogsRun error:', error)
+      return null
+    }
+
+    return data as CogsRun | null
+  } catch (err) {
+    console.error('Unexpected error in getActiveCogsRun:', err)
+    return null
+  }
+}
+
+// ─────────────────────────────────────────────
+// 10) getRecentCogsRunsFromRunsTable
+// ─────────────────────────────────────────────
+
+/**
+ * Fetch recent rows from cogs_allocation_runs (with status, summary_json, etc.).
+ * Read-only — used for observability UI only.
+ */
+export async function getRecentCogsRunsFromRunsTable(limit = 20): Promise<CogsRun[]> {
+  try {
+    const supabase = createClient()
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) return []
+
+    const { data, error } = await supabase
+      .from('cogs_allocation_runs')
+      .select('*')
+      .eq('created_by', user.id)
+      .order('created_at', { ascending: false })
+      .limit(limit)
+
+    if (error) {
+      console.error('getRecentCogsRunsFromRunsTable error:', error)
+      return []
+    }
+
+    return (data ?? []) as CogsRun[]
+  } catch (err) {
+    console.error('Unexpected error in getRecentCogsRunsFromRunsTable:', err)
+    return []
+  }
+}
