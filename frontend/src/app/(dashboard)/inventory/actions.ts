@@ -942,6 +942,47 @@ export async function applyCOGSMTD(params: {
     }
 
     // ──────────────────────────────────────────────────────────────────────
+    // RESUME DETECTION: find most recent failed run for the same date range
+    // so re-runs continue from where the previous timed-out run left off
+    // instead of restarting at offset 0.
+    // ──────────────────────────────────────────────────────────────────────
+    const { data: prevFailedRun } = await supabase
+      .from('cogs_allocation_runs')
+      .select('id, summary_json')
+      .eq('created_by', user.id)
+      .eq('status', 'failed')
+      .eq('trigger_source', 'DATE_RANGE')
+      .eq('date_from', startDateISO)
+      .eq('date_to', endDateISO)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    type PrevProgress = {
+      offset_completed?: number
+      total_so_far?: number
+      successful_so_far?: number
+      skipped_so_far?: number
+      failed_so_far?: number
+    }
+    const prevProgress: PrevProgress =
+      (prevFailedRun?.summary_json as PrevProgress | null) ?? {}
+
+    const resumeOffset =
+      typeof prevProgress.offset_completed === 'number' && prevProgress.offset_completed > 0
+        ? prevProgress.offset_completed
+        : 0
+
+    if (resumeOffset > 0) {
+      console.log(
+        `[applyCOGSMTD] Resuming from offset=${resumeOffset} (prev failed run: ${prevFailedRun!.id}, ` +
+        `prev_total=${prevProgress.total_so_far ?? 0}, prev_successful=${prevProgress.successful_so_far ?? 0})`
+      )
+    } else {
+      console.log('[applyCOGSMTD] Starting fresh from offset=0 (no previous failed run found for this date range)')
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
     // PRE-FETCH BUNDLE CONTEXT (once, before the processing loop)
     // ──────────────────────────────────────────────────────────────────────
     const { data: bundleItemsData_outer } = await supabase
@@ -984,15 +1025,15 @@ export async function applyCOGSMTD(params: {
       allocated_skus: string[]
     }
 
-    // Accumulated totals across ALL windows
+    // Accumulated totals across ALL windows (seed from previous failed run if resuming)
     const accSkipReasons = new Map<string, SkipReasonEntry>()
     const allRunItems: RunItem[] = []
     const accSummary = {
-      total: 0,
+      total: resumeOffset > 0 ? (prevProgress.total_so_far ?? 0) : 0,
       eligible: 0,
-      successful: 0,
-      skipped: 0,
-      failed: 0,
+      successful: resumeOffset > 0 ? (prevProgress.successful_so_far ?? 0) : 0,
+      skipped: resumeOffset > 0 ? (prevProgress.skipped_so_far ?? 0) : 0,
+      failed: resumeOffset > 0 ? (prevProgress.failed_so_far ?? 0) : 0,
       partial: 0,
       errors: [] as Array<{ order_id: string; reason: string }>,
     }
@@ -1014,14 +1055,14 @@ export async function applyCOGSMTD(params: {
     // ──────────────────────────────────────────────────────────────────────
     const LOOP_START_MS = Date.now()
     const TIMEOUT_MS = 50_000 // 50 s safety margin for Vercel Hobby 60 s limit
-    let currentOffset = 0
+    let currentOffset = resumeOffset
 
     while (true) {
       // Safety: abort if approaching the function execution limit
       const elapsed = Date.now() - LOOP_START_MS
       if (elapsed > TIMEOUT_MS) {
         const elapsedSec = Math.round(elapsed / 1000)
-        const msg = `Timeout safety triggered after ${elapsedSec}s — processed ${accSummary.total} orders so far. Re-run to continue remaining orders.`
+        const msg = `Timeout safety triggered after ${elapsedSec}s — processed ${accSummary.total} orders so far (offset=${currentOffset}). Re-run to continue from offset ${currentOffset}.`
         console.warn(`[applyCOGSMTD] ${msg}`)
         if (cogs_run_id) await completeCogsRunFailed(cogs_run_id, msg)
         return { success: false, error: msg, data: null }
