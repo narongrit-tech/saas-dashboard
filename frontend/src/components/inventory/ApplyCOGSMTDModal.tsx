@@ -24,7 +24,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import { Loader2, AlertCircle, CheckCircle2, Calendar, ChevronDown } from 'lucide-react'
-import { applyCOGSMTD } from '@/app/(dashboard)/inventory/actions'
+import { applyCOGSMTD, resumeAllocateMTD } from '@/app/(dashboard)/inventory/actions'
 import { getTodayBangkokString, getFirstDayOfMonthBangkokString } from '@/lib/bangkok-date-range'
 import { useToast } from '@/hooks/use-toast'
 
@@ -44,6 +44,7 @@ export function ApplyCOGSMTDModal({
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
+  const [chunkProgress, setChunkProgress] = useState<string | null>(null)
   const { toast } = useToast()
 
   // Date range state
@@ -101,18 +102,31 @@ export function ApplyCOGSMTDModal({
     setLoading(true)
     setError(null)
     setResult(null)
+    setChunkProgress(null)
 
     // Track whether modal is still open when action completes
     let modalWasClosedDuringProcessing = false
 
     try {
-      const response = await applyCOGSMTD({
-        method: 'FIFO',
-        startDate,
-        endDate,
-      })
+      // First chunk — typed as any so the resume loop can rebind to resumeAllocateMTD's type
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let response: any = await applyCOGSMTD({ method: 'FIFO', startDate, endDate })
 
-      // Check if modal was closed while processing
+      // Auto-resume loop — keeps calling resumeAllocateMTD until all chunks are done.
+      // Each chunk processes ORDERS_PER_CHUNK eligible orders (~200) and returns
+      // in well under Vercel Hobby's 60 s function limit.
+      while (response.success && response.data?.needsResume) {
+        const { cogsRunId } = response.data
+        setChunkProgress(`กำลังประมวลผล batch ถัดไป (run ${cogsRunId?.slice(-6)})…`)
+        response = await resumeAllocateMTD({
+          cogsRunId,
+          startDate,
+          endDate,
+          method: 'FIFO',
+        })
+      }
+
+      setChunkProgress(null)
       modalWasClosedDuringProcessing = !open
 
       if (!response.success) {
@@ -127,7 +141,6 @@ export function ApplyCOGSMTDModal({
         }
       } else {
         if (modalWasClosedDuringProcessing) {
-          // Modal was closed — show toast notification instead
           const data = response.data
           toast({
             title: 'Apply COGS เสร็จสิ้น',
@@ -141,6 +154,7 @@ export function ApplyCOGSMTDModal({
         }
       }
     } catch (err) {
+      setChunkProgress(null)
       modalWasClosedDuringProcessing = !open
       const msg = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด'
       if (modalWasClosedDuringProcessing) {
@@ -427,7 +441,7 @@ export function ApplyCOGSMTDModal({
               <div className="flex-1 flex items-center">
                 {loading && (
                   <p className="text-xs text-muted-foreground">
-                    ปิดหน้าต่างได้ ระบบจะแจ้งเตือนที่กระดิ่งเมื่อเสร็จ
+                    {chunkProgress ?? 'ปิดหน้าต่างได้ ระบบจะแจ้งเตือนที่กระดิ่งเมื่อเสร็จ'}
                   </p>
                 )}
               </div>

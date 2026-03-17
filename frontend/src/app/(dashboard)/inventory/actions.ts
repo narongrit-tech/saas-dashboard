@@ -27,8 +27,107 @@ import {
   createCogsRun,
   completeCogsRunSuccess,
   completeCogsRunFailed,
+  updateCogsRunProgress,
   createNotificationForRun,
 } from './cogs-run-actions'
+
+// ============================================
+// COGS Allocation — Hobby-safe helpers
+// ============================================
+
+/**
+ * Max eligible orders to process per single server-action invocation.
+ * Keeps wall-clock time well inside Vercel Hobby's 60 s function limit:
+ *   200 non-bundle orders × ~50 ms (single RPC) ≈ 10 s + ~5 s setup overhead.
+ * Increase to 400 on Pro (pair with maxDuration = 300 in layout.tsx).
+ */
+const ORDERS_PER_CHUNK = 200
+
+/**
+ * Call the FIFO or AVG allocation RPC directly using the caller-supplied
+ * Supabase client and already-known userId.
+ * Eliminates the two redundant auth.getUser() calls that live inside
+ * applyCOGSForOrderShipped and allocateFIFO/allocateAVG.
+ */
+async function _allocateRPC(
+  supabase: ReturnType<typeof createClient>,
+  method: CostingMethod,
+  userId: string,
+  orderUuid: string,
+  sku: string,
+  qty: number,
+  shippedAt: string
+): Promise<boolean> {
+  const rpcName = method === 'FIFO' ? 'allocate_cogs_fifo' : 'allocate_cogs_avg'
+  const { data, error } = await supabase.rpc(rpcName, {
+    p_order_id: orderUuid,
+    p_sku: sku,
+    p_qty: qty,
+    p_shipped_at: shippedAt,
+    p_user_id: userId,
+  })
+  if (error) {
+    console.error(`_allocateRPC ${rpcName} error:`, error.message)
+    return false
+  }
+  const status = (data as { status?: string } | null)?.status
+  return status === 'success' || status === 'already_allocated'
+}
+
+/**
+ * Allocate COGS for a bundle order using pre-loaded component definitions.
+ * Still needs per-component idempotency SELECT (bundles can be partially done),
+ * but skips auth re-check, inventory_items lookup, and getBundleComponents call.
+ */
+async function _allocateBundleOrderCOGS(
+  supabase: ReturnType<typeof createClient>,
+  method: CostingMethod,
+  userId: string,
+  orderUuid: string,
+  bundleSku: string,
+  qty: number,
+  shippedAt: string,
+  components: Array<{ component_sku: string; quantity: number }>
+): Promise<COGSApplyResult> {
+  if (components.length === 0) {
+    return { status: 'failed', allocatedSkus: [], missingSkus: [bundleSku], reason: 'NO_BUNDLE_RECIPE' }
+  }
+
+  const items = components.map((c) => ({ sku: c.component_sku, qty: c.quantity * qty }))
+
+  const alreadyDone = new Set<string>()
+  for (const comp of items) {
+    const { data: existing } = await supabase
+      .from('inventory_cogs_allocations')
+      .select('id')
+      .filter('order_id::text', 'eq', orderUuid)
+      .eq('sku_internal', comp.sku)
+      .eq('is_reversal', false)
+      .limit(1)
+    if (existing && existing.length > 0) alreadyDone.add(comp.sku)
+  }
+
+  if (alreadyDone.size === items.length) {
+    return { status: 'already_allocated', allocatedSkus: items.map((i) => i.sku), missingSkus: [] }
+  }
+
+  const allocated: string[] = []
+  const failed: string[] = []
+
+  for (const comp of items) {
+    if (alreadyDone.has(comp.sku)) continue
+    const ok = await _allocateRPC(supabase, method, userId, orderUuid, comp.sku, comp.qty, shippedAt)
+    if (ok) allocated.push(comp.sku)
+    else failed.push(comp.sku)
+  }
+
+  const allDone = [...Array.from(alreadyDone), ...allocated]
+  if (failed.length === 0)
+    return { status: 'success', allocatedSkus: allDone, missingSkus: [] }
+  if (allDone.length === 0)
+    return { status: 'failed', allocatedSkus: [], missingSkus: failed, reason: `ALLOCATION_FAILED: ${failed.join(',')}` }
+  return { status: 'partial', allocatedSkus: allDone, missingSkus: failed, reason: `PARTIAL: allocated [${allDone.join(',')}], missing [${failed.join(',')}]` }
+}
 
 // ============================================
 // Helper Functions
@@ -772,6 +871,37 @@ export async function applyCOGSMTD(params: {
     console.log(`Apply COGS Range: ${startDateISO} to ${endDateISO}`)
 
     // ============================================
+    // GUARD: prevent concurrent runs; auto-fail stale ones
+    // ============================================
+    const { data: existingRun } = await supabase
+      .from('cogs_allocation_runs')
+      .select('id, created_at, updated_at')
+      .eq('created_by', user.id)
+      .eq('status', 'running')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (existingRun) {
+      // Use updated_at so a resumed/progressed run doesn't get stale-killed
+      const lastActivityMs = Date.now() - new Date(existingRun.updated_at ?? existingRun.created_at).getTime()
+      const STALE_MS = 10 * 60 * 1000 // 10 minutes with no progress = stale
+
+      if (lastActivityMs > STALE_MS) {
+        console.warn(`[applyCOGSMTD] Auto-failing stale run ${existingRun.id} (inactive ${Math.round(lastActivityMs / 1000)}s)`)
+        await completeCogsRunFailed(existingRun.id, `Auto-failed: no activity for ${Math.round(lastActivityMs / 60000)} min`)
+        // Fall through and allow new run
+      } else {
+        console.warn(`[applyCOGSMTD] Blocked: active run ${existingRun.id} still in progress`)
+        return {
+          success: false,
+          error: `มี COGS run ที่กำลังทำงานอยู่แล้ว (id: ${existingRun.id}) กรุณารอให้เสร็จก่อน`,
+          data: null,
+        }
+      }
+    }
+
+    // ============================================
     // CREATE COGS_ALLOCATION_RUN (notification tracking)
     // ============================================
     const cogsRunResult = await createCogsRun({
@@ -841,6 +971,9 @@ export async function applyCOGSMTD(params: {
 
       if (ordersError) {
         console.error('Error fetching orders:', ordersError)
+        if (cogs_run_id) {
+          await completeCogsRunFailed(cogs_run_id, ordersError.message)
+        }
         return {
           success: false,
           error: ordersError.message,
@@ -908,6 +1041,23 @@ export async function applyCOGSMTD(params: {
     const bundleSkuSet = new Set<string>((bundleItemsData || []).map((i) => i.sku_internal))
     console.log(`Bundle SKUs: ${bundleSkuSet.size} found`)
 
+    // ============================================
+    // PRE-FETCH BUNDLE COMPONENTS (one query for all bundle SKUs)
+    // Eliminates N getBundleComponents() calls inside the per-order loop.
+    // ============================================
+    const bundleComponentsMap = new Map<string, Array<{ component_sku: string; quantity: number }>>()
+    if (bundleSkuSet.size > 0) {
+      const { data: allComponents } = await supabase
+        .from('inventory_bundle_components')
+        .select('bundle_sku, component_sku, quantity')
+        .in('bundle_sku', Array.from(bundleSkuSet))
+      for (const row of allComponents ?? []) {
+        if (!bundleComponentsMap.has(row.bundle_sku)) bundleComponentsMap.set(row.bundle_sku, [])
+        bundleComponentsMap.get(row.bundle_sku)!.push({ component_sku: row.component_sku, quantity: row.quantity })
+      }
+      console.log(`Pre-loaded components for ${bundleComponentsMap.size} bundle SKUs`)
+    }
+
     // Separate orders into bundle vs non-bundle
     // Use sales_orders.id (uuid) as the canonical key for allocation checks
     const nonBundleOrderIds = orders
@@ -956,9 +1106,13 @@ export async function applyCOGSMTD(params: {
             `Error checking existing allocations (chunk ${chunkIndex + 1}/${chunks.length}):`,
             allocError
           )
+          const errMsg = `Failed to check existing allocations (chunk ${chunkIndex + 1}/${chunks.length}): ${allocError.message || 'Bad Request'}`
+          if (cogs_run_id) {
+            await completeCogsRunFailed(cogs_run_id, errMsg)
+          }
           return {
             success: false,
-            error: `Failed to check existing allocations (chunk ${chunkIndex + 1}/${chunks.length}): ${allocError.message || 'Bad Request'}`,
+            error: errMsg,
             data: null,
           }
         }
@@ -984,7 +1138,26 @@ export async function applyCOGSMTD(params: {
     }).length
     const bundleCount = orders.filter((o) => o.seller_sku && bundleSkuSet.has(o.seller_sku)).length
     console.log(`[applyCOGSMTD] DEBUG: bundle orders = ${bundleCount}, non-bundle unallocated = ${nonBundleUnallocated}, non-bundle already-allocated = ${allocatedOrderIds.size}`)
-    console.log(`[applyCOGSMTD] DEBUG: total eligible to process (before SKU/qty validation) = ${nonBundleUnallocated + bundleCount}`)
+    const totalEligibleBeforeChunk = nonBundleUnallocated + bundleCount
+    console.log(`[applyCOGSMTD] DEBUG: total eligible to process (before SKU/qty validation) = ${totalEligibleBeforeChunk}`)
+
+    // ============================================
+    // CHUNKED PROCESSING — Hobby-safe: process only ORDERS_PER_CHUNK per call
+    // Orders already allocated are filtered above; remaining orders that pass
+    // SKU/qty validation but were NOT in allocatedOrderIds are the "eligible" set.
+    // We slice that set to ORDERS_PER_CHUNK and signal needsResume if more remain.
+    // On resume, the outer order list is re-fetched fresh; idempotency ensures
+    // already-processed orders are simply skipped with 0 extra DB work (non-bundle)
+    // or the per-component check inside _allocateBundleOrderCOGS (bundle).
+    // ============================================
+    // Identify the slice of orders to process this invocation.
+    // We separate the "to-process" list early so we know whether a resume is needed.
+    const ordersToProcess = orders.slice(0, ORDERS_PER_CHUNK + allocatedOrderIds.size)
+    // The slice above ensures we won't exceed ORDERS_PER_CHUNK *eligible* orders,
+    // because pre-allocated orders are counted into summary.skipped without hitting
+    // the DB again. We take a slightly larger window to absorb pre-allocated skips.
+    // Whether more remain is determined by `needsResume` after the loop finishes.
+    const hasMoreOrdersTotal = orders.length > ORDERS_PER_CHUNK + allocatedOrderIds.size
 
     // Prepare result summary with detailed skip reasons
     interface SkipReason {
@@ -1043,7 +1216,10 @@ export async function applyCOGSMTD(params: {
       errors: [] as Array<{ order_id: string; reason: string }>,
     }
 
-    // Process each order
+    // Process each order — Hobby-safe: stop after ORDERS_PER_CHUNK eligible orders
+    let eligibleProcessedCount = 0
+    let needsResume = false
+
     for (const order of orders) {
       const order_uuid = order.id          // UUID primary key — used for RPC + allocation checks
       const order_id   = order.order_id   // TikTok/external ID — used for logging only
@@ -1052,7 +1228,7 @@ export async function applyCOGSMTD(params: {
       const shipped_at = order.shipped_at
 
       // Skip if already allocated (non-bundle orders only).
-      // Bundle orders skip based on per-component check inside applyCOGSForOrderShippedCore.
+      // Bundle orders skip based on per-component check inside _allocateBundleOrderCOGS.
       const isBundle = sku && bundleSkuSet.has(sku)
       if (!isBundle && allocatedOrderIds.has(order_uuid)) {
         summary.skipped++
@@ -1117,13 +1293,29 @@ export async function applyCOGSMTD(params: {
         continue
       }
 
+      // Chunk gate: once ORDERS_PER_CHUNK eligible orders have been processed this
+      // invocation, stop. The resume action will pick up on the next call.
+      if (eligibleProcessedCount >= ORDERS_PER_CHUNK) {
+        needsResume = true
+        break
+      }
+
       // This order is eligible
       summary.eligible++
+      eligibleProcessedCount++
 
-      // Apply COGS (returns COGSApplyResult with status + allocatedSkus + missingSkus)
+      // Apply COGS — use optimized helpers that reuse the caller's supabase client
+      // and skip redundant auth/item-lookup per order (N+1 elimination).
       // order_uuid (UUID) is passed to RPC; order_id (TikTok ID) is for logging only
       try {
-        const result = await applyCOGSForOrderShippedCore(order_uuid, sku, qty, shipped_at, method)
+        const result: COGSApplyResult = isBundle
+          ? await _allocateBundleOrderCOGS(
+              supabase, method, user.id, order_uuid, sku, qty, shipped_at,
+              bundleComponentsMap.get(sku) ?? []
+            )
+          : (await _allocateRPC(supabase, method, user.id, order_uuid, sku, qty, shipped_at))
+            ? { status: 'success', allocatedSkus: [sku], missingSkus: [] }
+            : { status: 'failed', allocatedSkus: [], missingSkus: [sku], reason: 'ALLOCATION_FAILED' }
 
         if (result.status === 'success') {
           summary.successful++
@@ -1205,8 +1397,41 @@ export async function applyCOGSMTD(params: {
     // Convert skipReasons map to array
     const skipReasonsArray = Array.from(skipReasons.values()).sort((a, b) => b.count - a.count)
 
-    console.log('Apply COGS MTD Summary:', summary)
+    console.log('Apply COGS MTD Summary (this chunk):', summary)
     console.log('Skip Reasons Breakdown:', skipReasonsArray)
+
+    // ============================================
+    // CHUNKED EARLY RETURN — more orders remain; signal client to resume
+    // ============================================
+    if (needsResume && cogs_run_id) {
+      const progressJson = {
+        _phase: 'in_progress',
+        chunk_successful: summary.successful,
+        chunk_skipped: summary.skipped,
+        chunk_failed: summary.failed,
+        chunk_partial: summary.partial,
+        chunk_eligible: summary.eligible,
+        total_orders_in_range: summary.total,
+        date_from: startDateISO,
+        date_to: endDateISO,
+        method,
+      }
+      await updateCogsRunProgress(cogs_run_id, progressJson)
+      console.log(`[applyCOGSMTD] Chunk complete. Processed ${eligibleProcessedCount} eligible orders. Returning needsResume=true.`)
+      return {
+        success: true,
+        data: {
+          ...summary,
+          skip_reasons: skipReasonsArray,
+          run_id,
+          cogs_run_id,
+          needsResume: true,
+          startDate: startDateISO,
+          endDate: endDateISO,
+          method,
+        },
+      }
+    }
 
     // ============================================
     // SAVE RUN LOG TO DATABASE
@@ -1316,6 +1541,233 @@ export async function applyCOGSMTD(params: {
       error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด',
       data: null,
     }
+  }
+}
+
+// ============================================
+// resumeAllocateMTD — continue a chunked DATE_RANGE run
+// ============================================
+
+/**
+ * Resume a chunked Allocate MTD run that returned needsResume=true.
+ * Re-queries unallocated orders for the same date range and processes the
+ * next ORDERS_PER_CHUNK. Idempotency guarantees already-allocated orders
+ * are skipped without extra DB work (non-bundle: pre-check; bundle: per-component RPC).
+ *
+ * Does NOT create a new cogs_allocation_runs row.
+ * When all orders are processed, marks the existing run as success.
+ */
+export async function resumeAllocateMTD(params: {
+  cogsRunId: string
+  startDate: string
+  endDate: string
+  method?: CostingMethod
+}): Promise<{
+  success: boolean
+  error?: string
+  data: null | {
+    total: number
+    eligible: number
+    successful: number
+    skipped: number
+    failed: number
+    partial: number
+    needsResume: boolean
+    cogsRunId: string
+    startDate: string
+    endDate: string
+    method: string
+    run_id: null
+    cogs_run_id: string
+    skip_reasons: object[]
+  }
+}> {
+  const method = params.method || 'FIFO'
+  const { cogsRunId, startDate: startDateISO, endDate: endDateISO } = params
+
+  try {
+    const supabase = createClient()
+
+    // Auth + admin check
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ไม่พบข้อมูลผู้ใช้', data: null }
+
+    const { data: roleData, error: roleError } = await supabase
+      .from('user_roles').select('role').eq('user_id', user.id).single()
+    if (roleError || roleData?.role !== 'admin')
+      return { success: false, error: 'ไม่มีสิทธิ์เข้าถึงฟังก์ชันนี้ (Admin only)', data: null }
+
+    // Verify the run belongs to this user and is still running
+    const { data: runRow } = await supabase
+      .from('cogs_allocation_runs')
+      .select('id, status')
+      .eq('id', cogsRunId)
+      .eq('created_by', user.id)
+      .single()
+
+    if (!runRow) return { success: false, error: `ไม่พบ COGS run: ${cogsRunId}`, data: null }
+    if (runRow.status !== 'running')
+      return { success: false, error: `COGS run ${cogsRunId} is already ${runRow.status}`, data: null }
+
+    // Re-fetch orders for the date range (same query as applyCOGSMTD)
+    const PAGE_SIZE = 1000
+    let allOrders: any[] = []
+    let currentPage = 0
+    let hasMore = true
+    while (hasMore) {
+      const from = currentPage * PAGE_SIZE
+      const { data: pageOrders, error: ordersError } = await supabase
+        .from('sales_orders')
+        .select('id, order_id, seller_sku, quantity, shipped_at, order_date, status_group')
+        .not('shipped_at', 'is', null)
+        .neq('status_group', 'ยกเลิกแล้ว')
+        .gte('order_date', `${startDateISO}T00:00:00+07:00`)
+        .lte('order_date', `${endDateISO}T23:59:59+07:00`)
+        .order('order_date', { ascending: true })
+        .order('order_id', { ascending: true })
+        .range(from, from + PAGE_SIZE - 1)
+      if (ordersError) {
+        await completeCogsRunFailed(cogsRunId, ordersError.message)
+        return { success: false, error: ordersError.message, data: null }
+      }
+      if (pageOrders?.length) allOrders = allOrders.concat(pageOrders)
+      hasMore = pageOrders?.length === PAGE_SIZE
+      currentPage++
+      if (currentPage >= 100) { hasMore = false }
+    }
+
+    const orders = allOrders
+    if (orders.length === 0) {
+      await completeCogsRunSuccess(cogsRunId, { total: 0, eligible: 0, successful: 0, skipped: 0, failed: 0, partial: 0, skip_reasons: [] })
+      await createNotificationForRun(cogsRunId, { total: 0, successful: 0, skipped: 0, failed: 0 })
+      return { success: true, data: { total: 0, eligible: 0, successful: 0, skipped: 0, failed: 0, partial: 0, needsResume: false, cogsRunId, startDate: startDateISO, endDate: endDateISO, method, run_id: null, cogs_run_id: cogsRunId, skip_reasons: [] } }
+    }
+
+    // Pre-fetch bundle context (same as applyCOGSMTD)
+    const { data: bundleItemsData } = await supabase.from('inventory_items').select('sku_internal').eq('is_bundle', true)
+    const bundleSkuSet = new Set<string>((bundleItemsData || []).map((i) => i.sku_internal))
+
+    const bundleComponentsMap = new Map<string, Array<{ component_sku: string; quantity: number }>>()
+    if (bundleSkuSet.size > 0) {
+      const { data: allComponents } = await supabase
+        .from('inventory_bundle_components').select('bundle_sku, component_sku, quantity').in('bundle_sku', Array.from(bundleSkuSet))
+      for (const row of allComponents ?? []) {
+        if (!bundleComponentsMap.has(row.bundle_sku)) bundleComponentsMap.set(row.bundle_sku, [])
+        bundleComponentsMap.get(row.bundle_sku)!.push({ component_sku: row.component_sku, quantity: row.quantity })
+      }
+    }
+
+    // Bulk alloc pre-check for non-bundle orders
+    const nonBundleOrderIds = orders.filter((o) => o.seller_sku && !bundleSkuSet.has(o.seller_sku)).map((o) => o.id)
+    const allocatedOrderIds = new Set<string>()
+    if (nonBundleOrderIds.length > 0) {
+      const CHUNK_SIZE = 200
+      for (let i = 0; i < nonBundleOrderIds.length; i += CHUNK_SIZE) {
+        const chunk = nonBundleOrderIds.slice(i, i + CHUNK_SIZE)
+        const { data: chunkAllocs, error: allocError } = await supabase
+          .from('inventory_cogs_allocations').select('order_id')
+          .filter('order_id::text', 'in', `(${chunk.join(',')})`)
+          .eq('is_reversal', false)
+        if (allocError) {
+          await completeCogsRunFailed(cogsRunId, allocError.message)
+          return { success: false, error: allocError.message, data: null }
+        }
+        for (const row of chunkAllocs ?? []) allocatedOrderIds.add(String(row.order_id))
+      }
+    }
+
+    // Same summary + loop structure as applyCOGSMTD
+    interface SkipReason { code: string; label: string; count: number; samples: Array<{ order_id: string; sku?: string; detail?: string }> }
+    const skipReasons = new Map<string, SkipReason>()
+    const addSkipReason = (code: string, label: string, order_id: string, sku?: string, detail?: string) => {
+      if (!skipReasons.has(code)) skipReasons.set(code, { code, label, count: 0, samples: [] })
+      const entry = skipReasons.get(code)!
+      entry.count += 1
+      if (entry.samples.length < 20) entry.samples.push({ order_id, sku, detail })
+    }
+
+    const summary = { total: orders.length, eligible: 0, successful: 0, skipped: 0, failed: 0, partial: 0, errors: [] as Array<{ order_id: string; reason: string }> }
+    let eligibleProcessedCount = 0
+    let needsResume = false
+
+    for (const order of orders) {
+      const order_uuid = order.id
+      const order_id = order.order_id
+      const sku = order.seller_sku
+      const qty = order.quantity
+      const shipped_at = order.shipped_at
+      const isBundle = sku && bundleSkuSet.has(sku)
+
+      if (!isBundle && allocatedOrderIds.has(order_uuid)) {
+        summary.skipped++
+        summary.errors.push({ order_id, reason: 'already_allocated' })
+        addSkipReason('ALREADY_ALLOCATED', 'เคย allocate แล้ว (idempotent skip)', order_id, sku)
+        continue
+      }
+      if (!sku || sku.trim() === '') { summary.skipped++; addSkipReason('MISSING_SKU', 'ไม่มี seller_sku', order_id); continue }
+      if (qty == null || !Number.isFinite(qty) || qty <= 0) { summary.skipped++; addSkipReason('INVALID_QUANTITY', 'quantity ไม่ถูกต้อง', order_id, sku, `qty=${qty}`); continue }
+      if (!shipped_at) { summary.skipped++; addSkipReason('NOT_SHIPPED', 'ไม่มี shipped_at', order_id, sku); continue }
+
+      if (eligibleProcessedCount >= ORDERS_PER_CHUNK) { needsResume = true; break }
+
+      summary.eligible++
+      eligibleProcessedCount++
+
+      try {
+        const result: COGSApplyResult = isBundle
+          ? await _allocateBundleOrderCOGS(supabase, method, user.id, order_uuid, sku, qty, shipped_at, bundleComponentsMap.get(sku) ?? [])
+          : (await _allocateRPC(supabase, method, user.id, order_uuid, sku, qty, shipped_at))
+            ? { status: 'success', allocatedSkus: [sku], missingSkus: [] }
+            : { status: 'failed', allocatedSkus: [], missingSkus: [sku], reason: 'ALLOCATION_FAILED' }
+
+        if (result.status === 'success') {
+          summary.successful++
+        } else if (result.status === 'already_allocated') {
+          summary.skipped++; addSkipReason('ALREADY_ALLOCATED', 'เคย allocate แล้ว', order_id, sku)
+        } else if (result.status === 'partial') {
+          summary.partial++; addSkipReason('PARTIAL_ALLOCATION', `bundle partial (missing: ${result.missingSkus.join(',')})`, order_id, sku, result.reason)
+        } else {
+          summary.failed++; addSkipReason('ALLOCATION_FAILED', 'allocate ไม่ได้', order_id, sku, result.reason)
+        }
+      } catch (err) {
+        summary.failed++
+        addSkipReason('EXCEPTION', 'exception ระหว่าง allocate', order_id, sku, err instanceof Error ? err.message : 'unknown')
+      }
+    }
+
+    const skipReasonsArray = Array.from(skipReasons.values()).sort((a, b) => b.count - a.count)
+    console.log(`[resumeAllocateMTD] chunk complete: ${eligibleProcessedCount} eligible, needsResume=${needsResume}`)
+
+    if (needsResume) {
+      await updateCogsRunProgress(cogsRunId, {
+        _phase: 'in_progress',
+        chunk_successful: summary.successful,
+        chunk_skipped: summary.skipped,
+        chunk_failed: summary.failed,
+        total_orders_in_range: summary.total,
+        date_from: startDateISO,
+        date_to: endDateISO,
+      })
+      return { success: true, data: { ...summary, skip_reasons: skipReasonsArray, needsResume: true, cogsRunId, startDate: startDateISO, endDate: endDateISO, method, run_id: null, cogs_run_id: cogsRunId } }
+    }
+
+    // Final chunk — complete the run
+    revalidatePath('/inventory')
+    revalidatePath('/sales')
+    revalidatePath('/daily-pl')
+
+    const notifSummary = { total: summary.total, eligible: summary.eligible, successful: summary.successful, skipped: summary.skipped, failed: summary.failed, partial: summary.partial, skip_reasons: skipReasonsArray, date_from: startDateISO, date_to: endDateISO, method }
+    await completeCogsRunSuccess(cogsRunId, notifSummary)
+    await createNotificationForRun(cogsRunId, { total: summary.total, successful: summary.successful, skipped: summary.skipped, failed: summary.failed })
+
+    return { success: true, data: { ...summary, skip_reasons: skipReasonsArray, needsResume: false, cogsRunId, startDate: startDateISO, endDate: endDateISO, method, run_id: null, cogs_run_id: cogsRunId } }
+
+  } catch (error) {
+    console.error('Unexpected error in resumeAllocateMTD:', error)
+    if (params.cogsRunId) {
+      await completeCogsRunFailed(params.cogsRunId, error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด')
+    }
+    return { success: false, error: error instanceof Error ? error.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด', data: null }
   }
 }
 

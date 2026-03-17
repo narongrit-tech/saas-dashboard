@@ -4,9 +4,15 @@
  * COGS Run Actions
  * Server actions for cogs_allocation_runs and notifications tables.
  * All operations are scoped to the authenticated user via Supabase RLS.
+ *
+ * NOTE: completeCogsRunSuccess, completeCogsRunFailed, and updateCogsRunProgress
+ * intentionally use the SERVICE-ROLE client so that finalization cannot be silently
+ * skipped due to a user-session expiry or cookie error during a long-running job.
+ * The runId is validated upstream by the caller who already holds admin auth.
  */
 
 import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/service'
 
 // ─────────────────────────────────────────────
 // Types
@@ -109,20 +115,14 @@ export async function createCogsRun(params: {
 
 /**
  * Mark a cogs_allocation_runs row as success and store summary.
+ * Uses service-role client so this cannot silently fail due to session expiry.
  */
 export async function completeCogsRunSuccess(
   runId: string,
   summaryJson: object
 ): Promise<void> {
   try {
-    const supabase = createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) return
+    const supabase = createServiceClient()
 
     const { error } = await supabase
       .from('cogs_allocation_runs')
@@ -132,7 +132,6 @@ export async function completeCogsRunSuccess(
         updated_at: new Date().toISOString(),
       })
       .eq('id', runId)
-      .eq('created_by', user.id)
 
     if (error) {
       console.error('completeCogsRunSuccess error:', error)
@@ -148,20 +147,14 @@ export async function completeCogsRunSuccess(
 
 /**
  * Mark a cogs_allocation_runs row as failed with an error message.
+ * Uses service-role client so this cannot silently fail due to session expiry.
  */
 export async function completeCogsRunFailed(
   runId: string,
   errorMessage: string
 ): Promise<void> {
   try {
-    const supabase = createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) return
+    const supabase = createServiceClient()
 
     const { error } = await supabase
       .from('cogs_allocation_runs')
@@ -171,13 +164,46 @@ export async function completeCogsRunFailed(
         updated_at: new Date().toISOString(),
       })
       .eq('id', runId)
-      .eq('created_by', user.id)
 
     if (error) {
       console.error('completeCogsRunFailed error:', error)
     }
   } catch (err) {
     console.error('Unexpected error in completeCogsRunFailed:', err)
+  }
+}
+
+// ─────────────────────────────────────────────
+// 2b) updateCogsRunProgress
+// ─────────────────────────────────────────────
+
+/**
+ * Persist incremental progress into summary_json for a still-running job.
+ * Used by chunked Allocate MTD between requests so the run row reflects
+ * partial progress instead of staying null while the job continues.
+ * Uses service-role so it cannot be blocked by session state.
+ */
+export async function updateCogsRunProgress(
+  runId: string,
+  progressJson: object
+): Promise<void> {
+  try {
+    const supabase = createServiceClient()
+
+    const { error } = await supabase
+      .from('cogs_allocation_runs')
+      .update({
+        summary_json: progressJson,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', runId)
+      .eq('status', 'running') // safety: only touch rows still in-flight
+
+    if (error) {
+      console.error('updateCogsRunProgress error:', error)
+    }
+  } catch (err) {
+    console.error('Unexpected error in updateCogsRunProgress:', err)
   }
 }
 
