@@ -4129,3 +4129,286 @@ export async function applyCOGSForBatch(importBatchId: string): Promise<{
     }
   }
 }
+
+// ============================================================
+// Manual Stock Adjustments
+// ============================================================
+
+/**
+ * ADJUST_IN: creates a receipt layer (ref_type='ADJUST_IN', unit_cost=0)
+ * and an inventory_adjustments record with layer_id set.
+ * Admin-only.
+ */
+export async function createAdjustIn(params: {
+  sku_internal: string
+  quantity: number
+  reason: string
+  adjusted_at: string // ISO timestamp with +07:00 suffix
+}): Promise<{ success: boolean; error?: string; data?: { layer_id: string; adjustment_id: string } }> {
+  try {
+    const supabase = createClient()
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'Not authenticated' }
+
+    const adminResult = await checkIsInventoryAdmin()
+    if (!adminResult.success || !adminResult.isAdmin) {
+      return { success: false, error: 'Admin permission required' }
+    }
+
+    const sku = params.sku_internal.trim().toUpperCase()
+    if (!sku) return { success: false, error: 'SKU is required' }
+
+    const qty = Number(params.quantity)
+    if (!Number.isFinite(qty) || qty <= 0) {
+      return { success: false, error: 'Quantity must be greater than 0' }
+    }
+
+    const reason = params.reason.trim()
+    if (!reason) return { success: false, error: 'Reason is required' }
+
+    // Validate SKU exists and is not a bundle
+    const { data: item, error: itemError } = await supabase
+      .from('inventory_items')
+      .select('sku_internal, is_bundle')
+      .eq('sku_internal', sku)
+      .single()
+
+    if (itemError || !item) {
+      return { success: false, error: `SKU ${sku} not found` }
+    }
+    if (item.is_bundle) {
+      return { success: false, error: 'Cannot adjust bundle SKUs directly — adjust component SKUs instead' }
+    }
+
+    // Create receipt layer (no created_by — matches createStockInForSku pattern)
+    const { data: layer, error: layerError } = await supabase
+      .from('inventory_receipt_layers')
+      .insert({
+        sku_internal: sku,
+        received_at: params.adjusted_at,
+        qty_received: qty,
+        qty_remaining: qty,
+        unit_cost: 0,
+        ref_type: 'ADJUST_IN',
+        ref_id: null,
+        is_voided: false,
+      })
+      .select('id')
+      .single()
+
+    if (layerError || !layer) {
+      return { success: false, error: layerError?.message ?? 'Failed to create receipt layer' }
+    }
+
+    // Create adjustment record (layer_id set)
+    const { data: adj, error: adjError } = await supabase
+      .from('inventory_adjustments')
+      .insert({
+        sku_internal: sku,
+        adjustment_type: 'ADJUST_IN',
+        quantity: qty,
+        reason,
+        adjusted_at: params.adjusted_at,
+        layer_id: layer.id,
+        created_by: user.id,
+      })
+      .select('id')
+      .single()
+
+    if (adjError || !adj) {
+      // Best-effort rollback: void the layer
+      await supabase
+        .from('inventory_receipt_layers')
+        .update({ is_voided: true, voided_at: new Date().toISOString(), void_reason: 'Adjustment insert failed — auto-rollback' })
+        .eq('id', layer.id)
+      return { success: false, error: adjError?.message ?? 'Failed to create adjustment record' }
+    }
+
+    revalidatePath('/inventory')
+    return { success: true, data: { layer_id: layer.id, adjustment_id: adj.id } }
+  } catch (err) {
+    console.error('Unexpected error in createAdjustIn:', err)
+    return { success: false, error: 'Unexpected error' }
+  }
+}
+
+/**
+ * ADJUST_OUT: drains existing FIFO receipt layers (oldest first, non-voided,
+ * qty_remaining > 0) and records the adjustment.
+ * Fails if available stock < requested quantity.
+ * Admin-only.
+ *
+ * NOTE: The drain + insert is not atomic (no DB transaction from Supabase JS client).
+ * If the adjustment insert fails after layers are drained, stock is decremented
+ * without an audit record. TODO: wrap in a DB function for full atomicity.
+ */
+export async function createAdjustOut(params: {
+  sku_internal: string
+  quantity: number
+  reason: string
+  adjusted_at: string // ISO timestamp with +07:00 suffix
+}): Promise<{ success: boolean; error?: string; data?: { adjustment_id: string; layers_drained: number } }> {
+  try {
+    const supabase = createClient()
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'Not authenticated' }
+
+    const adminResult = await checkIsInventoryAdmin()
+    if (!adminResult.success || !adminResult.isAdmin) {
+      return { success: false, error: 'Admin permission required' }
+    }
+
+    const sku = params.sku_internal.trim().toUpperCase()
+    if (!sku) return { success: false, error: 'SKU is required' }
+
+    const qty = Number(params.quantity)
+    if (!Number.isFinite(qty) || qty <= 0) {
+      return { success: false, error: 'Quantity must be greater than 0' }
+    }
+
+    const reason = params.reason.trim()
+    if (!reason) return { success: false, error: 'Reason is required' }
+
+    // Validate SKU exists and is not a bundle
+    const { data: item, error: itemError } = await supabase
+      .from('inventory_items')
+      .select('sku_internal, is_bundle')
+      .eq('sku_internal', sku)
+      .single()
+
+    if (itemError || !item) {
+      return { success: false, error: `SKU ${sku} not found` }
+    }
+    if (item.is_bundle) {
+      return { success: false, error: 'Cannot adjust bundle SKUs directly — adjust component SKUs instead' }
+    }
+
+    // Fetch non-voided layers with remaining stock, FIFO order
+    const { data: layers, error: layersError } = await supabase
+      .from('inventory_receipt_layers')
+      .select('id, qty_remaining')
+      .eq('sku_internal', sku)
+      .eq('is_voided', false)
+      .gt('qty_remaining', 0)
+      .order('received_at', { ascending: true })
+
+    if (layersError) {
+      return { success: false, error: layersError.message }
+    }
+
+    const available = (layers ?? []).reduce((sum, l) => sum + Number(l.qty_remaining), 0)
+    if (available < qty) {
+      return {
+        success: false,
+        error: `สต็อกไม่พอ: มีอยู่ ${available.toFixed(2)} แต่ขอลด ${qty}`,
+      }
+    }
+
+    // Drain FIFO
+    let remaining = qty
+    let layersDrained = 0
+    const drainedUpdates: Array<{ id: string; oldQty: number; newQty: number }> = []
+
+    for (const layer of layers ?? []) {
+      if (remaining <= 0) break
+      const drain = Math.min(remaining, Number(layer.qty_remaining))
+      const newQty = Number(layer.qty_remaining) - drain
+
+      const { error: updateError } = await supabase
+        .from('inventory_receipt_layers')
+        .update({ qty_remaining: newQty })
+        .eq('id', layer.id)
+
+      if (updateError) {
+        // Attempt to restore already-drained layers
+        for (const restored of drainedUpdates) {
+          await supabase
+            .from('inventory_receipt_layers')
+            .update({ qty_remaining: restored.oldQty })
+            .eq('id', restored.id)
+        }
+        return { success: false, error: `Failed to drain layer ${layer.id}: ${updateError.message}` }
+      }
+
+      drainedUpdates.push({ id: layer.id, oldQty: Number(layer.qty_remaining), newQty })
+      remaining -= drain
+      layersDrained += 1
+    }
+
+    // Insert adjustment record (layer_id=null for OUT — may span multiple layers)
+    const { data: adj, error: adjError } = await supabase
+      .from('inventory_adjustments')
+      .insert({
+        sku_internal: sku,
+        adjustment_type: 'ADJUST_OUT',
+        quantity: qty,
+        reason,
+        adjusted_at: params.adjusted_at,
+        layer_id: null,
+        created_by: user.id,
+      })
+      .select('id')
+      .single()
+
+    if (adjError || !adj) {
+      return { success: false, error: adjError?.message ?? 'Failed to create adjustment record' }
+    }
+
+    revalidatePath('/inventory')
+    return { success: true, data: { adjustment_id: adj.id, layers_drained: layersDrained } }
+  } catch (err) {
+    console.error('Unexpected error in createAdjustOut:', err)
+    return { success: false, error: 'Unexpected error' }
+  }
+}
+
+/**
+ * Fetch adjustment records for the current user, newest first.
+ */
+export async function getAdjustments(limit = 100): Promise<{
+  success: boolean
+  error?: string
+  data: Array<{
+    id: string
+    sku_internal: string
+    adjustment_type: string
+    quantity: number
+    reason: string
+    adjusted_at: string
+    layer_id: string | null
+    created_at: string
+  }>
+}> {
+  try {
+    const supabase = createClient()
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'Not authenticated', data: [] }
+
+    const { data, error } = await supabase
+      .from('inventory_adjustments')
+      .select('id, sku_internal, adjustment_type, quantity, reason, adjusted_at, layer_id, created_at')
+      .order('created_at', { ascending: false })
+      .limit(limit)
+
+    if (error) {
+      return { success: false, error: error.message, data: [] }
+    }
+
+    return { success: true, data: data ?? [] }
+  } catch (err) {
+    console.error('Unexpected error in getAdjustments:', err)
+    return { success: false, error: 'Unexpected error', data: [] }
+  }
+}
