@@ -24,7 +24,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import { Loader2, AlertCircle, CheckCircle2, Calendar, ChevronDown } from 'lucide-react'
-import { applyCOGSMTD, resumeAllocateMTD } from '@/app/(dashboard)/inventory/actions'
+import { applyCOGSMTD } from '@/app/(dashboard)/inventory/actions'
 import { getTodayBangkokString, getFirstDayOfMonthBangkokString } from '@/lib/bangkok-date-range'
 import { useToast } from '@/hooks/use-toast'
 
@@ -108,22 +108,79 @@ export function ApplyCOGSMTDModal({
     let modalWasClosedDuringProcessing = false
 
     try {
-      // First chunk — typed as any so the resume loop can rebind to resumeAllocateMTD's type
+      // Offset-based chunked loop. Each call fetches and processes one window
+      // (ORDERS_PER_CHUNK orders max) and returns needsResume + nextOffset.
+      let currentOffset = 0
+      let resumeCogsRunId: string | undefined
+      let batchNum = 0
+      let accSuccessful = 0
+      let accSkipped = 0
+      let accFailed = 0
+      let accPartial = 0
+      let accEligible = 0
+      let accTotal = 0
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let response: any = await applyCOGSMTD({ method: 'FIFO', startDate, endDate })
+      let response: any = null
 
-      // Auto-resume loop — keeps calling resumeAllocateMTD until all chunks are done.
-      // Each chunk processes ORDERS_PER_CHUNK eligible orders (~200) and returns
-      // in well under Vercel Hobby's 60 s function limit.
-      while (response.success && response.data?.needsResume) {
-        const { cogsRunId } = response.data
-        setChunkProgress(`กำลังประมวลผล batch ถัดไป (run ${cogsRunId?.slice(-6)})…`)
-        response = await resumeAllocateMTD({
-          cogsRunId,
+      do {
+        batchNum++
+        console.log(`[ApplyCOGSMTD] Starting batch ${batchNum} at offset=${currentOffset}`)
+        setChunkProgress(
+          currentOffset === 0
+            ? 'กำลังประมวลผล batch แรก…'
+            : `กำลังประมวลผล batch ${batchNum} (offset ${currentOffset})…`
+        )
+
+        response = await applyCOGSMTD({
+          method: 'FIFO',
           startDate,
           endDate,
-          method: 'FIFO',
+          offset: currentOffset,
+          resumeCogsRunId,
+          accSuccessful,
+          accSkipped,
+          accFailed,
+          accPartial,
+          accEligible,
+          accTotal,
         })
+
+        if (!response.success) break
+
+        const data = response.data
+        const processedCount: number = data?.processedCount ?? 0
+        console.log(`[ApplyCOGSMTD] Batch ${batchNum}: processedCount=${processedCount}, hasMore=${data?.needsResume}`)
+
+        // Accumulate stats across batches
+        accSuccessful += data?.successful ?? 0
+        accSkipped += data?.skipped ?? 0
+        accFailed += data?.failed ?? 0
+        accPartial += data?.partial ?? 0
+        accEligible += data?.eligible ?? 0
+        accTotal += data?.total ?? 0
+
+        // Safety: if no eligible orders processed on a resume batch → break
+        if (processedCount === 0 && currentOffset > 0) {
+          console.warn('[ApplyCOGSMTD] processedCount=0 on resume batch — breaking to avoid infinite loop')
+          break
+        }
+
+        // Prepare for next batch
+        resumeCogsRunId = data?.cogsRunId ?? data?.cogs_run_id
+        currentOffset = data?.nextOffset ?? (currentOffset + 200)
+      } while (response?.success && response?.data?.needsResume)
+
+      // Merge accumulated totals into the final response data for display
+      if (response?.success && response?.data) {
+        response.data = {
+          ...response.data,
+          successful: accSuccessful,
+          skipped: accSkipped,
+          failed: accFailed,
+          partial: accPartial,
+          eligible: accEligible,
+          total: accTotal,
+        }
       }
 
       setChunkProgress(null)
