@@ -45,17 +45,25 @@ export interface Notification {
 }
 
 export interface CogsSummaryJson {
-  total: number
+  // Final summary fields (written on success)
+  total?: number
   eligible?: number
-  successful: number
-  skipped: number
-  failed: number
+  successful?: number
+  skipped?: number
+  failed?: number
   partial?: number
   skip_reasons?: object[]
   date_from?: string
   date_to?: string
   import_batch_id?: string
   method?: string
+  // In-progress / resume fields (written by updateCogsRunProgress)
+  total_so_far?: number
+  successful_so_far?: number
+  skipped_so_far?: number
+  failed_so_far?: number
+  offset_completed?: number
+  _phase?: string
 }
 
 // ─────────────────────────────────────────────
@@ -468,5 +476,47 @@ export async function getRecentCogsRunsFromRunsTable(limit = 20): Promise<CogsRu
   } catch (err) {
     console.error('Unexpected error in getRecentCogsRunsFromRunsTable:', err)
     return []
+  }
+}
+
+// ─────────────────────────────────────────────
+// 11) getRunStatusForDateRange
+// ─────────────────────────────────────────────
+
+/**
+ * Check whether a successful or failed run already exists for the given date range.
+ * Used by ApplyCOGSMTDModal to warn about duplicate reruns and show resume info.
+ */
+export async function getRunStatusForDateRange(
+  dateFrom: string,
+  dateTo: string
+): Promise<{ successRun: CogsRun | null; failedRun: CogsRun | null }> {
+  try {
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+    if (authError || !user) return { successRun: null, failedRun: null }
+
+    const { data, error } = await supabase
+      .from('cogs_allocation_runs')
+      .select('*')
+      .eq('created_by', user.id)
+      .in('status', ['success', 'failed'])
+      .eq('trigger_source', 'DATE_RANGE')
+      .eq('date_from', dateFrom)
+      .eq('date_to', dateTo)
+      .order('created_at', { ascending: false })
+      .limit(10)
+
+    if (error || !data) return { successRun: null, failedRun: null }
+
+    const rows = data as CogsRun[]
+    const successRun = rows.find((r) => r.status === 'success') ?? null
+    const failedRun = rows.find((r) => r.status === 'failed') ?? null
+    return { successRun, failedRun }
+  } catch {
+    return { successRun: null, failedRun: null }
   }
 }

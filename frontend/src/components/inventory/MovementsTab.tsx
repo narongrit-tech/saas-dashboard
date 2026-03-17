@@ -69,6 +69,10 @@ export function MovementsTab() {
   // Refresh trigger for run history
   const [runHistoryRefresh, setRunHistoryRefresh] = useState(0)
 
+  // Prefill dates for "Continue failed run" flow
+  const [prefillStartDate, setPrefillStartDate] = useState<string | undefined>(undefined)
+  const [prefillEndDate, setPrefillEndDate] = useState<string | undefined>(undefined)
+
   useEffect(() => {
     loadData()
     checkAdmin()
@@ -106,6 +110,21 @@ export function MovementsTab() {
   function handleCOGSSuccess() {
     loadData()
     setRunHistoryRefresh(prev => prev + 1)
+  }
+
+  function handleContinueRun(dateFrom: string, dateTo: string) {
+    setPrefillStartDate(dateFrom)
+    setPrefillEndDate(dateTo)
+    setShowCOGSMTDModal(true)
+  }
+
+  function handleCOGSModalClose(open: boolean) {
+    setShowCOGSMTDModal(open)
+    if (!open) {
+      // Clear prefill when modal closes
+      setPrefillStartDate(undefined)
+      setPrefillEndDate(undefined)
+    }
   }
 
   // Filter allocations by Order ID search
@@ -311,6 +330,7 @@ export function MovementsTab() {
         <TabsContent value="runhistory">
           <RunHistorySection
             onViewDetails={handleViewRunDetails}
+            onContinueRun={handleContinueRun}
             refreshTrigger={runHistoryRefresh}
           />
         </TabsContent>
@@ -345,9 +365,11 @@ export function MovementsTab() {
       {isAdmin && (
         <ApplyCOGSMTDModal
           open={showCOGSMTDModal}
-          onOpenChange={setShowCOGSMTDModal}
+          onOpenChange={handleCOGSModalClose}
           onSuccess={handleCOGSSuccess}
           onViewRunDetails={handleViewRunDetails}
+          initialStartDate={prefillStartDate}
+          initialEndDate={prefillEndDate}
         />
       )}
 

@@ -173,47 +173,86 @@ export default async function CogsRunDetailPage({ params }: PageProps) {
         </div>
       )}
 
-      {/* Error message */}
-      {run.status === 'failed' && run.error_message && (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4">
-          <p className="text-sm font-semibold text-red-800 mb-1">ข้อผิดพลาด</p>
-          <p className="text-sm text-red-700 whitespace-pre-wrap">{run.error_message}</p>
+      {/* Error message + resume info */}
+      {run.status === 'failed' && (
+        <div className="space-y-3">
+          {run.error_message && (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+              <p className="text-sm font-semibold text-red-800 mb-1">ข้อผิดพลาด</p>
+              <p className="text-sm text-red-700 whitespace-pre-wrap">{run.error_message}</p>
+            </div>
+          )}
+          {(() => {
+            const s = run.summary_json as Record<string, any> | null
+            const offset = s?.offset_completed ?? 0
+            const totalSoFar = s?.total_so_far ?? 0
+            if (offset > 0) {
+              return (
+                <div className="rounded-lg border border-orange-200 bg-orange-50 p-4">
+                  <p className="text-sm font-semibold text-orange-800 mb-1">Resume Available</p>
+                  <p className="text-sm text-orange-700">
+                    Run นี้ timeout ที่ offset <strong>{offset}</strong> — ประมวลผลไปแล้ว {totalSoFar} orders
+                    ({s?.successful_so_far ?? 0} สำเร็จ, {s?.skipped_so_far ?? 0} ข้าม)
+                  </p>
+                  <p className="text-xs text-orange-600 mt-1">
+                    กลับไปหน้า Inventory → Run History → กดปุ่ม Continue เพื่อต่อจากจุดนี้
+                  </p>
+                </div>
+              )
+            }
+            return null
+          })()}
         </div>
       )}
 
-      {/* Summary Stats (success only) */}
-      {run.status === 'success' && summary && (
+      {/* Summary Stats (success and failed runs with partial progress) */}
+      {(run.status === 'success' || (run.status === 'failed' && summary)) && summary && (
         <>
           <div className="rounded-lg border bg-card p-5">
             <h2 className="font-semibold text-base mb-4">สรุปผล</h2>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="text-center p-3 rounded-md bg-muted/40">
-                <p className="text-2xl font-bold">{summary.total ?? 0}</p>
-                <p className="text-xs text-muted-foreground mt-1">Total Orders</p>
-              </div>
-              <div className="text-center p-3 rounded-md bg-blue-50 dark:bg-blue-950/20">
-                <p className="text-2xl font-bold text-blue-700">{summary.eligible ?? 0}</p>
-                <p className="text-xs text-muted-foreground mt-1">Eligible</p>
-              </div>
-              <div className="text-center p-3 rounded-md bg-green-50 dark:bg-green-950/20">
-                <p className="text-2xl font-bold text-green-700">{summary.successful ?? 0}</p>
-                <p className="text-xs text-muted-foreground mt-1">สำเร็จ</p>
-              </div>
-              <div className="text-center p-3 rounded-md bg-yellow-50 dark:bg-yellow-950/20">
-                <p className="text-2xl font-bold text-yellow-700">{summary.skipped ?? 0}</p>
-                <p className="text-xs text-muted-foreground mt-1">ข้าม</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4 mt-4">
-              <div className="text-center p-3 rounded-md bg-orange-50 dark:bg-orange-950/20">
-                <p className="text-xl font-bold text-orange-700">{summary.partial ?? 0}</p>
-                <p className="text-xs text-muted-foreground mt-1">Partial (bundle)</p>
-              </div>
-              <div className="text-center p-3 rounded-md bg-red-50 dark:bg-red-950/20">
-                <p className="text-xl font-bold text-red-700">{summary.failed ?? 0}</p>
-                <p className="text-xs text-muted-foreground mt-1">ล้มเหลว</p>
-              </div>
-            </div>
+            {(() => {
+              const isFailed = run.status === 'failed'
+              const total      = isFailed ? (summary.total_so_far      ?? summary.total      ?? 0) : (summary.total      ?? 0)
+              const eligible   = summary.eligible ?? 0
+              const successful = isFailed ? (summary.successful_so_far ?? summary.successful ?? 0) : (summary.successful ?? 0)
+              const skipped    = isFailed ? (summary.skipped_so_far    ?? summary.skipped    ?? 0) : (summary.skipped    ?? 0)
+              const partial    = summary.partial ?? 0
+              const failed     = isFailed ? (summary.failed_so_far     ?? summary.failed     ?? 0) : (summary.failed     ?? 0)
+              return (
+                <>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="text-center p-3 rounded-md bg-muted/40">
+                      <p className="text-2xl font-bold">{total}</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {isFailed ? 'ประมวลผลแล้ว' : 'Total Orders'}
+                      </p>
+                    </div>
+                    <div className="text-center p-3 rounded-md bg-blue-50 dark:bg-blue-950/20">
+                      <p className="text-2xl font-bold text-blue-700">{eligible}</p>
+                      <p className="text-xs text-muted-foreground mt-1">Eligible</p>
+                    </div>
+                    <div className="text-center p-3 rounded-md bg-green-50 dark:bg-green-950/20">
+                      <p className="text-2xl font-bold text-green-700">{successful}</p>
+                      <p className="text-xs text-muted-foreground mt-1">สำเร็จ</p>
+                    </div>
+                    <div className="text-center p-3 rounded-md bg-yellow-50 dark:bg-yellow-950/20">
+                      <p className="text-2xl font-bold text-yellow-700">{skipped}</p>
+                      <p className="text-xs text-muted-foreground mt-1">ข้าม</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 mt-4">
+                    <div className="text-center p-3 rounded-md bg-orange-50 dark:bg-orange-950/20">
+                      <p className="text-xl font-bold text-orange-700">{partial}</p>
+                      <p className="text-xs text-muted-foreground mt-1">Partial (bundle)</p>
+                    </div>
+                    <div className="text-center p-3 rounded-md bg-red-50 dark:bg-red-950/20">
+                      <p className="text-xl font-bold text-red-700">{failed}</p>
+                      <p className="text-xs text-muted-foreground mt-1">ล้มเหลว</p>
+                    </div>
+                  </div>
+                </>
+              )
+            })()}
           </div>
 
           {/* Skip Reasons */}

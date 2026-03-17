@@ -32,6 +32,13 @@ export function ActiveRunBanner({ run, onRefresh, isRefreshing }: ActiveRunBanne
   const method = summary?.method ?? null
   const showUpdatedAt = run.updated_at && run.updated_at !== run.created_at
 
+  // For in-progress runs, use _so_far fields; fall back to final fields
+  const displayTotal      = summary?.total_so_far      ?? summary?.total      ?? 0
+  const displaySuccessful = summary?.successful_so_far ?? summary?.successful ?? 0
+  const displaySkipped    = summary?.skipped_so_far    ?? summary?.skipped    ?? 0
+  const displayFailed     = summary?.failed_so_far     ?? summary?.failed     ?? 0
+  const offsetCompleted   = summary?.offset_completed  ?? 0
+
   return (
     <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-700 p-4 space-y-2">
       {/* Header row */}
@@ -74,14 +81,23 @@ export function ActiveRunBanner({ run, onRefresh, isRefreshing }: ActiveRunBanne
               )}
             </div>
 
-            {/* Partial counts if available */}
-            {summary && (summary.total ?? 0) > 0 && (
-              <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
-                ผลล่าสุดที่ทราบ: {summary.successful ?? 0} สำเร็จ
-                {' · '}{summary.skipped ?? 0} ข้าม
-                {' · '}{summary.failed ?? 0} ล้มเหลว
-                {' · '}{summary.total ?? '?'} รวม
-              </p>
+            {/* Progress stats */}
+            {displayTotal > 0 && (
+              <div className="mt-2 space-y-1">
+                <p className="text-xs text-amber-700 dark:text-amber-300">
+                  ประมวลผลแล้ว: <strong>{displayTotal}</strong> orders
+                  {' · '}<span className="text-green-700 dark:text-green-400">{displaySuccessful} สำเร็จ</span>
+                  {' · '}<span className="text-yellow-700 dark:text-yellow-400">{displaySkipped} ข้าม</span>
+                  {displayFailed > 0 && (
+                    <>{' · '}<span className="text-red-700 dark:text-red-400">{displayFailed} ล้มเหลว</span></>
+                  )}
+                </p>
+                {offsetCompleted > 0 && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    ตำแหน่งล่าสุด: offset {offsetCompleted}
+                  </p>
+                )}
+              </div>
             )}
           </div>
         </div>
