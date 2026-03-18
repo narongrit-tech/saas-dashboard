@@ -4184,7 +4184,7 @@ export async function createAdjustIn(params: {
       return { success: false, error: 'Cannot adjust bundle SKUs directly — adjust component SKUs instead' }
     }
 
-    // Create receipt layer (no created_by — matches createStockInForSku pattern)
+    // Create receipt layer with created_by so RLS INSERT policy (created_by = auth.uid()) passes
     const { data: layer, error: layerError } = await supabase
       .from('inventory_receipt_layers')
       .insert({
@@ -4196,6 +4196,7 @@ export async function createAdjustIn(params: {
         ref_type: 'ADJUST_IN',
         ref_id: null,
         is_voided: false,
+        created_by: user.id,
       })
       .select('id')
       .single()
