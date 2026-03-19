@@ -3824,25 +3824,39 @@ export async function applyCOGSForBatch(importBatchId: string): Promise<{
       }
     }
 
-    // Count eligible orders before creating run
+    // Count eligible orders before creating run.
+    // Eligible = shipped (already guaranteed by query) AND not yet allocated.
+    // Orders with missing seller_sku or invalid quantity are NOT excluded here —
+    // those will be processed and skipped (MISSING_SKU / INVALID_QUANTITY) inside
+    // the loop. Excluding them here would falsely block Shopee batches where SKU
+    // mapping has not been set up yet.
+    const totalShipped = orders.length
+    const totalAllocated = orders.filter((o) => {
+      const isBundle = o.seller_sku && bundleSkuSet.has(o.seller_sku)
+      return !isBundle && allocatedOrderIds.has(o.id)
+    }).length
+    // Bundles are always eligible (partial allocations can be retried)
     const eligibleCount = orders.filter((o) => {
       const isBundle = o.seller_sku && bundleSkuSet.has(o.seller_sku)
-      if (!isBundle && allocatedOrderIds.has(o.id)) return false
-      if (!o.seller_sku || o.seller_sku.trim() === '') return false
-      if (o.quantity == null || !Number.isFinite(o.quantity) || o.quantity <= 0) return false
-      return true
+      if (isBundle) return true
+      return !allocatedOrderIds.has(o.id)
     }).length
 
+    console.log(
+      `[applyCOGSForBatch] Pre-validation (import_batch_id=${importBatchId}): ` +
+      `total_shipped=${totalShipped}, total_allocated=${totalAllocated}, eligible=${eligibleCount}`
+    )
+
     if (eligibleCount === 0) {
-      console.log(`[applyCOGSForBatch] No eligible orders in import_batch_id=${importBatchId} (${orders.length} total, all already allocated or invalid) — no run created`)
+      console.log(`[applyCOGSForBatch] No eligible orders in import_batch_id=${importBatchId} — all ${totalShipped} shipped orders are already allocated`)
       return {
         success: false,
-        error: `ไม่มี orders ที่ eligible ใน batch นี้ — ${orders.length} orders fetched แต่ allocated หรือ invalid ทั้งหมด`,
+        error: `ไม่มี orders ที่ eligible ใน batch นี้ — ${totalShipped} orders shipped แต่ allocated ทั้งหมดแล้ว (ไม่จำเป็นต้องรันซ้ำ)`,
         data: null,
       }
     }
 
-    console.log(`[applyCOGSForBatch] Pre-validation passed: ${eligibleCount} eligible of ${orders.length} total (import_batch_id=${importBatchId})`)
+    console.log(`[applyCOGSForBatch] Pre-validation passed: ${eligibleCount} eligible of ${totalShipped} shipped (import_batch_id=${importBatchId})`)
 
     // ── GUARD: check for concurrent running IMPORT_BATCH run for same batch ──
     const { data: existingBatchRun } = await supabase
