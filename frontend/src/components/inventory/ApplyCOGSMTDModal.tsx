@@ -142,46 +142,70 @@ export function ApplyCOGSMTDModal({
     setResult(null)
     setChunkProgress(null)
 
-    let modalWasClosedDuringProcessing = false
+    // Auto-retry loop: when server hits Vercel's 60s limit it returns needsResume=true.
+    // The loop re-calls applyCOGSMTD which automatically resumes from the saved offset.
+    const MAX_AUTO_RETRIES = 20
+    let autoRetryCount = 0
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let finalResponse: any = null
 
     try {
-      const resumeOffset = (existingFailedRun?.summary_json as CogsSummaryJson | null)?.offset_completed ?? 0
-      setChunkProgress(
-        resumeOffset > 0
-          ? `กำลังต่อจาก offset ${resumeOffset} — อาจใช้เวลาสักครู่…`
-          : 'กำลังประมวลผล orders ทั้งหมด — อาจใช้เวลาสักครู่…'
-      )
+      while (true) {
+        const progressMsg =
+          autoRetryCount === 0
+            ? (resumeOffset > 0
+                ? `กำลังต่อจาก offset ${resumeOffset} — อาจใช้เวลาสักครู่…`
+                : 'กำลังประมวลผล orders ทั้งหมด — อาจใช้เวลาสักครู่…')
+            : `กำลังประมวลผลต่อ (รอบที่ ${autoRetryCount + 1}) — อาจใช้เวลาสักครู่…`
+        setChunkProgress(progressMsg)
 
-      const response = await applyCOGSMTD({ method: 'FIFO', startDate, endDate })
+        const response = await applyCOGSMTD({ method: 'FIFO', startDate, endDate })
+
+        if (response.success) {
+          finalResponse = response
+          break
+        }
+
+        // Server returned needsResume=true (timeout, progress saved) — auto-retry
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if ((response as any).needsResume && autoRetryCount < MAX_AUTO_RETRIES) {
+          autoRetryCount++
+          continue
+        }
+
+        // Real error or max retries reached
+        finalResponse = response
+        break
+      }
 
       setChunkProgress(null)
-      modalWasClosedDuringProcessing = !open
+      const modalWasClosedDuringProcessing = !open
 
-      if (!response.success) {
+      if (!finalResponse.success) {
         if (modalWasClosedDuringProcessing) {
           toast({
             variant: 'destructive',
             title: 'Apply COGS ล้มเหลว',
-            description: response.error || 'เกิดข้อผิดพลาด',
+            description: finalResponse.error || 'เกิดข้อผิดพลาด',
           })
         } else {
-          setError(response.error || 'เกิดข้อผิดพลาด')
+          setError(finalResponse.error || 'เกิดข้อผิดพลาด')
         }
       } else {
         if (modalWasClosedDuringProcessing) {
-          const data = response.data
+          const data = finalResponse.data
           toast({
             title: 'Apply COGS เสร็จสิ้น',
             description: `${data?.successful ?? 0} สำเร็จ, ${data?.skipped ?? 0} ข้าม, ${data?.failed ?? 0} ล้มเหลว — ดูรายละเอียดที่กระดิ่งมุมขวาบน`,
           })
         } else {
-          setResult(response.data)
+          setResult(finalResponse.data)
         }
         if (onSuccess) onSuccess()
       }
     } catch (err) {
       setChunkProgress(null)
-      modalWasClosedDuringProcessing = !open
+      const modalWasClosedDuringProcessing = !open
       const msg = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด'
       if (modalWasClosedDuringProcessing) {
         toast({ variant: 'destructive', title: 'Apply COGS ล้มเหลว', description: msg })

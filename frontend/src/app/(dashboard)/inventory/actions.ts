@@ -1065,7 +1065,7 @@ export async function applyCOGSMTD(params: {
         const msg = `Timeout safety triggered after ${elapsedSec}s — processed ${accSummary.total} orders so far (offset=${currentOffset}). Re-run to continue from offset ${currentOffset}.`
         console.warn(`[applyCOGSMTD] ${msg}`)
         if (cogs_run_id) await completeCogsRunFailed(cogs_run_id, msg)
-        return { success: false, error: msg, data: null }
+        return { success: false, needsResume: true, error: msg, data: null }
       }
 
       // Fetch next window
@@ -3735,14 +3735,153 @@ export async function applyCOGSForBatch(importBatchId: string): Promise<{
       }
     }
 
-    // Create cogs_allocation_run record
+    // ── PRE-VALIDATE: Fetch orders BEFORE creating cogs_allocation_run ──
+    // Never create a "running" row without first confirming there is work to do.
+    console.log(`[applyCOGSForBatch] Pre-validating import_batch_id=${importBatchId}`)
+    const PAGE_SIZE = 1000
+    let allOrders: any[] = []
+    let currentPage = 0
+    let hasMore = true
+
+    while (hasMore) {
+      const from = currentPage * PAGE_SIZE
+      const to = from + PAGE_SIZE - 1
+
+      const { data: pageOrders, error: ordersError } = await supabase
+        .from('sales_orders')
+        .select('id, order_id, seller_sku, quantity, shipped_at, status_group')
+        .eq('import_batch_id', importBatchId)
+        .eq('created_by', user.id)
+        .neq('status_group', 'ยกเลิกแล้ว')
+        .not('shipped_at', 'is', null)
+        .order('shipped_at', { ascending: true })
+        .order('order_id', { ascending: true })
+        .range(from, to)
+
+      if (ordersError) {
+        console.error(`[applyCOGSForBatch] Error fetching orders (import_batch_id=${importBatchId}):`, ordersError)
+        return { success: false, error: ordersError.message, data: null }
+      }
+
+      if (pageOrders && pageOrders.length > 0) {
+        allOrders = allOrders.concat(pageOrders)
+      }
+
+      hasMore = !!(pageOrders && pageOrders.length === PAGE_SIZE)
+      currentPage++
+      if (currentPage >= 100) hasMore = false
+    }
+
+    const orders = allOrders
+
+    if (orders.length === 0) {
+      console.log(`[applyCOGSForBatch] No shipped orders found for import_batch_id=${importBatchId} — no run created`)
+      return {
+        success: false,
+        error: `ไม่พบ orders ที่ shipped สำหรับ import batch นี้ (batch_id: ${importBatchId}) — กรุณาตรวจสอบว่า orders มีสถานะ shipped แล้ว`,
+        data: null,
+      }
+    }
+
+    console.log(`[applyCOGSForBatch] Found ${orders.length} shipped orders for import_batch_id=${importBatchId}`)
+
+    // ── PRE-VALIDATE: Fetch bundle context ──
+    const { data: bundleItemsData } = await supabase
+      .from('inventory_items')
+      .select('sku_internal')
+      .eq('is_bundle', true)
+
+    const bundleSkuSet = new Set<string>((bundleItemsData || []).map((i) => i.sku_internal))
+
+    // ── PRE-VALIDATE: Check existing allocations (non-bundle only) ──
+    // Use sales_orders.id (uuid) as the canonical key for inventory_cogs_allocations
+    const nonBundleOrderIds = orders
+      .filter((o) => o.seller_sku && !bundleSkuSet.has(o.seller_sku))
+      .map((o) => o.id)
+
+    const allocatedOrderIds = new Set<string>()
+
+    if (nonBundleOrderIds.length > 0) {
+      const CHUNK_SIZE = 200
+      for (let i = 0; i < nonBundleOrderIds.length; i += CHUNK_SIZE) {
+        const chunk = nonBundleOrderIds.slice(i, i + CHUNK_SIZE)
+        const { data: chunkAllocs, error: allocError } = await supabase
+          .from('inventory_cogs_allocations')
+          .select('order_id')
+          .filter('order_id::text', 'in', `(${chunk.join(',')})`)
+          .eq('is_reversal', false)
+
+        if (allocError) {
+          console.error(`[applyCOGSForBatch] Error checking allocations (import_batch_id=${importBatchId}):`, allocError)
+          return { success: false, error: allocError.message, data: null }
+        }
+
+        if (chunkAllocs) {
+          for (const row of chunkAllocs) {
+            allocatedOrderIds.add(String(row.order_id))
+          }
+        }
+      }
+    }
+
+    // Count eligible orders before creating run
+    const eligibleCount = orders.filter((o) => {
+      const isBundle = o.seller_sku && bundleSkuSet.has(o.seller_sku)
+      if (!isBundle && allocatedOrderIds.has(o.id)) return false
+      if (!o.seller_sku || o.seller_sku.trim() === '') return false
+      if (o.quantity == null || !Number.isFinite(o.quantity) || o.quantity <= 0) return false
+      return true
+    }).length
+
+    if (eligibleCount === 0) {
+      console.log(`[applyCOGSForBatch] No eligible orders in import_batch_id=${importBatchId} (${orders.length} total, all already allocated or invalid) — no run created`)
+      return {
+        success: false,
+        error: `ไม่มี orders ที่ eligible ใน batch นี้ — ${orders.length} orders fetched แต่ allocated หรือ invalid ทั้งหมด`,
+        data: null,
+      }
+    }
+
+    console.log(`[applyCOGSForBatch] Pre-validation passed: ${eligibleCount} eligible of ${orders.length} total (import_batch_id=${importBatchId})`)
+
+    // ── GUARD: check for concurrent running IMPORT_BATCH run for same batch ──
+    const { data: existingBatchRun } = await supabase
+      .from('cogs_allocation_runs')
+      .select('id, created_at, updated_at')
+      .eq('created_by', user.id)
+      .eq('status', 'running')
+      .eq('trigger_source', 'IMPORT_BATCH')
+      .eq('import_batch_id', importBatchId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (existingBatchRun) {
+      const lastActivityMs = Date.now() - new Date(existingBatchRun.updated_at ?? existingBatchRun.created_at).getTime()
+      const STALE_MS = 10 * 60 * 1000
+      if (lastActivityMs > STALE_MS) {
+        console.warn(`[applyCOGSForBatch] Auto-failing stale cogs_run_id=${existingBatchRun.id} for import_batch_id=${importBatchId} (inactive ${Math.round(lastActivityMs / 60000)} min)`)
+        await completeCogsRunFailed(existingBatchRun.id, `Auto-failed: no activity for ${Math.round(lastActivityMs / 60000)} min (import_batch_id=${importBatchId})`)
+        // Fall through and allow new run
+      } else {
+        return {
+          success: false,
+          error: `มี COGS run สำหรับ batch นี้ที่กำลังทำงานอยู่ (cogs_run_id: ${existingBatchRun.id}, import_batch_id: ${importBatchId})`,
+          data: null,
+        }
+      }
+    }
+
+    // ── CREATE cogs_allocation_runs row (only after pre-validation passes) ──
     const cogsRunResult = await createCogsRun({
       triggerSource: 'IMPORT_BATCH',
       importBatchId,
     })
     if (cogsRunResult.success && cogsRunResult.runId) {
       cogs_run_id = cogsRunResult.runId
-      console.log(`Created cogs_allocation_run (batch): ${cogs_run_id}`)
+      console.log(`[applyCOGSForBatch] Created cogs_allocation_runs row: cogs_run_id=${cogs_run_id}, import_batch_id=${importBatchId}`)
+    } else {
+      console.error(`[applyCOGSForBatch] Failed to create cogs_allocation_runs row for import_batch_id=${importBatchId}:`, cogsRunResult.error)
     }
 
     // Create legacy run record
@@ -3767,113 +3906,9 @@ export async function applyCOGSForBatch(importBatchId: string): Promise<{
       run_id = runData.id
     }
 
-    // ── Fetch orders for this import batch ──
-    const PAGE_SIZE = 1000
-    let allOrders: any[] = []
-    let currentPage = 0
-    let hasMore = true
-
-    while (hasMore) {
-      const from = currentPage * PAGE_SIZE
-      const to = from + PAGE_SIZE - 1
-
-      const { data: pageOrders, error: ordersError } = await supabase
-        .from('sales_orders')
-        .select('id, order_id, seller_sku, quantity, shipped_at, status_group')
-        .eq('import_batch_id', importBatchId)
-        .eq('created_by', user.id)
-        .neq('status_group', 'ยกเลิกแล้ว')
-        .not('shipped_at', 'is', null)
-        .order('shipped_at', { ascending: true })
-        .order('order_id', { ascending: true })
-        .range(from, to)
-
-      if (ordersError) {
-        console.error('Error fetching batch orders:', ordersError)
-        if (cogs_run_id) {
-          await completeCogsRunFailed(cogs_run_id, ordersError.message)
-        }
-        return { success: false, error: ordersError.message, data: null }
-      }
-
-      if (pageOrders && pageOrders.length > 0) {
-        allOrders = allOrders.concat(pageOrders)
-      }
-
-      hasMore = !!(pageOrders && pageOrders.length === PAGE_SIZE)
-      currentPage++
-      if (currentPage >= 100) {
-        hasMore = false
-      }
-    }
-
-    const orders = allOrders
-
-    if (!orders || orders.length === 0) {
-      const emptySummary = {
-        total: 0, eligible: 0, successful: 0, skipped: 0, failed: 0, partial: 0,
-        errors: [],
-        skip_reasons: [],
-        run_id,
-        cogs_run_id,
-        message: `ไม่มี orders ที่ shipped ใน batch ${importBatchId}`,
-      }
-      if (cogs_run_id) {
-        await completeCogsRunSuccess(cogs_run_id, emptySummary)
-        await createNotificationForRun(cogs_run_id, {
-          total: 0, successful: 0, skipped: 0, failed: 0,
-        })
-      }
-      return { success: true, data: emptySummary }
-    }
-
-    // ── Fetch bundle SKUs ──
-    const { data: bundleItemsData } = await supabase
-      .from('inventory_items')
-      .select('sku_internal')
-      .eq('is_bundle', true)
-
-    const bundleSkuSet = new Set<string>((bundleItemsData || []).map((i) => i.sku_internal))
-
-    // ── Check existing allocations (non-bundle only) ──
-    // Use sales_orders.id (uuid) as the canonical key for inventory_cogs_allocations
-    const nonBundleOrderIds = orders
-      .filter((o) => o.seller_sku && !bundleSkuSet.has(o.seller_sku))
-      .map((o) => o.id)
-
-    const allocatedOrderIds = new Set<string>()
-
-    if (nonBundleOrderIds.length > 0) {
-      const CHUNK_SIZE = 200
-      const chunks: string[][] = []
-      for (let i = 0; i < nonBundleOrderIds.length; i += CHUNK_SIZE) {
-        chunks.push(nonBundleOrderIds.slice(i, i + CHUNK_SIZE))
-      }
-
-      for (const chunk of chunks) {
-        // Use order_id::text cast to avoid "character varying = uuid" type mismatch in PostgREST.
-        const { data: chunkAllocs, error: allocError } = await supabase
-          .from('inventory_cogs_allocations')
-          .select('order_id')
-          .filter('order_id::text', 'in', `(${chunk.join(',')})`)
-          .eq('is_reversal', false)
-
-        if (allocError) {
-          if (cogs_run_id) {
-            await completeCogsRunFailed(cogs_run_id, allocError.message)
-          }
-          return { success: false, error: allocError.message, data: null }
-        }
-
-        if (chunkAllocs) {
-          for (const row of chunkAllocs) {
-            allocatedOrderIds.add(String(row.order_id))
-          }
-        }
-      }
-    }
-
-    // ── Process loop (same as applyCOGSMTD) ──
+    // ── PROCESS LOOP (with timeout safety) ──
+    const LOOP_START_MS = Date.now()
+    const TIMEOUT_MS = 50_000 // 50s safety margin for Vercel Hobby 60s limit
     interface BatchSkipReason {
       code: string
       label: string
@@ -3921,8 +3956,20 @@ export async function applyCOGSForBatch(importBatchId: string): Promise<{
     }
 
     for (const order of orders) {
+      // ── Timeout safety ──
+      const elapsed = Date.now() - LOOP_START_MS
+      if (elapsed > TIMEOUT_MS) {
+        const elapsedSec = Math.round(elapsed / 1000)
+        const msg = `Timeout after ${elapsedSec}s — ประมวลผล ${summary.successful} orders สำเร็จ จาก ${orders.length} ทั้งหมด (cogs_run_id=${cogs_run_id ?? 'none'}, import_batch_id=${importBatchId})`
+        console.warn(`[applyCOGSForBatch] ${msg}`)
+        if (cogs_run_id) {
+          await completeCogsRunFailed(cogs_run_id, msg)
+        }
+        return { success: false, error: msg, data: null }
+      }
+
       const order_uuid = order.id          // UUID primary key — used for RPC + allocation checks
-      const order_id   = order.order_id   // TikTok/external ID — used for logging only
+      const order_id   = order.order_id   // TikTok/external order ID — for logging only
       const sku = order.seller_sku
       const qty = order.quantity
       const shipped_at = order.shipped_at
@@ -4094,6 +4141,7 @@ export async function applyCOGSForBatch(importBatchId: string): Promise<{
         import_batch_id: importBatchId,
         skip_reasons: skipReasonsArray,
       }
+      console.log(`[applyCOGSForBatch] Completing cogs_run_id=${cogs_run_id} as success (import_batch_id=${importBatchId}): ${summary.successful} successful, ${summary.skipped} skipped, ${summary.failed} failed`)
       await completeCogsRunSuccess(cogs_run_id, notifSummary)
       await createNotificationForRun(cogs_run_id, {
         total: summary.total,
@@ -4113,7 +4161,7 @@ export async function applyCOGSForBatch(importBatchId: string): Promise<{
       },
     }
   } catch (error) {
-    console.error('Unexpected error in applyCOGSForBatch:', error)
+    console.error(`[applyCOGSForBatch] Unexpected error (import_batch_id=${importBatchId}):`, error)
 
     if (typeof cogs_run_id === 'string' && cogs_run_id) {
       await completeCogsRunFailed(
