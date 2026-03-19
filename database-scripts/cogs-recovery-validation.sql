@@ -159,7 +159,7 @@ ORDER BY r.created_by, r.sku_internal;
 SELECT
   bc.bundle_sku,
   bc.component_sku,
-  bc.qty_per_bundle,
+  bc.quantity                             AS qty_per_bundle,
   COUNT(DISTINCT ca.order_id)                                    AS allocated_order_count,
   SUM(ca.qty)                                                    AS total_qty_allocated,
   SUM(ca.amount)                                                 AS total_cogs_amount
