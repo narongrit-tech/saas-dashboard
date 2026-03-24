@@ -421,7 +421,7 @@ export async function upsertIncomeRows(
   const { error, count } = await supabase
     .from('settlement_transactions')
     .upsert(dataToUpsert, {
-      onConflict: 'marketplace,txn_id,created_by',
+      onConflict: 'marketplace,txn_id',
       count: 'exact',
     });
 

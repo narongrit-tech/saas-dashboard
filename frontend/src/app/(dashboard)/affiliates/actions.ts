@@ -26,7 +26,6 @@ export async function getInternalAffiliates(): Promise<ActionResult<InternalAffi
     const { data, error } = await supabase
       .from('internal_affiliates')
       .select('*')
-      .eq('created_by', user.id)
       .order('created_at', { ascending: false })
 
     if (error) {
@@ -61,11 +60,10 @@ export async function createInternalAffiliate(input: CreateAffiliateInput): Prom
       return { success: false, error: 'กรุณากรอก Channel ID' }
     }
 
-    // Check for duplicate channel_id
+    // Check for duplicate channel_id (team-wide)
     const { data: existing } = await supabase
       .from('internal_affiliates')
       .select('id')
-      .eq('created_by', user.id)
       .eq('channel_id', input.channel_id.trim())
       .single()
 
@@ -137,12 +135,11 @@ export async function updateInternalAffiliate(
     if (input.is_active !== undefined) updateData.is_active = input.is_active
     if (input.notes !== undefined) updateData.notes = input.notes?.trim() || null
 
-    // Check for duplicate channel_id (if changing)
+    // Check for duplicate channel_id (team-wide, if changing)
     if (input.channel_id) {
       const { data: duplicate } = await supabase
         .from('internal_affiliates')
         .select('id')
-        .eq('created_by', user.id)
         .eq('channel_id', input.channel_id.trim())
         .neq('id', id)
         .single()
@@ -252,7 +249,6 @@ export async function getAffiliateReport(
           commission_amt_shop_ad
         )
       `)
-      .eq('created_by', user.id)
       .eq('is_active', true)
 
     // Apply filters on order_attribution

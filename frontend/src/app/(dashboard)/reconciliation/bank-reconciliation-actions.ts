@@ -612,7 +612,6 @@ export async function getSuggestedMatches(
       .from('bank_transactions')
       .select('*')
       .eq('id', bankTransactionId)
-      .eq('created_by', user.id)
       .single();
 
     if (txnError || !bankTxn) {
@@ -835,12 +834,11 @@ export async function createManualMatch(
       return { success: false, error: 'Unauthorized' };
     }
 
-    // Verify bank transaction exists and belongs to user
+    // Verify bank transaction exists and is accessible (team RLS enforced)
     const { data: bankTxn, error: txnError } = await supabase
       .from('bank_transactions')
       .select('id')
       .eq('id', bankTransactionId)
-      .eq('created_by', user.id)
       .single();
 
     if (txnError || !bankTxn) {

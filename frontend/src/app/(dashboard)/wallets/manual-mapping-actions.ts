@@ -646,7 +646,7 @@ export async function executeManualImport(
             import_batch_id: batch.id,
           },
           {
-            onConflict: 'created_by,source_row_hash',
+            onConflict: 'source_row_hash',
           }
         )
 

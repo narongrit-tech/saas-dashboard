@@ -719,11 +719,10 @@ export async function getCandidateBankTransactions(
       return { success: false, error: 'ไม่พบข้อมูล User กรุณา Login ใหม่' }
     }
 
-    // Get user's selected commission source accounts
+    // Get team's configured commission source accounts (team-shared config)
     const { data: sources, error: sourcesError } = await supabase
       .from('ceo_commission_sources')
       .select('bank_account_id')
-      .eq('created_by', user.id)
 
     if (sourcesError) {
       return { success: false, error: `โหลดแหล่งเงินไม่สำเร็จ: ${sourcesError.message}` }
@@ -852,11 +851,10 @@ export async function createCommissionFromBankTransaction(
       return { success: false, error: 'ไม่พบรายการธนาคารนี้หรือคุณไม่มีสิทธิ์เข้าถึง' }
     }
 
-    // Verify bank account is in user's commission sources
+    // Verify bank account is in team's commission sources (team-shared config)
     const { data: sourceCheck, error: sourceCheckError } = await supabase
       .from('ceo_commission_sources')
       .select('id')
-      .eq('created_by', user.id)
       .eq('bank_account_id', bankTxn.bank_account_id)
       .single()
 

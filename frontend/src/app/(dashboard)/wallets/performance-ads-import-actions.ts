@@ -78,7 +78,7 @@ async function upsertPerformanceChunkWithFallback(
 ): Promise<{ ok: boolean; insertedCount: number; mode: 'primary' | 'fallback'; error?: string }> {
   const { error: primaryError } = await supabase
     .from('ad_daily_performance')
-    .upsert(rows, { onConflict: 'created_by,source_row_hash' })
+    .upsert(rows, { onConflict: 'source_row_hash' })
 
   if (!primaryError) {
     return { ok: true, insertedCount: rows.length, mode: 'primary' }

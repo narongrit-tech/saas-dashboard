@@ -1099,7 +1099,7 @@ export async function importSalesChunk(
     const { data: upsertedRows, error: upsertError } = await supabase
       .from('sales_orders')
       .upsert(salesRows, {
-        onConflict: 'created_by,order_line_hash',
+        onConflict: 'order_line_hash',
         ignoreDuplicates: false, // Update existing rows
       })
       .select()
@@ -1700,7 +1700,7 @@ export async function importSalesToSystem(
     const { data: upsertedRows, error: upsertError } = await supabase
       .from('sales_orders')
       .upsert(salesRows, {
-        onConflict: 'created_by,order_line_hash',
+        onConflict: 'order_line_hash',
         ignoreDuplicates: false, // Update existing rows
       })
       .select()

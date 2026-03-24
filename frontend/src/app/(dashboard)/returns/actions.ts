@@ -1339,7 +1339,7 @@ export async function upsertSkuMapping(payload: {
       // Insert with upsert on (created_by, channel, marketplace_sku)
       const { error } = await supabase
         .from('inventory_sku_mappings')
-        .upsert(record, { onConflict: 'created_by,channel,marketplace_sku' })
+        .upsert(record, { onConflict: 'channel,marketplace_sku' })
       queryError = error
     }
 
