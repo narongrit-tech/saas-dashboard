@@ -52,7 +52,6 @@ export async function getReconciliationSummary(
       const { data, error } = await supabase
         .from('bank_transactions')
         .select('deposit, withdrawal, id')
-        .eq('created_by', user.id)
         .gte('txn_date', startStr)
         .lte('txn_date', endStr)
         .range(bankFrom, bankFrom + pageSize - 1);
@@ -88,7 +87,6 @@ export async function getReconciliationSummary(
       const { data, error } = await supabase
         .from('settlement_transactions')
         .select('settlement_amount, id')
-        .eq('created_by', user.id)
         .gte('settled_time', startStr)
         .lte('settled_time', endStr)
         .range(settlementFrom, settlementFrom + pageSize - 1);
@@ -122,7 +120,6 @@ export async function getReconciliationSummary(
       const { data, error } = await supabase
         .from('expenses')
         .select('amount, id')
-        .eq('created_by', user.id)
         .gte('expense_date', startStr)
         .lte('expense_date', endStr)
         .range(expenseFrom, expenseFrom + pageSize - 1);
@@ -155,7 +152,6 @@ export async function getReconciliationSummary(
       const { data, error } = await supabase
         .from('wallet_ledger')
         .select('amount, id')
-        .eq('created_by', user.id)
         .eq('entry_type', 'TOP_UP')
         .gte('date', startStr)
         .lte('date', endStr)
@@ -183,7 +179,6 @@ export async function getReconciliationSummary(
     const { data: matchedBankTxns } = await supabase
       .from('bank_reconciliations')
       .select('bank_transaction_id')
-      .eq('created_by', user.id)
       .in(
         'bank_transaction_id',
         bankTxns?.map((t) => t.id) || []
@@ -201,7 +196,6 @@ export async function getReconciliationSummary(
     const { data: matchedInternal } = await supabase
       .from('bank_reconciliations')
       .select('matched_type, matched_record_id')
-      .eq('created_by', user.id)
       .not('matched_record_id', 'is', null); // Only count records with linked IDs
 
     const matchedInternalIds = new Set(matchedInternal?.map((r) => r.matched_record_id) || []);
@@ -299,7 +293,6 @@ export async function getUnmatchedBankTransactions(
       const { data, error } = await supabase
         .from('bank_transactions')
         .select('*')
-        .eq('created_by', user.id)
         .gte('txn_date', startStr)
         .lte('txn_date', endStr)
         .order('txn_date', { ascending: false })
@@ -325,7 +318,6 @@ export async function getUnmatchedBankTransactions(
     const { data: matched } = await supabase
       .from('bank_reconciliations')
       .select('bank_transaction_id')
-      .eq('created_by', user.id)
       .in(
         'bank_transaction_id',
         bankTxns.map((t) => t.id)
@@ -390,7 +382,6 @@ export async function getUnmatchedInternalRecords(
         const { data, error } = await supabase
           .from('settlement_transactions')
           .select('id, settled_time, settlement_amount, txn_id')
-          .eq('created_by', user.id)
           .gte('settled_time', startStr)
           .lte('settled_time', endStr)
           .range(settlementFrom, settlementFrom + pageSize - 1);
@@ -412,7 +403,6 @@ export async function getUnmatchedInternalRecords(
         const { data: matched } = await supabase
           .from('bank_reconciliations')
           .select('matched_record_id')
-          .eq('created_by', user.id)
           .eq('matched_type', 'settlement')
           .in(
             'matched_record_id',
@@ -449,7 +439,6 @@ export async function getUnmatchedInternalRecords(
         const { data, error } = await supabase
           .from('expenses')
           .select('id, expense_date, amount, description, category')
-          .eq('created_by', user.id)
           .gte('expense_date', startStr)
           .lte('expense_date', endStr)
           .range(expenseFrom, expenseFrom + pageSize - 1);
@@ -471,7 +460,6 @@ export async function getUnmatchedInternalRecords(
         const { data: matched } = await supabase
           .from('bank_reconciliations')
           .select('matched_record_id')
-          .eq('created_by', user.id)
           .eq('matched_type', 'expense')
           .in(
             'matched_record_id',
@@ -507,7 +495,6 @@ export async function getUnmatchedInternalRecords(
         const { data, error } = await supabase
           .from('wallet_ledger')
           .select('id, date, amount, note')
-          .eq('created_by', user.id)
           .eq('entry_type', 'TOP_UP')
           .gte('date', startStr)
           .lte('date', endStr)
@@ -530,7 +517,6 @@ export async function getUnmatchedInternalRecords(
         const { data: matched } = await supabase
           .from('bank_reconciliations')
           .select('matched_record_id')
-          .eq('created_by', user.id)
           .eq('matched_type', 'wallet_topup')
           .in(
             'matched_record_id',
@@ -674,7 +660,6 @@ export async function getSuggestedMatches(
         const { data, error } = await supabase
           .from('settlement_transactions')
           .select('id, settled_time, settlement_amount, txn_id')
-          .eq('created_by', user.id)
           .gte('settled_time', startStr)
           .lte('settled_time', endStr)
           .not(
@@ -721,7 +706,6 @@ export async function getSuggestedMatches(
       const { data: reconciledExpenses } = await supabase
         .from('bank_reconciliations')
         .select('matched_record_id')
-        .eq('created_by', user.id)
         .eq('matched_type', 'expense')
         .not('matched_record_id', 'is', null);
 
@@ -730,7 +714,6 @@ export async function getSuggestedMatches(
       const { data: expenses } = await supabase
         .from('expenses')
         .select('id, expense_date, category, description, amount')
-        .eq('created_by', user.id)
         .gte('expense_date', startStr)
         .lte('expense_date', endStr)
         .order('expense_date', { ascending: false })
@@ -777,7 +760,6 @@ export async function getSuggestedMatches(
         const { data, error } = await supabase
           .from('wallet_ledger')
           .select('id, date, entry_type, amount, note')
-          .eq('created_by', user.id)
           .eq('entry_type', 'TOP_UP')
           .gte('date', startStr)
           .lte('date', endStr)

@@ -876,7 +876,6 @@ export async function applyCOGSMTD(params: {
     const { data: existingRun } = await supabase
       .from('cogs_allocation_runs')
       .select('id, created_at, updated_at')
-      .eq('created_by', user.id)
       .eq('status', 'running')
       .order('created_at', { ascending: false })
       .limit(1)
@@ -949,7 +948,6 @@ export async function applyCOGSMTD(params: {
     const { data: prevFailedRun } = await supabase
       .from('cogs_allocation_runs')
       .select('id, summary_json')
-      .eq('created_by', user.id)
       .eq('status', 'failed')
       .eq('trigger_source', 'DATE_RANGE')
       .eq('date_from', startDateISO)
@@ -1383,12 +1381,11 @@ export async function resumeAllocateMTD(params: {
     if (roleError || roleData?.role !== 'admin')
       return { success: false, error: 'ไม่มีสิทธิ์เข้าถึงฟังก์ชันนี้ (Admin only)', data: null }
 
-    // Verify the run belongs to this user and is still running
+    // Verify the run exists and is still running (team RLS enforced)
     const { data: runRow } = await supabase
       .from('cogs_allocation_runs')
       .select('id, status')
       .eq('id', cogsRunId)
-      .eq('created_by', user.id)
       .single()
 
     if (!runRow) return { success: false, error: `ไม่พบ COGS run: ${cogsRunId}`, data: null }
@@ -3450,7 +3447,6 @@ export async function saveSkusAndAllocate(params: {
       .from('sales_orders')
       .select('id, order_id, seller_sku, quantity, shipped_at, status_group')
       .in('id', orderUuids)
-      .eq('created_by', user.id)
 
     if (ordersError) {
       if (cogs_run_id) await completeCogsRunFailed(cogs_run_id, ordersError.message)
@@ -3751,7 +3747,6 @@ export async function applyCOGSForBatch(importBatchId: string): Promise<{
         .from('sales_orders')
         .select('id, order_id, seller_sku, quantity, shipped_at, status_group')
         .eq('import_batch_id', importBatchId)
-        .eq('created_by', user.id)
         .neq('status_group', 'ยกเลิกแล้ว')
         .not('shipped_at', 'is', null)
         .order('shipped_at', { ascending: true })
@@ -3862,7 +3857,6 @@ export async function applyCOGSForBatch(importBatchId: string): Promise<{
     const { data: existingBatchRun } = await supabase
       .from('cogs_allocation_runs')
       .select('id, created_at, updated_at')
-      .eq('created_by', user.id)
       .eq('status', 'running')
       .eq('trigger_source', 'IMPORT_BATCH')
       .eq('import_batch_id', importBatchId)

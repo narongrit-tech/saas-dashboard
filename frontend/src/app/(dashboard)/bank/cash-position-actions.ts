@@ -82,7 +82,6 @@ export async function getCashPosition(params: {
       .from('bank_transactions')
       .select('txn_date, deposit, withdrawal')
       .eq('bank_account_id', bankAccountId)
-      .eq('created_by', user.id)
       .gte('txn_date', startDate)
       .lte('txn_date', endDate)
       .order('txn_date', { ascending: true });
@@ -169,7 +168,6 @@ export async function getCompanyCashPosition(params: {
     const { data: accounts, error: accountsError } = await supabase
       .from('bank_accounts')
       .select('id')
-      .eq('created_by', user.id)
       .eq('is_active', true);
 
     if (accountsError) {

@@ -779,7 +779,6 @@ export async function getCandidateBankTransactions(
     const { data: declared, error: declaredError } = await supabase
       .from('ceo_commission_receipts')
       .select('bank_transaction_id')
-      .eq('created_by', user.id)
       .not('bank_transaction_id', 'is', null)
 
     if (declaredError) {
@@ -842,12 +841,11 @@ export async function createCommissionFromBankTransaction(
       return { success: false, error: 'ไม่พบข้อมูล User กรุณา Login ใหม่' }
     }
 
-    // Verify bank transaction exists and belongs to user
+    // Verify bank transaction exists and is accessible (team RLS enforced)
     const { data: bankTxn, error: bankTxnError } = await supabase
       .from('bank_transactions')
       .select('*')
       .eq('id', input.bank_transaction_id)
-      .eq('created_by', user.id)
       .single()
 
     if (bankTxnError || !bankTxn) {

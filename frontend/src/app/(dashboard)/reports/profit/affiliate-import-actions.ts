@@ -89,12 +89,10 @@ async function fetchExistingOrdersByIds(
     supabase
       .from('sales_orders')
       .select('order_id, external_order_id')
-      .eq('created_by', userId)
       .in('order_id', chunkIds),
     supabase
       .from('sales_orders')
       .select('order_id, external_order_id')
-      .eq('created_by', userId)
       .in('external_order_id', chunkIds)
   ])
 
@@ -849,7 +847,6 @@ export async function importAffiliateAttributions(
         .from('import_batches')
         .select('id, created_at, file_name, status, inserted_count')
         .eq('file_hash', fileHash)
-        .eq('created_by', user.id)
         .eq('marketplace', 'affiliate')
         .eq('report_type', 'affiliate_sales_th')
         .order('created_at', { ascending: false })

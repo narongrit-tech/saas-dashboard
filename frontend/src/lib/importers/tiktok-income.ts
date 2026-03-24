@@ -392,7 +392,6 @@ export async function upsertIncomeRows(
     .from('settlement_transactions')
     .select('txn_id')
     .eq('marketplace', 'tiktok')
-    .eq('created_by', userId)
     .in('txn_id', txnIds);
 
   const existingSet = new Set((existingTxns || []).map((t) => t.txn_id));

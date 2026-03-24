@@ -40,7 +40,6 @@ async function fetchBankAccounts(
   const { data, error } = await supabase
     .from('bank_accounts')
     .select('id, bank_name, account_number')
-    .eq('created_by', userId)
     .order('bank_name', { ascending: true })
 
   if (error) return { accounts: [], error: error.message }
@@ -67,7 +66,6 @@ async function fetchAllTransactions(
     let query = supabase
       .from('bank_transactions')
       .select('id, bank_account_id, deposit, withdrawal, txn_date, description')
-      .eq('created_by', userId)
       .gte('txn_date', from)
       .lte('txn_date', to)
       .order('txn_date', { ascending: true })
@@ -208,7 +206,6 @@ export async function getSankeyDrilldown(params: {
       const { data, error } = await supabase
         .from('bank_transactions')
         .select('id, bank_account_id, deposit, withdrawal, txn_date, description')
-        .eq('created_by', user.id)
         .in('id', chunk)
 
       if (error) throw new Error(`ดึงข้อมูล transactions ล้มเหลว: ${error.message}`)

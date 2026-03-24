@@ -1006,7 +1006,6 @@ export async function getAvailableWallets(): Promise<{
     const { data: wallets, error } = await supabase
       .from('wallets')
       .select('id, name, wallet_type')
-      .eq('created_by', user.id)
       .eq('is_active', true)
       .order('name', { ascending: true });
 
@@ -1063,7 +1062,6 @@ export async function searchExpenses(
     let query = supabase
       .from('expenses')
       .select('id, expense_date, category, subcategory, description, amount')
-      .eq('created_by', user.id)
       .gte('expense_date', startStr)
       .lte('expense_date', endStr)
       .order('expense_date', { ascending: false })
@@ -1090,7 +1088,6 @@ export async function searchExpenses(
     const { data: reconciled } = await supabase
       .from('bank_reconciliations')
       .select('matched_record_id')
-      .eq('created_by', user.id)
       .eq('matched_type', 'expense')
       .in('matched_record_id', expenseIds);
 

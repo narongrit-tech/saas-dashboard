@@ -409,7 +409,6 @@ export async function upsertOnholdRows(
     .from('unsettled_transactions')
     .select('txn_id, status')
     .eq('marketplace', 'tiktok')
-    .eq('created_by', userId)
     .in('txn_id', txnIds);
 
   const existingMap = new Map((existingTxns || []).map((t) => [t.txn_id, t.status]));

@@ -384,7 +384,6 @@ export async function getCogsRun(id: string): Promise<CogsRun | null> {
       .from('cogs_allocation_runs')
       .select('*')
       .eq('id', id)
-      .eq('created_by', user.id)
       .single()
 
     if (error || !data) {
@@ -423,7 +422,6 @@ export async function getActiveCogsRun(): Promise<CogsRun | null> {
     const { data, error } = await supabase
       .from('cogs_allocation_runs')
       .select('*')
-      .eq('created_by', user.id)
       .eq('status', 'running')
       .order('created_at', { ascending: false })
       .limit(1)
@@ -463,7 +461,6 @@ export async function getRecentCogsRunsFromRunsTable(limit = 20): Promise<CogsRu
     const { data, error } = await supabase
       .from('cogs_allocation_runs')
       .select('*')
-      .eq('created_by', user.id)
       .order('created_at', { ascending: false })
       .limit(limit)
 
@@ -502,7 +499,6 @@ export async function getRunStatusForDateRange(
     const { data, error } = await supabase
       .from('cogs_allocation_runs')
       .select('*')
-      .eq('created_by', user.id)
       .in('status', ['success', 'failed'])
       .eq('trigger_source', 'DATE_RANGE')
       .eq('date_from', dateFrom)

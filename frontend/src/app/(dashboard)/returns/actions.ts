@@ -27,7 +27,6 @@ const _resolveSkuInternal = async (
   const { data, error } = await supabase
     .from('inventory_sku_mappings')
     .select('sku_internal')
-    .eq('created_by', userId)
     .eq('channel', channel)
     .eq('marketplace_sku', marketplace_sku)
     .maybeSingle()
@@ -64,7 +63,6 @@ const _resolveSalesOrderByNote = async (
   const { data, error } = await supabase
     .from('sales_orders')
     .select('id')
-    .eq('created_by', userId)
     .or(`order_id.eq.${trimmed},external_order_id.eq.${trimmed}`)
     .limit(1)
     .maybeSingle()
@@ -295,7 +293,6 @@ export async function searchOrdersForReturn(
         created_by
       `
       )
-      .eq('created_by', user.id)
       .or(
         `external_order_id.ilike.%${normalized}%,tracking_number.ilike.%${normalized}%`
       )
@@ -639,7 +636,6 @@ export async function getReturnsQueue(filters?: {
         created_by
       `
       )
-      .eq('created_by', user.id)
       .gte('order_date', dateFrom)
       .lte('order_date', dateTo)
       .not('shipped_at', 'is', null) // Must have shipped
@@ -780,7 +776,6 @@ export async function getRecentReturns(): Promise<{
         created_by
       `
       )
-      .eq('created_by', user.id)
       .order('returned_at', { ascending: false })
       .limit(20)
 
@@ -1289,7 +1284,6 @@ export async function getSkuMappings(): Promise<{
     const { data, error } = await supabase
       .from('inventory_sku_mappings')
       .select('id, channel, marketplace_sku, sku_internal, created_at, updated_at')
-      .eq('created_by', user.id)
       .order('channel')
       .order('marketplace_sku')
 
@@ -1408,7 +1402,6 @@ export async function getInventoryItemsForMapping(): Promise<{
     const { data, error } = await supabase
       .from('inventory_items')
       .select('sku_internal, product_name')
-      .eq('created_by', user.id)
       .order('sku_internal')
 
     if (error) {

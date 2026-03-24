@@ -78,7 +78,6 @@ export async function autoMatchBankTransactions(
       const { data, error } = await supabase
         .from('bank_transactions')
         .select('id, txn_date, deposit, withdrawal, description')
-        .eq('created_by', user.id)
         .gte('txn_date', startStr)
         .lte('txn_date', endStr)
         .order('txn_date', { ascending: true })
@@ -128,7 +127,6 @@ export async function autoMatchBankTransactions(
     const { data: existingReconciliations } = await supabase
       .from('bank_reconciliations')
       .select('bank_transaction_id')
-      .eq('created_by', user.id)
       .in(
         'bank_transaction_id',
         bankTxns.map((t) => t.id)
@@ -154,7 +152,6 @@ export async function autoMatchBankTransactions(
       const { data, error } = await supabase
         .from('expenses')
         .select('id, expense_date, category, description, amount')
-        .eq('created_by', user.id)
         .gte('expense_date', startStr)
         .lte('expense_date', endStr)
         .range(expenseFrom, expenseFrom + pageSize - 1);
@@ -177,7 +174,6 @@ export async function autoMatchBankTransactions(
     const { data: reconciledExpenses } = await supabase
       .from('bank_reconciliations')
       .select('matched_record_id')
-      .eq('created_by', user.id)
       .eq('matched_type', 'expense')
       .not('matched_record_id', 'is', null);
 
@@ -200,7 +196,6 @@ export async function autoMatchBankTransactions(
       const { data, error } = await supabase
         .from('settlement_transactions')
         .select('id, settled_time, settlement_amount, txn_id')
-        .eq('created_by', user.id)
         .gte('settled_time', startStr)
         .lte('settled_time', endStr)
         .range(settlementFrom, settlementFrom + pageSize - 1);
@@ -223,7 +218,6 @@ export async function autoMatchBankTransactions(
     const { data: reconciledSettlements } = await supabase
       .from('bank_reconciliations')
       .select('matched_record_id')
-      .eq('created_by', user.id)
       .eq('matched_type', 'settlement')
       .not('matched_record_id', 'is', null);
 

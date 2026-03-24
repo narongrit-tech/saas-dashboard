@@ -79,7 +79,6 @@ export async function getUnsettledSummary(startDate: Date, endDate: Date) {
     const { data, error } = await supabase
       .from('unsettled_transactions')
       .select('estimated_settlement_amount')
-      .eq('created_by', user.id)
       .eq('status', 'unsettled')
       .gte('estimated_settle_time', startDate.toISOString())
       .lte('estimated_settle_time', endDate.toISOString())
@@ -122,7 +121,6 @@ export async function getUnsettledTransactions(startDate: Date, endDate: Date) {
     const { data, error } = await supabase
       .from('unsettled_transactions')
       .select('*')
-      .eq('created_by', user.id)
       .eq('status', 'unsettled')
       .gte('estimated_settle_time', startDate.toISOString())
       .lte('estimated_settle_time', endDate.toISOString())
@@ -163,7 +161,6 @@ export async function getNext7DaysForecast() {
     const { data, error } = await supabase
       .from('unsettled_transactions')
       .select('estimated_settle_time, estimated_settlement_amount')
-      .eq('created_by', user.id)
       .eq('status', 'unsettled')
       .gte('estimated_settle_time', now.toISOString())
       .lte('estimated_settle_time', sevenDaysLater.toISOString())
@@ -224,7 +221,6 @@ export async function getSettledSummary(startDate: Date, endDate: Date) {
     const { data, error } = await supabase
       .from('settlement_transactions')
       .select('settlement_amount')
-      .eq('created_by', user.id)
       .gte('settled_time', startDate.toISOString())
       .lte('settled_time', endDate.toISOString())
 
@@ -266,7 +262,6 @@ export async function getSettledTransactions(startDate: Date, endDate: Date) {
     const { data, error } = await supabase
       .from('settlement_transactions')
       .select('*')
-      .eq('created_by', user.id)
       .gte('settled_time', startDate.toISOString())
       .lte('settled_time', endDate.toISOString())
       .order('settled_time', { ascending: false })
@@ -305,7 +300,6 @@ export async function getOverdueForecast() {
     const { data, error } = await supabase
       .from('unsettled_transactions')
       .select('*')
-      .eq('created_by', user.id)
       .eq('status', 'unsettled')
       .lt('estimated_settle_time', now.toISOString())
       .order('estimated_settle_time', { ascending: true })
@@ -343,7 +337,6 @@ export async function getSettledWithoutForecast(startDate: Date, endDate: Date) 
     const { data: settled, error: settledError } = await supabase
       .from('settlement_transactions')
       .select('*')
-      .eq('created_by', user.id)
       .gte('settled_time', startDate.toISOString())
       .lte('settled_time', endDate.toISOString())
 
@@ -360,7 +353,6 @@ export async function getSettledWithoutForecast(startDate: Date, endDate: Date) 
         .select('id')
         .eq('marketplace', settlement.marketplace)
         .eq('txn_id', settlement.txn_id)
-        .eq('created_by', user.id)
         .single()
 
       if (!unsettled) {
@@ -412,7 +404,6 @@ export async function getDailyReconciliation(startDate: Date, endDate: Date) {
     const { data: unsettledData, error: unsettledError } = await supabase
       .from('unsettled_transactions')
       .select('estimated_settle_time, estimated_settlement_amount')
-      .eq('created_by', user.id)
       .eq('status', 'unsettled')
       .gte('estimated_settle_time', startDate.toISOString())
       .lte('estimated_settle_time', endDate.toISOString())
@@ -426,7 +417,6 @@ export async function getDailyReconciliation(startDate: Date, endDate: Date) {
     const { data: settledData, error: settledError } = await supabase
       .from('settlement_transactions')
       .select('settled_time, settlement_amount')
-      .eq('created_by', user.id)
       .gte('settled_time', startDate.toISOString())
       .lte('settled_time', endDate.toISOString())
 

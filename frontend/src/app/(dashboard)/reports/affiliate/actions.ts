@@ -102,7 +102,6 @@ export async function getAffiliatePerformanceReport(
       let orderQuery1 = supabase
         .from('sales_orders')
         .select('order_id, external_order_id, total_amount, order_date')
-        .eq('created_by', user.id)
         .in('order_id', batch)
 
       // Apply date filters
@@ -117,7 +116,6 @@ export async function getAffiliatePerformanceReport(
       let orderQuery2 = supabase
         .from('sales_orders')
         .select('order_id, external_order_id, total_amount, order_date')
-        .eq('created_by', user.id)
         .in('external_order_id', batch)
 
       // Apply date filters
