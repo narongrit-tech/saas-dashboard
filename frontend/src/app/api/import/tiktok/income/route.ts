@@ -72,7 +72,6 @@ export async function POST(request: NextRequest) {
       const { data: existingBatch } = await supabase
         .from('import_batches')
         .select('id, status, created_at')
-        .eq('created_by', user.id)
         .eq('marketplace', 'tiktok')
         .eq('report_type', 'tiktok_income')
         .eq('file_hash', fileHash)

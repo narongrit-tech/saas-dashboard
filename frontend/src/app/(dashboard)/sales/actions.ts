@@ -2034,7 +2034,6 @@ export async function getSalesGMVSummary(
     let baseQuery: any = supabase
       .from('sales_orders')
       .select('external_order_id, order_id, order_amount, total_amount, shipped_at, status_group, created_time, order_date, paid_time')
-      .eq('created_by', user.id)
 
     // Non-date filters
     if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
@@ -2276,7 +2275,6 @@ export async function getSalesPlatformBreakdown(
     let baseQuery: any = supabase
       .from('sales_orders')
       .select('external_order_id, order_id, order_amount, total_amount, shipped_at, status_group, created_time, order_date, paid_time, source_platform')
-      .eq('created_by', user.id)
 
     if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
       baseQuery = baseQuery.eq('source_platform', filters.sourcePlatform)
