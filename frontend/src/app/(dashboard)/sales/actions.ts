@@ -605,7 +605,6 @@ export async function getSalesAggregates(filters: ExportFilters & { dateBasis?: 
 
     // 2. Prepare parameters for RPC call
     const params = {
-      p_user_id: user.id,
       p_start_date: filters.startDate || '1970-01-01',
       p_end_date: filters.endDate || '2099-12-31',
       p_date_basis: dateBasis,
@@ -727,7 +726,6 @@ export async function getSalesAggregatesTikTokLike(filters: ExportFilters): Prom
 
     // 2. Prepare parameters for RPC call
     const params = {
-      p_user_id: user.id,
       p_start_date: filters.startDate || '1970-01-01',
       p_end_date: filters.endDate || '2099-12-31',
       p_source_platform: filters.sourcePlatform && filters.sourcePlatform !== 'all'
@@ -813,7 +811,6 @@ export async function getSalesStoryAggregates(filters: ExportFilters): Promise<{
 
     // 2. Prepare parameters for RPC call
     const params = {
-      p_user_id: user.id,
       p_start_date: filters.startDate || '1970-01-01',
       p_end_date: filters.endDate || '2099-12-31',
       p_source_platform: filters.sourcePlatform && filters.sourcePlatform !== 'all'

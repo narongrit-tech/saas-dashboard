@@ -87,12 +87,11 @@ export async function createExpenseFromBankTransaction(
       return { success: false, error: 'Amount must be greater than 0' };
     }
 
-    // Verify bank transaction exists and belongs to user
+    // Verify bank transaction exists and is accessible (team RLS enforced)
     const { data: bankTxn, error: txnError } = await supabase
       .from('bank_transactions')
       .select('id, txn_date, withdrawal, deposit')
       .eq('id', bankTransactionId)
-      .eq('created_by', user.id)
       .single();
 
     if (txnError || !bankTxn) {
@@ -261,24 +260,22 @@ export async function createWalletTopupFromBankTransaction(
       return { success: false, error: 'Amount must be greater than 0' };
     }
 
-    // Verify wallet exists
+    // Verify wallet exists and is accessible (team RLS enforced)
     const { data: wallet, error: walletError } = await supabase
       .from('wallets')
       .select('id, name')
       .eq('id', walletId)
-      .eq('created_by', user.id)
       .single();
 
     if (walletError || !wallet) {
       return { success: false, error: 'Wallet not found' };
     }
 
-    // Verify bank transaction exists
+    // Verify bank transaction exists and is accessible (team RLS enforced)
     const { data: bankTxn, error: txnError } = await supabase
       .from('bank_transactions')
       .select('id, txn_date, withdrawal, deposit')
       .eq('id', bankTransactionId)
-      .eq('created_by', user.id)
       .single();
 
     if (txnError || !bankTxn) {
@@ -444,12 +441,11 @@ export async function createWalletSpendFromBankTransaction(
       return { success: false, error: 'Amount must be greater than 0' };
     }
 
-    // Verify wallet exists and check business rules
+    // Verify wallet exists and is accessible (team RLS enforced)
     const { data: wallet, error: walletError } = await supabase
       .from('wallets')
       .select('id, name, wallet_type')
       .eq('id', walletId)
-      .eq('created_by', user.id)
       .single();
 
     if (walletError || !wallet) {
@@ -464,12 +460,11 @@ export async function createWalletSpendFromBankTransaction(
       };
     }
 
-    // Verify bank transaction exists
+    // Verify bank transaction exists and is accessible (team RLS enforced)
     const { data: bankTxn, error: txnError } = await supabase
       .from('bank_transactions')
       .select('id, txn_date, withdrawal, deposit')
       .eq('id', bankTransactionId)
-      .eq('created_by', user.id)
       .single();
 
     if (txnError || !bankTxn) {
@@ -628,24 +623,22 @@ export async function matchBankTransactionToSettlement(
 
     console.log('User authenticated (matchBankTransactionToSettlement):', user.id);
 
-    // Verify bank transaction exists
+    // Verify bank transaction exists and is accessible (team RLS enforced)
     const { data: bankTxn, error: txnError } = await supabase
       .from('bank_transactions')
       .select('id')
       .eq('id', bankTransactionId)
-      .eq('created_by', user.id)
       .single();
 
     if (txnError || !bankTxn) {
       return { success: false, error: 'Bank transaction not found or unauthorized' };
     }
 
-    // Verify settlement exists
+    // Verify settlement exists and is accessible (team RLS enforced)
     const { data: settlement, error: settlementError } = await supabase
       .from('settlement_transactions')
       .select('id, txn_id, settlement_amount')
       .eq('id', settlementTransactionId)
-      .eq('created_by', user.id)
       .single();
 
     if (settlementError || !settlement) {
@@ -767,12 +760,11 @@ export async function createAdjustmentForBankTransaction(
       return { success: false, error: 'Notes are required for adjustments' };
     }
 
-    // Verify bank transaction exists
+    // Verify bank transaction exists and is accessible (team RLS enforced)
     const { data: bankTxn, error: txnError } = await supabase
       .from('bank_transactions')
       .select('id, txn_date, withdrawal, deposit')
       .eq('id', bankTransactionId)
-      .eq('created_by', user.id)
       .single();
 
     if (txnError || !bankTxn) {
@@ -882,12 +874,11 @@ export async function ignoreBankTransaction(
       return { success: false, error: 'Reason is required to ignore transaction' };
     }
 
-    // Verify bank transaction exists
+    // Verify bank transaction exists and is accessible (team RLS enforced)
     const { data: bankTxn, error: txnError } = await supabase
       .from('bank_transactions')
       .select('id')
       .eq('id', bankTransactionId)
-      .eq('created_by', user.id)
       .single();
 
     if (txnError || !bankTxn) {
@@ -1149,24 +1140,22 @@ export async function matchBankTransactionToExpense(
 
     console.log('User authenticated (matchBankTransactionToExpense):', user.id);
 
-    // Verify bank transaction
+    // Verify bank transaction exists and is accessible (team RLS enforced)
     const { data: bankTxn, error: txnError } = await supabase
       .from('bank_transactions')
       .select('id, withdrawal, txn_date')
       .eq('id', bankTransactionId)
-      .eq('created_by', user.id)
       .single();
 
     if (txnError || !bankTxn) {
       return { success: false, error: 'Bank transaction not found' };
     }
 
-    // Verify expense
+    // Verify expense exists and is accessible (team RLS enforced)
     const { data: expense, error: expenseError } = await supabase
       .from('expenses')
       .select('id, amount, category, description')
       .eq('id', expenseId)
-      .eq('created_by', user.id)
       .single();
 
     if (expenseError || !expense) {
