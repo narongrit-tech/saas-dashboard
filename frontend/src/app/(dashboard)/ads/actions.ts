@@ -31,7 +31,6 @@ export async function getAdsSummary(
     // Do not compute totals from rows (pagination-safe)
     // Use PostgreSQL aggregates via RPC for efficiency
     const { data, error } = await supabase.rpc('get_ads_summary', {
-      p_user_id: user.id,
       p_start_date: startDateStr,
       p_end_date: endDateStr,
       p_campaign_type: campaignType === 'all' ? null : campaignType,
@@ -94,7 +93,6 @@ export async function getAdsPerformance(
       let query = supabase
         .from('ad_daily_performance')
         .select('*')
-        .eq('created_by', user.id)
         .gte('ad_date', startDateStr)
         .lte('ad_date', endDateStr)
         .range(from, from + pageSize - 1)
