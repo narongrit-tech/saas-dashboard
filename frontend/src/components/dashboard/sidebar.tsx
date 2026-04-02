@@ -32,6 +32,7 @@ import {
   Zap,
   GitFork,
   UserCircle,
+  Video,
 } from 'lucide-react'
 
 interface MenuItem {
@@ -91,6 +92,17 @@ const menuGroups: MenuGroup[] = [
         title: 'Affiliate Report',
         href: '/reports/affiliate',
         icon: FileBarChart,
+      },
+    ],
+  },
+  {
+    title: 'Content Ops',
+    defaultExpanded: true,
+    items: [
+      {
+        title: 'Content Library',
+        href: '/content-ops/library',
+        icon: Video,
       },
     ],
   },
