@@ -1,0 +1,104 @@
+{
+  "source": "tiktok_studio_visible_rows",
+  "snapshot_version": 2,
+  "page_url": "https://www.tiktok.com/tiktokstudio/content",
+  "generated_at": "2026-04-02T15:38:35.486Z",
+  "row_count": 6,
+  "extraction_scope": "multi_batch_scroll",
+  "selector_version": "studio-selectors.json@2",
+  "harvest_config": {
+    "strategy": "scroll_batches",
+    "max_rows": 30,
+    "max_scroll_rounds": 6,
+    "max_idle_rounds": 2,
+    "scroll_pause_ms": 1500
+  },
+  "harvest_summary": {
+    "total_harvested_rows": 6,
+    "harvested_batch_count": 3,
+    "scroll_rounds_completed": 2,
+    "consecutive_idle_rounds": 0,
+    "completion_status": "stopped",
+    "stop_reason": "max_rows_reached"
+  },
+  "rows": [
+    {
+      "post_url": "https://www.tiktok.com/@kibnalisa.bohktoh/video/7619367256706829576",
+      "caption": "กาแฟสุขภาพ อร่อย ไม่มีน้ำตาล ดื่มแล้วสดชื่น บอดี้ปัง #กาแฟ #กาแฟสุขภาพ #สุขภาพดี #ของดีบอกต่อ #กิ๊บnalisa",
+      "created_at": "2026-03-21T06:30:00.000Z",
+      "privacy": "Everyone",
+      "views_total": 888000,
+      "likes_total": 8367,
+      "comments_total": 326,
+      "is_pinned": true,
+      "duration": "01:04",
+      "platform": "tiktok",
+      "scraped_at": "2026-04-02T15:38:35.486Z"
+    },
+    {
+      "post_url": "https://www.tiktok.com/@kibnalisa.bohktoh/video/7620122874107464968",
+      "caption": "Blue เวทมนตร์ ทนน้ำ ทนล้าง สงกรานต์ต้องมี ทาได้ทั้งหน้า แก้ม ปาก ตา จมูก สีชมพูชัดเจน #บลัชออน #สงกรานต์ #thesongkranfestival #ใช้ดีบอกต่อ #กิ๊บnalisa",
+      "created_at": "2026-03-23T06:00:00.000Z",
+      "privacy": "Everyone",
+      "views_total": 2700000,
+      "likes_total": 41000,
+      "comments_total": 923,
+      "is_pinned": true,
+      "duration": "02:18",
+      "platform": "tiktok",
+      "scraped_at": "2026-04-02T15:38:35.486Z"
+    },
+    {
+      "post_url": "https://www.tiktok.com/@kibnalisa.bohktoh/video/7616414429202107668",
+      "caption": "เลิกคัน ใช้มูสล้างปิ๊ สูตรอ่อนโยน ดูแลจุดซ่อนเร้นให้สะอาดมั่นใจ #ดูแลตัวเอง #กิ๊บnalisa",
+      "created_at": "2026-03-13T03:30:00.000Z",
+      "privacy": "Everyone",
+      "views_total": 5100000,
+      "likes_total": 92000,
+      "comments_total": 471,
+      "is_pinned": true,
+      "duration": "01:49",
+      "platform": "tiktok",
+      "scraped_at": "2026-04-02T15:38:35.486Z"
+    },
+    {
+      "post_url": "https://www.tiktok.com/@kibnalisa.bohktoh/video/7624044038580161813",
+      "caption": "กันแดดที่กันน้ำ หน้าไม่คล้ำ ไม่หยาหลังเติมระหว่างวัน ต้องสเปรย์ ICE LERSKIN #กันแดด #สกินแคร์ #กิ๊บnalisa",
+      "created_at": "2026-04-02T08:00:00.000Z",
+      "privacy": "Everyone",
+      "views_total": 809,
+      "likes_total": 26,
+      "comments_total": 5,
+      "is_pinned": false,
+      "duration": "00:34",
+      "platform": "tiktok",
+      "scraped_at": "2026-04-02T15:38:35.486Z"
+    },
+    {
+      "post_url": "https://www.tiktok.com/@kibnalisa.bohktoh/video/7623811062952922389",
+      "caption": "ตอบกลับ @worarat_iz เทสต์กันน้ำ กันเหงื่อ จัดชุดใหญ่ให้เลย บลัช O'Cheal สีชัดมาก #บลัชออน #สงกรานต์ #กิ๊บnalisa",
+      "created_at": "2026-04-02T06:00:00.000Z",
+      "privacy": "Everyone",
+      "views_total": 1198,
+      "likes_total": 31,
+      "comments_total": 3,
+      "is_pinned": false,
+      "duration": "02:04",
+      "platform": "tiktok",
+      "scraped_at": "2026-04-02T15:38:35.486Z"
+    },
+    {
+      "post_url": "https://www.tiktok.com/@kibnalisa.bohktoh/video/7623776334434651412",
+      "caption": "สบายใจ ดื่มได้ทุกวัย น้ำตาล 0% กาแฟ SX เพื่อสุขภาพ #กาแฟเพื่อสุขภาพ #ของดีบอกต่อ #กิ๊บnalisa",
+      "created_at": "2026-04-02T04:00:00.000Z",
+      "privacy": "Everyone",
+      "views_total": 3667,
+      "likes_total": 75,
+      "comments_total": 5,
+      "is_pinned": false,
+      "duration": "01:01",
+      "platform": "tiktok",
+      "scraped_at": "2026-04-02T15:38:35.486Z"
+    }
+  ]
+}
