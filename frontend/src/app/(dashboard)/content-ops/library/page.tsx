@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  ChevronDown,
   ClipboardList,
   Clock3,
   Database,
@@ -7,10 +8,12 @@ import {
   Film,
   Link2,
   Pin,
+  RefreshCw,
   Rows3,
 } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import {
   Card,
   CardContent,
@@ -18,6 +21,11 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import {
   Table,
   TableBody,
@@ -193,23 +201,31 @@ function formatImportStatusLabel(status: TikTokStudioLatestImport['status']) {
 }
 
 function formatImportSource(source: TikTokStudioLatestImport['source']) {
-  if (source === 'local_registry') return 'Local registry'
-  if (source === 'sample_fallback') return 'Checked-in sample fallback'
-  return 'No source'
+  if (source === 'local_registry') return 'local_registry'
+  if (source === 'sample_fallback') return 'sample_fallback'
+  if (source === 'shared_source') return 'shared_source'
+  return 'missing'
+}
+
+function formatImportSourceDescription(source: TikTokStudioLatestImport['source']) {
+  if (source === 'local_registry') return 'Using workstation-accessible registry files.'
+  if (source === 'sample_fallback') return 'Using checked-in sample data for production-safe review.'
+  if (source === 'shared_source') return 'Using future shared storage or API-backed source.'
+  return 'No source was resolved for this view.'
 }
 
 function formatSnapshotStatus(snapshot: TikTokStudioSnapshotManifestEntry) {
-  if (snapshot.import_status === 'error') return 'Error'
-  if (snapshot.completion_status === 'completed') return 'Completed'
-  if (snapshot.completion_status === 'stopped') return 'Stopped'
-  if (snapshot.import_status === 'empty') return 'Empty'
-  return 'Ready'
+  if (snapshot.import_status === 'error') return 'failed'
+  if (snapshot.import_status === 'empty') return 'empty'
+  if (snapshot.completion_status === 'completed') return 'completed'
+  if (snapshot.completion_status === 'stopped') return 'completed_with_limit'
+  return 'completed'
 }
 
 function formatStopReason(stopReason: TikTokStudioSnapshotManifestEntry['stop_reason']) {
-  if (stopReason === 'max_rows_reached') return 'Max rows reached'
-  if (stopReason === 'max_scroll_rounds_reached') return 'Max scroll rounds reached'
-  if (stopReason === 'no_new_rows_limit_reached') return 'No new rows limit reached'
+  if (stopReason === 'max_rows_reached') return 'max_rows_reached'
+  if (stopReason === 'max_scroll_rounds_reached') return 'max_scroll_rounds_reached'
+  if (stopReason === 'no_new_rows_limit_reached') return 'no_new_rows_limit_reached'
   return '-'
 }
 
@@ -225,24 +241,38 @@ function getImportStatusBadgeClassName(status: TikTokStudioLatestImport['status'
   return 'border-amber-200 bg-amber-50 text-amber-700'
 }
 
-function getSnapshotStatusBadgeClassName(snapshot: TikTokStudioSnapshotManifestEntry) {
-  if (snapshot.import_status === 'error') {
-    return 'border-rose-200 bg-rose-50 text-rose-700'
-  }
-
-  if (snapshot.completion_status === 'completed') {
+function getImportSourceBadgeClassName(source: TikTokStudioLatestImport['source']) {
+  if (source === 'local_registry') {
     return 'border-emerald-200 bg-emerald-50 text-emerald-700'
   }
 
-  if (snapshot.completion_status === 'stopped') {
+  if (source === 'sample_fallback') {
+    return 'border-sky-200 bg-sky-50 text-sky-700'
+  }
+
+  if (source === 'shared_source') {
+    return 'border-violet-200 bg-violet-50 text-violet-700'
+  }
+
+  return 'border-slate-200 bg-slate-50 text-slate-700'
+}
+
+function getSnapshotStatusBadgeClassName(snapshot: TikTokStudioSnapshotManifestEntry) {
+  const status = formatSnapshotStatus(snapshot)
+
+  if (status === 'failed') {
+    return 'border-rose-200 bg-rose-50 text-rose-700'
+  }
+
+  if (status === 'completed_with_limit') {
     return 'border-amber-200 bg-amber-50 text-amber-700'
   }
 
-  if (snapshot.import_status === 'empty') {
+  if (status === 'empty') {
     return 'border-slate-200 bg-slate-50 text-slate-700'
   }
 
-  return 'border-primary/20 bg-primary/5 text-primary'
+  return 'border-emerald-200 bg-emerald-50 text-emerald-700'
 }
 
 function renderTableState(importResult: TikTokStudioLatestImport) {
@@ -273,10 +303,10 @@ function renderTableState(importResult: TikTokStudioLatestImport) {
           <TableHead className="w-24">Views</TableHead>
           <TableHead className="w-24">Likes</TableHead>
           <TableHead className="w-24">Comments</TableHead>
-          <TableHead className="w-36">Created</TableHead>
+          <TableHead className="w-36">Post Created</TableHead>
           <TableHead className="w-24">Pinned</TableHead>
           <TableHead className="w-28">Assignee</TableHead>
-          <TableHead className="w-36">Imported</TableHead>
+          <TableHead className="w-36">Scraped / Imported</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -302,9 +332,9 @@ function renderHistoryState(importResult: TikTokStudioLatestImport) {
       <TableHeader>
         <TableRow>
           <TableHead>Snapshot</TableHead>
-          <TableHead className="w-36">Scraped</TableHead>
+          <TableHead className="w-36">Scraped At</TableHead>
           <TableHead className="w-24">Rows</TableHead>
-          <TableHead className="w-28">Status</TableHead>
+          <TableHead className="w-36">Run Status</TableHead>
           <TableHead className="w-24">Latest</TableHead>
         </TableRow>
       </TableHeader>
@@ -324,6 +354,7 @@ function renderHistoryState(importResult: TikTokStudioLatestImport) {
 export default async function ContentLibraryPage() {
   const importResult = await getTikTokStudioLatestImport()
   const summaryStats = getSummaryStats(importResult)
+  const latestSnapshot = importResult.latestSnapshot
 
   return (
     <div className="space-y-6 pb-8">
@@ -331,7 +362,7 @@ export default async function ContentLibraryPage() {
         <CardContent className="grid gap-6 p-6 lg:grid-cols-[minmax(0,1fr),420px] lg:items-start">
           <div className="space-y-4">
             <Badge variant="outline" className="w-fit border-primary/20 bg-primary/5 text-primary">
-              Content Ops - TikTok Studio Phase 2
+              Content Ops - TikTok Studio Phase 2.5
             </Badge>
             <div className="space-y-2">
               <p className="text-sm font-medium uppercase tracking-[0.2em] text-muted-foreground">
@@ -341,9 +372,8 @@ export default async function ContentLibraryPage() {
                 Content Ops / Content Library
               </h1>
               <p className="max-w-3xl text-sm text-muted-foreground sm:text-base">
-                Phase 2 extends TikTok Studio ingestion from visible rows to controlled multi-batch
-                harvesting while preserving the snapshot registry, normalized content items, and
-                per-snapshot metric history.
+                Phase 2.5 sharpens operational clarity around source selection, harvest run outcome,
+                and latest snapshot details before analytics and ownership workflows are added.
               </p>
             </div>
           </div>
@@ -386,7 +416,8 @@ export default async function ContentLibraryPage() {
               TikTok Studio Import
             </CardTitle>
             <CardDescription>
-              The dashboard imports the latest harvested snapshot from the local registry.
+              Operational view of the latest harvested snapshot and where this page is loading data
+              from.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -394,9 +425,7 @@ export default async function ContentLibraryPage() {
               <div>
                 <div className="font-medium text-foreground">Import Status</div>
                 <div className="mt-1 text-muted-foreground">
-                  {importResult.latestSnapshot
-                    ? `Snapshot ${importResult.latestSnapshot.snapshot_id}`
-                    : 'No snapshot selected yet.'}
+                  {latestSnapshot ? `Snapshot ${latestSnapshot.snapshot_id}` : 'No snapshot selected yet.'}
                 </div>
               </div>
               <Badge
@@ -408,39 +437,65 @@ export default async function ContentLibraryPage() {
             </div>
 
             <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm">
-              <div className="font-medium text-foreground">Latest Harvest Summary</div>
-              <div className="mt-1 text-muted-foreground">
-                Rows: {importResult.latestSnapshot?.row_count ?? 0} | Batches:{' '}
-                {importResult.latestSnapshot?.harvested_batch_count ?? 0}
+              <div className="font-medium text-foreground">Resolved Source</div>
+              <div className="mt-2 flex items-center gap-2">
+                <Badge
+                  variant="outline"
+                  className={cn('font-medium', getImportSourceBadgeClassName(importResult.source))}
+                >
+                  {formatImportSource(importResult.source)}
+                </Badge>
               </div>
-              <div className="mt-1 text-muted-foreground">
-                Completion: {formatSnapshotStatus(importResult.latestSnapshot ?? fallbackSnapshot())}
-              </div>
-              <div className="mt-1 text-muted-foreground">
-                Stop reason: {formatStopReason(importResult.latestSnapshot?.stop_reason)}
-              </div>
-            </div>
-
-            <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm">
-              <div className="font-medium text-foreground">Latest Scraped At</div>
-              <div className="mt-1 text-muted-foreground">
-                {formatShortDateTime(importResult.latestSnapshot?.scraped_at ?? null)}
+              <div className="mt-2 text-muted-foreground">
+                {formatImportSourceDescription(importResult.source)}
               </div>
             </div>
 
-            <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm">
-              <div className="font-medium text-foreground">Source</div>
-              <div className="mt-1 text-muted-foreground">
-                {importResult.latestSnapshot?.page_url ?? 'TikTok Studio snapshot not found yet.'}
-              </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Button type="button" variant="outline" disabled className="justify-start">
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Refresh Latest
+              </Button>
+              <Button type="button" disabled className="justify-start">
+                <Rows3 className="mr-2 h-4 w-4" />
+                Rerun Import
+              </Button>
             </div>
 
-            <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm">
-              <div className="font-medium text-foreground">Data Source</div>
-              <div className="mt-1 text-muted-foreground">
-                {formatImportSource(importResult.source)}
-              </div>
-            </div>
+            <Collapsible defaultOpen className="rounded-lg border bg-muted/30">
+              <CollapsibleTrigger className="flex w-full items-center justify-between px-4 py-3 text-left text-sm">
+                <div>
+                  <div className="font-medium text-foreground">Latest Run Details</div>
+                  <div className="mt-1 text-muted-foreground">
+                    Snapshot metadata for operational review.
+                  </div>
+                </div>
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              </CollapsibleTrigger>
+              <CollapsibleContent className="border-t px-4 py-3">
+                <div className="grid gap-3 text-sm sm:grid-cols-2">
+                  <SnapshotDetail label="snapshot_id" value={latestSnapshot?.snapshot_id ?? 'Missing'} />
+                  <SnapshotDetail
+                    label="scraped_at"
+                    value={latestSnapshot?.scraped_at ? formatShortDateTime(latestSnapshot.scraped_at) : 'Missing'}
+                  />
+                  <SnapshotDetail label="row_count" value={String(latestSnapshot?.row_count ?? 0)} />
+                  <SnapshotDetail
+                    label="harvested_batch_count"
+                    value={String(latestSnapshot?.harvested_batch_count ?? 0)}
+                  />
+                  <SnapshotDetail
+                    label="completion_status"
+                    value={formatSnapshotStatus(latestSnapshot ?? fallbackSnapshot())}
+                  />
+                  <SnapshotDetail
+                    label="stop_reason"
+                    value={formatStopReason(latestSnapshot?.stop_reason)}
+                  />
+                  <SnapshotDetail label="source" value={formatImportSource(importResult.source)} />
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
 
             <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm">
               <div className="font-medium text-foreground">Manifest File</div>
@@ -469,8 +524,8 @@ export default async function ContentLibraryPage() {
             <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm">
               <div className="font-medium text-foreground">Assignee</div>
               <div className="mt-1 text-muted-foreground">
-                Imported rows remain unassigned in Phase 2 so assignee mapping can be added later
-                without changing the harvesting flow.
+                Imported rows remain unassigned in Phase 2.5 so assignee mapping can be added later
+                without changing the operational view.
               </div>
             </div>
           </CardContent>
@@ -511,20 +566,19 @@ export default async function ContentLibraryPage() {
             <Card className="border-border/70">
               <CardHeader>
                 <CardTitle>Phase Scope</CardTitle>
-                <CardDescription>What Phase 2 adds on top of the registry flow.</CardDescription>
+                <CardDescription>What Phase 2.5 adds on top of the production review UI.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3 text-sm text-muted-foreground">
                 <div className="rounded-lg border bg-muted/30 px-4 py-3">
-                  Harvest multiple visible batches within one snapshot run using controlled scrolling
-                  and in-run dedupe by post URL.
+                  Make source selection explicit so operators know whether data is live-local,
+                  shared in future, or sample-backed.
                 </div>
                 <div className="rounded-lg border bg-muted/30 px-4 py-3">
-                  Record harvest metadata including batch count, completion status, and stop reason
-                  in raw snapshots and the manifest.
+                  Translate run outcomes into clearer status labels for operational review before
+                  analytics are added.
                 </div>
                 <div className="rounded-lg border bg-muted/30 px-4 py-3">
-                  Surface registry history in the dashboard so the latest snapshot is no longer the
-                  only visible run.
+                  Expose latest run details and disabled action placeholders to anchor future wiring.
                 </div>
               </CardContent>
             </Card>
@@ -532,7 +586,7 @@ export default async function ContentLibraryPage() {
             <Card className="border-border/70">
               <CardHeader>
                 <CardTitle>Remaining Gaps</CardTitle>
-                <CardDescription>Still deferred beyond Phase 2.</CardDescription>
+                <CardDescription>Still deferred beyond Phase 2.5.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3 text-sm text-muted-foreground">
                 <div className="rounded-lg border bg-muted/30 px-4 py-3">
@@ -542,14 +596,22 @@ export default async function ContentLibraryPage() {
                   No assignee-to-user mapping or editable ownership workflow yet.
                 </div>
                 <div className="rounded-lg border bg-muted/30 px-4 py-3">
-                  Harvesting still depends on TikTok Studio DOM stability and the currently
-                  authenticated browser session.
+                  Refresh and rerun actions are placeholders only until backend wiring is ready.
                 </div>
               </CardContent>
             </Card>
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+function SnapshotDetail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border bg-background px-3 py-3">
+      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-1 break-all text-foreground">{value}</div>
     </div>
   )
 }

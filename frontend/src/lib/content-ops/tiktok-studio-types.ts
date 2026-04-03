@@ -4,7 +4,11 @@ export type TikTokStudioStopReason =
   | 'max_rows_reached'
   | 'max_scroll_rounds_reached'
   | 'no_new_rows_limit_reached'
-export type TikTokStudioImportSource = 'local_registry' | 'sample_fallback' | 'missing'
+export type TikTokStudioImportSource =
+  | 'local_registry'
+  | 'sample_fallback'
+  | 'shared_source'
+  | 'missing'
 
 export interface TikTokStudioContentItem {
   post_url: string
