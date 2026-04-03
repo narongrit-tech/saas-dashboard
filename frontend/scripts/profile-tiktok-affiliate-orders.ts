@@ -13,7 +13,7 @@ for (const file of files) {
   const workbook = XLSX.readFile(path.join(root, file), { raw: false })
   const firstSheet = workbook.Sheets[workbook.SheetNames[0]]
   const data = XLSX.utils.sheet_to_json<Row>(firstSheet, { defval: null, raw: false })
-  for (const row of data) rows.push({ __file: file, ...row })
+  for (const row of data) rows.push({ ...row, __file: file })
 }
 
 const numberValue = (value: string | null | undefined) => {
