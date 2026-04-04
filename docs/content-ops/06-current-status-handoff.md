@@ -6,34 +6,36 @@ Audit outcome:
 
 - Affiliate normalization foundation: done.
 - Interim analytics layer: done.
-- Full Phase 3 profit layer: not done yet.
+- Content order attribution layer: done.
+- Full Phase 3 profit layer: done.
 
 ## Completed Deliverables
 
 - Module-local affiliate import foundation for raw staging, normalization, dedupe, and verification.
 - `content_order_facts` as the normalized attribution source for the module.
 - Interim analytics layer for daily content, content-product, product, channel-split, and loss reporting.
+- Deterministic final attribution winners in `public.content_order_attribution`.
+- Module-local Phase 3 profit objects in `public.tt_content_costs`, `public.tt_content_cost_allocations`, and `public.content_profit_attribution_summary`.
 - Updated module docs and implementation READMEs so the current boundary is explicit.
 
 ## Current Module Boundary
 
-- The current module boundary ends at normalized affiliate attribution facts plus interim analytics views.
+- The current module boundary now runs from normalized affiliate attribution facts through deterministic attribution winners and the module-local profit summary.
 - The implementation remains isolated from existing SaaS sales, finance, wallet, reconciliation, and UI logic.
 - No redesign, UI expansion, or shared SaaS profit model is included in the current state.
 
 ## Remaining Limitations
 
-- The current analytics layer is intentionally provisional and still uses `total_earned_amount` as a reporting proxy instead of final profit truth.
-- No module-local cost input contract exists yet for `ads_cost`, `creator_cost`, or `other_cost`.
-- No allocation engine, profit calculation, ROI calculation, creator profitability layer, or final Phase 3 business views exist yet.
+- The current analytics layer is intentionally provisional and should not be confused with the final profit summary.
+- The implemented Phase 3 layer still excludes creator-level profitability, UI surfaces, and shared SaaS profit logic.
+- Content-only costs with no same-day attribution basis remain explicitly unallocated by design.
 
 ## Recommended Next Phase
 
-Recommended next phase: Full Phase 3 profit layer.
+Recommended next phase: operational validation only; any future scope should be a separate workstream.
 
 Scope for that phase:
 
-1. Add module-local cost input tables or ingestion contracts for `ads_cost`, `creator_cost`, and `other_cost`.
-2. Implement the locked allocation policy already defined in the attribution-engine spec.
-3. Calculate final Phase 3 metrics including `expected_commission`, `actual_commission`, `commission_loss`, `profit`, and `roi`.
-4. Promote the current interim analytics outputs into final profit-facing module views only after the Phase 3 layer is validated.
+1. Keep validating migration order and refresh behavior against real import batches.
+2. Keep module isolation intact from SaaS finance, wallet, reconciliation, and sales tables.
+3. Treat any creator or UI additions as separate post-Phase-3 scope.

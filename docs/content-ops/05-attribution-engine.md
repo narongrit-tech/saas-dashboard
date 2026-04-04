@@ -18,7 +18,8 @@ The business outcome is not just content visibility. It is profit visibility by 
 
 - Affiliate normalization foundation: done.
 - Interim analytics layer: done.
-- Full Phase 3 profit layer: not done yet.
+- Content order attribution layer: done.
+- Full Phase 3 profit layer: done.
 
 ## Status Snapshot
 
@@ -31,14 +32,14 @@ The business outcome is not just content visibility. It is profit visibility by 
 ### What is intentionally provisional
 
 - The analytics layer is still interim and uses provisional commission reporting rather than final profit logic.
-- Cost inputs, allocation, creator profitability, profit, and ROI are intentionally not implemented yet.
+- Creator profitability and business views beyond the module-local summary are intentionally not implemented yet.
 - Nothing in the current state changes or replaces existing SaaS sales, finance, wallet, or reconciliation logic.
 
-### What is next
+### What exists now
 
-- Implement the full Phase 3 profit layer defined in this document.
-- Add the module-local cost input contract and cost allocation engine.
-- Build final profit-facing business views only after those Phase 3 inputs and formulas are complete.
+- `content_order_facts` remains the normalized source.
+- `public.content_order_attribution` is the deterministic last-touch winner layer.
+- `public.tt_content_costs`, `public.tt_content_cost_allocations`, and `public.content_profit_attribution_summary` complete the module-local Phase 3 profit layer.
 
 ## Updated Direction
 
@@ -220,6 +221,6 @@ V1 uses one policy for `ads_cost`, `creator_cost`, and `other_cost`:
 - [x] Module boundary kept explicit
 - [x] Affiliate order normalization implemented
 - [x] Interim analytics layer implemented
-- [ ] Cost input contract defined
-- [ ] Profit and loss formulas implemented
+- [x] Cost input contract defined
+- [x] Profit and loss formulas implemented
 - [ ] Business views implemented

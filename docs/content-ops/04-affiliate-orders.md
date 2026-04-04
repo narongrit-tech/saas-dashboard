@@ -17,7 +17,8 @@ Its job is to:
 
 - Affiliate normalization foundation: done.
 - Interim analytics layer: done.
-- Full Phase 3 profit layer: not done yet.
+- Content order attribution layer: done.
+- Full Phase 3 profit layer: done.
 
 ## Status Snapshot
 
@@ -31,13 +32,13 @@ Its job is to:
 
 - The analytics layer currently treats `total_earned_amount` as a provisional commission signal for reporting.
 - Rollups remain module-local and intentionally separate from existing SaaS sales, finance, wallet, and reconciliation logic.
-- This layer does not yet define or allocate `ads_cost`, `creator_cost`, `other_cost`, `profit`, or `roi`.
+- This upstream orders layer still does not itself define or allocate `ads_cost`, `creator_cost`, `other_cost`, `profit`, or `roi`; those now exist downstream in the dedicated Phase 3 profit layer.
 
-### What is next
+### What exists downstream now
 
-- Move from normalized attribution facts plus interim analytics into the full Phase 3 profit layer.
-- Add the module-local cost input contract and allocation rules already defined in the attribution-engine spec.
-- Promote the provisional analytics outputs into final profit and ROI views only after the Phase 3 profit layer is implemented.
+- `migration-096-tiktok-content-order-attribution.sql` adds final winner selection in `public.content_order_attribution`.
+- `migration-097-tiktok-affiliate-content-profit-layer.sql` adds module-local cost allocation and `public.content_profit_attribution_summary`.
+- This document remains focused on the upstream affiliate orders contract that feeds those layers.
 
 ## Current Source And Status
 
@@ -46,7 +47,7 @@ Its job is to:
 | Source | TikTok affiliate Excel export |
 | Delivery mode | Manual file export / batch import |
 | Current truth source | Raw affiliate Excel rows |
-| Current module status | Affiliate normalization foundation done; interim analytics layer done; full Phase 3 profit layer not done yet |
+| Current module status | Affiliate normalization foundation done; interim analytics layer done; content order attribution done; full Phase 3 profit layer done |
 | Current app status | No Content Ops app integration promised yet |
 | Boundary | Module-local data layer only, not a replacement for existing SaaS order or finance tables |
 
@@ -387,12 +388,12 @@ For each `import_batch_id`, validate:
 
 Batch reconciliation must be zero-difference after rounding to 2 decimals.
 
-## Next Phase From This Layer
+## Downstream Dependency Chain From This Layer
 
 1. Keep the affiliate normalization foundation as the stable source for module-local attribution facts.
 2. Continue using the interim analytics layer for operational reporting only.
-3. Implement the full Phase 3 profit layer with module-local cost inputs and allocation.
-4. Add final profit-facing views only after Phase 3 is complete.
+3. Use `migration-096-tiktok-content-order-attribution.sql` for deterministic final winner selection.
+4. Use `migration-097-tiktok-affiliate-content-profit-layer.sql` for cost allocation and final profit summary refreshes.
 
 ## Implementation Readiness
 
@@ -406,5 +407,5 @@ Batch reconciliation must be zero-difference after rounding to 2 decimals.
 - [x] Module-local normalization job
 - [x] Validation and reconciliation pass
 - [x] Interim analytics dependency available on top of `content_order_facts`
-- [ ] Full Phase 3 profit layer
-- [ ] Engine-level joins to final profit views
+- [x] Full Phase 3 profit layer
+- [x] Engine-level joins to final profit views
