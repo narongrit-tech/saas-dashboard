@@ -140,7 +140,7 @@ export async function POST(request: NextRequest) {
 
       // Upsert rows into settlement_transactions
       console.log(`[Income Import] Upserting ${rows.length} rows...`);
-      const { insertedCount, updatedCount, errorCount, errors } = await upsertIncomeRows(
+      const { insertedCount, updatedCount, errorCount, errors, stage: upsertStage } = await upsertIncomeRows(
         rows,
         batch.id,
         user.id
@@ -229,6 +229,8 @@ export async function POST(request: NextRequest) {
       const result: ImportResult & {
         reconciledCount?: number;
         notFoundInForecastCount?: number;
+        error?: string;
+        stage?: string;
       } = {
         success: batchStatus === 'success',
         batchId: batch.id,
@@ -241,6 +243,12 @@ export async function POST(request: NextRequest) {
         warnings,
         reconciledCount,
         notFoundInForecastCount: notFoundCount,
+        // Always set error string when import failed so the dialog can display it
+        // (dialog checks data.error first; without this field it would fall back to generic Thai text)
+        ...(batchStatus === 'failed' && {
+          error: errors[0] || 'Import failed — no rows were saved',
+          stage: upsertStage || 'insert',
+        }),
       };
 
       return NextResponse.json(result);
@@ -259,6 +267,7 @@ export async function POST(request: NextRequest) {
         {
           error: 'Failed to parse file',
           details: parseError instanceof Error ? parseError.message : 'Unknown error',
+          stage: 'parse',
         },
         { status: 400 }
       );

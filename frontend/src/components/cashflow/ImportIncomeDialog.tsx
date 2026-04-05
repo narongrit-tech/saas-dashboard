@@ -73,7 +73,30 @@ export function ImportIncomeDialog({ open, onOpenChange, onSuccess }: ImportInco
       const data = await response.json();
 
       if (!response.ok || !data.success) {
-        setError(data.error || data.message || 'การนำเข้าข้อมูลล้มเหลว');
+        // data.error  = single string (parse/auth/outer errors)
+        // data.errors = string[] (upsert row-level errors from upsertIncomeRows)
+        // data.details = extra detail from inner catch blocks
+        const firstError =
+          data.error ||
+          (Array.isArray(data.errors) && data.errors.length > 0 ? data.errors[0] : null) ||
+          data.message ||
+          'การนำเข้าข้อมูลล้มเหลว';
+        const detail = data.details ? ` — ${data.details}` : '';
+        const stage = data.stage ? ` [stage: ${data.stage}]` : '';
+        setError(`${firstError}${detail}${stage}`);
+        // Surface remaining errors if any
+        if (Array.isArray(data.errors) && data.errors.length > 1) {
+          setResult((prev) => ({
+            ...prev,
+            rowCount: data.rowCount ?? 0,
+            insertedCount: data.insertedCount ?? 0,
+            updatedCount: data.updatedCount ?? 0,
+            errorCount: data.errorCount ?? 0,
+            warnings: data.errors.slice(1, 6), // show up to 5 extra errors as warnings
+            reconciledCount: data.reconciledCount,
+            notFoundInForecastCount: data.notFoundInForecastCount,
+          }));
+        }
         return;
       }
 

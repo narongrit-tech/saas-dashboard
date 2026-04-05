@@ -358,6 +358,11 @@ export function parseIncomeExcel(buffer: Buffer): {
 
 /**
  * Upsert rows into settlement_transactions table (BULK OPERATION)
+ *
+ * DB constraint: settlement_txns_unique_per_marketplace UNIQUE (marketplace, txn_id)
+ * — created by migration-093 (or migration-100 targeted fix).
+ * — onConflict: 'marketplace,txn_id' must match this constraint exactly.
+ * — If constraint still has created_by (pre-migration-093), PostgreSQL 42P10 occurs.
  */
 export async function upsertIncomeRows(
   rows: NormalizedIncomeRow[],
@@ -368,6 +373,7 @@ export async function upsertIncomeRows(
   updatedCount: number;
   errorCount: number;
   errors: string[];
+  stage: string;
 }> {
   const supabase = await createClient();
   const errors: string[] = [];
@@ -426,13 +432,39 @@ export async function upsertIncomeRows(
     });
 
   if (error) {
-    console.error(`[Income Upsert] Bulk upsert failed:`, error);
-    errors.push(`Bulk upsert failed: ${error.message}`);
+    console.error(`[Income Upsert] Bulk upsert failed:`, error)
+    console.error(`[Income Upsert] Error details:`, {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    })
+
+    // 42P10 = no unique constraint matching ON CONFLICT target 'marketplace,txn_id'
+    // Cause: migration-100 (or migration-093 settlement_transactions block) not applied.
+    // DB still has the old (marketplace, txn_id, created_by) constraint from migration-004.
+    // Fix:   Run database-scripts/migration-100-fix-settlement-transactions-conflict-target.sql
+    //        in the Supabase SQL editor, then retry the import.
+    if (error.code === '42P10') {
+      console.error(
+        '[Income Upsert] SCHEMA MISMATCH: Unique constraint settlement_txns_unique_per_marketplace ' +
+        'still uses (marketplace, txn_id, created_by) but code uses onConflict: "marketplace,txn_id". ' +
+        'Apply migration-100-fix-settlement-transactions-conflict-target.sql and retry.'
+      )
+      errors.push(
+        'Schema mismatch: unique constraint on settlement_transactions does not match import code. ' +
+        'Apply migration-100 via Supabase SQL Editor and retry. (Code: 42P10)'
+      )
+    } else {
+      errors.push(`Bulk upsert failed: ${error.message} (Code: ${error.code})`)
+    }
+
     return {
       insertedCount: 0,
       updatedCount: 0,
       errorCount: uniqueRows.length,
       errors,
+      stage: 'insert',
     };
   }
 
@@ -443,5 +475,6 @@ export async function upsertIncomeRows(
     updatedCount: expectedUpdateCount,
     errorCount: 0,
     errors: [],
+    stage: 'insert',
   };
 }
