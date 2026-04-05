@@ -61,7 +61,7 @@ WHERE d.id IN (
       id,
       ROW_NUMBER() OVER (
         PARTITION BY marketplace, txn_id
-        ORDER BY created_at ASC   -- keep earliest
+        ORDER BY created_at ASC, id ASC   -- keep earliest; id breaks ties deterministically
       ) AS rn
     FROM public.settlement_transactions
   ) ranked
@@ -86,7 +86,7 @@ WHERE k.id IN (
       id,
       ROW_NUMBER() OVER (
         PARTITION BY marketplace, txn_id
-        ORDER BY created_at ASC
+        ORDER BY created_at ASC, id ASC
       ) AS rn
     FROM public.settlement_transactions
     WHERE (marketplace, txn_id) IN (
@@ -117,7 +117,7 @@ WHERE st.id IN (
     SELECT id,
            ROW_NUMBER() OVER (
              PARTITION BY marketplace, txn_id
-             ORDER BY created_at ASC
+             ORDER BY created_at ASC, id ASC
            ) AS rn
     FROM public.settlement_transactions
   ) ranked
@@ -172,7 +172,7 @@ WHERE id IN (
       id,
       ROW_NUMBER() OVER (
         PARTITION BY marketplace, txn_id
-        ORDER BY created_at ASC   -- keep earliest; delete rn > 1
+        ORDER BY created_at ASC, id ASC   -- keep earliest; delete rn > 1
       ) AS rn
     FROM public.settlement_transactions
   ) ranked
