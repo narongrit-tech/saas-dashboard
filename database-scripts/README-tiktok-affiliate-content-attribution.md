@@ -4,7 +4,8 @@ Status:
 
 - Affiliate normalization foundation: done.
 - Interim analytics layer: done.
-- Full Phase 3 profit layer: not done yet.
+- Content order attribution layer: done.
+- Full Phase 3 profit layer: done.
 
 ## Status Snapshot
 
@@ -17,14 +18,14 @@ Status:
 ### What is intentionally provisional
 
 - This foundation is intentionally limited to module-local staging and normalized attribution facts.
-- It does not add cost inputs, allocation, profit, ROI, or any cross-module SaaS integrations.
-- It remains an upstream dependency for reporting rather than the final Phase 3 profit layer itself.
+- It does not itself add cost inputs, allocation, profit, ROI, or any cross-module SaaS integrations.
+- It remains an upstream dependency for the downstream attribution and profit layers.
 
-### What is next
+### What exists downstream now
 
-- Keep this foundation stable as the base for Phase 3.
-- Add the module-local cost input contract and allocation logic in the full profit layer.
-- Promote provisional analytics outputs into final profit-facing views only after Phase 3 is complete.
+- `migration-096-tiktok-content-order-attribution.sql` adds deterministic final winner selection.
+- `migration-097-tiktok-affiliate-content-profit-layer.sql` adds cost allocation and the final profit summary refresh path.
+- This README remains focused on the upstream schema and normalization contract.
 
 ## Scope
 

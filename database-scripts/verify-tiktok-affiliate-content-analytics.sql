@@ -20,7 +20,67 @@ GROUP BY created_by, currency, order_date
 ORDER BY order_date DESC, created_by, currency
 LIMIT 50;
 
--- 2) content_performance_daily duplicate grain check
+-- 2) Fact-grain preservation + status mapping check
+SELECT
+  f.created_by,
+  f.import_batch_id,
+  f.order_id,
+  f.sku_id,
+  f.product_id,
+  f.content_id,
+  f.order_settlement_status,
+  b.outcome_status,
+  b.is_realized,
+  b.is_open,
+  b.is_lost,
+  b.is_failed,
+  b.is_loss_outcome,
+  b.actual_commission_amount,
+  b.reported_commission_amount,
+  f.total_earned_amount
+FROM public.content_order_facts f
+JOIN public.content_order_analytics_daily_base b
+  ON b.created_by = f.created_by
+ AND b.order_id = f.order_id
+ AND b.sku_id = f.sku_id
+ AND b.product_id = f.product_id
+ AND b.content_id = f.content_id
+WHERE b.outcome_status IS DISTINCT FROM CASE
+    WHEN f.order_settlement_status = 'settled' THEN 'realized'
+    WHEN f.order_settlement_status IN ('pending', 'awaiting_payment') THEN 'open'
+    WHEN f.order_settlement_status = 'ineligible' THEN 'lost'
+    ELSE 'unknown'
+  END
+   OR b.is_realized IS DISTINCT FROM (f.order_settlement_status = 'settled')
+   OR b.is_open IS DISTINCT FROM (f.order_settlement_status IN ('pending', 'awaiting_payment'))
+   OR b.is_lost IS DISTINCT FROM (f.order_settlement_status = 'ineligible')
+   OR b.is_failed IS DISTINCT FROM (
+     f.order_settlement_status NOT IN ('settled', 'pending', 'awaiting_payment', 'ineligible')
+   )
+   OR b.is_loss_outcome IS DISTINCT FROM (f.order_settlement_status = 'ineligible')
+   OR (
+     f.order_settlement_status IN ('pending', 'awaiting_payment')
+     AND (
+       b.actual_commission_amount <> 0
+       OR b.is_loss_outcome
+       OR b.is_failed
+     )
+   )
+   OR (
+     f.order_settlement_status = 'ineligible'
+     AND (
+       b.actual_commission_amount <> 0
+       OR NOT b.is_loss_outcome
+     )
+   )
+   OR (
+     f.order_settlement_status = 'settled'
+     AND b.actual_commission_amount IS DISTINCT FROM COALESCE(f.total_earned_amount, 0)::NUMERIC(18, 2)
+   )
+ORDER BY f.created_by, f.order_id, f.sku_id, f.product_id, f.content_id
+LIMIT 100;
+
+-- 3) content_performance_daily duplicate grain check
 SELECT
   created_by,
   content_id,
@@ -32,7 +92,7 @@ GROUP BY created_by, content_id, currency, order_date
 HAVING COUNT(*) > 1
 ORDER BY order_date DESC, dup_count DESC;
 
--- 3) content_performance_daily reconciliation
+-- 4) content_performance_daily reconciliation
 WITH expected AS (
   SELECT
     b.created_by,
@@ -41,17 +101,17 @@ WITH expected AS (
     b.currency,
     b.order_date,
     COUNT(*)::BIGINT AS total_orders,
-    COUNT(*) FILTER (WHERE b.is_successful)::BIGINT AS successful_orders,
+    COUNT(*) FILTER (WHERE b.is_realized)::BIGINT AS successful_orders,
     COUNT(*) FILTER (WHERE b.is_failed)::BIGINT AS failed_orders,
-    COUNT(*) FILTER (WHERE b.is_cancelled)::BIGINT AS cancelled_orders,
+    COUNT(*) FILTER (WHERE b.is_lost)::BIGINT AS cancelled_orders,
     COALESCE(SUM(b.items_sold), 0)::BIGINT AS total_units_sold,
     COALESCE(SUM(b.items_refunded), 0)::BIGINT AS total_units_refunded,
     ROUND(COALESCE(SUM(b.gmv), 0), 2) AS gmv_total,
     ROUND(COALESCE(SUM(b.actual_commission_amount), 0), 2) AS actual_commission_total,
     ROUND(COALESCE(SUM(CASE WHEN b.is_loss_outcome THEN b.gmv ELSE 0 END), 0), 2) AS lost_gmv,
-    ROUND(COALESCE(SUM(CASE WHEN b.is_loss_outcome THEN b.actual_commission_amount ELSE 0 END), 0), 2) AS lost_commission,
-    ROUND((COUNT(*) FILTER (WHERE b.is_successful))::NUMERIC / NULLIF(COUNT(*), 0), 6) AS success_rate,
-    ROUND((COUNT(*) FILTER (WHERE b.is_cancelled))::NUMERIC / NULLIF(COUNT(*), 0), 6) AS cancel_rate
+    ROUND(COALESCE(SUM(CASE WHEN b.is_loss_outcome THEN b.reported_commission_amount ELSE 0 END), 0), 2) AS lost_commission,
+    ROUND((COUNT(*) FILTER (WHERE b.is_realized))::NUMERIC / NULLIF(COUNT(*), 0), 6) AS success_rate,
+    ROUND((COUNT(*) FILTER (WHERE b.is_lost))::NUMERIC / NULLIF(COUNT(*), 0), 6) AS cancel_rate
   FROM public.content_order_analytics_daily_base b
   GROUP BY b.created_by, b.content_id, b.currency, b.order_date
 )
@@ -88,7 +148,7 @@ WHERE v.created_by IS NULL
 ORDER BY order_date DESC, created_by, content_id
 LIMIT 50;
 
--- 4) content_performance_daily descriptor drift check
+-- 5) content_performance_daily descriptor drift check
 SELECT
   created_by,
   content_id,
@@ -100,7 +160,7 @@ GROUP BY created_by, content_id, currency, order_date
 HAVING COUNT(DISTINCT COALESCE(content_type, '<<null>>')) > 1
 ORDER BY order_date DESC, created_by, content_id;
 
--- 5) content_product_performance_daily duplicate grain check
+-- 6) content_product_performance_daily duplicate grain check
 SELECT
   created_by,
   content_id,
@@ -114,7 +174,7 @@ GROUP BY created_by, content_id, product_id, sku_id, currency, order_date
 HAVING COUNT(*) > 1
 ORDER BY order_date DESC, dup_count DESC;
 
--- 6) content_product_performance_daily reconciliation
+-- 7) content_product_performance_daily reconciliation
 WITH expected AS (
   SELECT
     b.created_by,
@@ -126,15 +186,15 @@ WITH expected AS (
     b.currency,
     b.order_date,
     COUNT(*)::BIGINT AS total_orders,
-    COUNT(*) FILTER (WHERE b.is_successful)::BIGINT AS successful_orders,
+    COUNT(*) FILTER (WHERE b.is_realized)::BIGINT AS successful_orders,
     COUNT(*) FILTER (WHERE b.is_failed)::BIGINT AS failed_orders,
-    COUNT(*) FILTER (WHERE b.is_cancelled)::BIGINT AS cancelled_orders,
+    COUNT(*) FILTER (WHERE b.is_lost)::BIGINT AS cancelled_orders,
     COALESCE(SUM(b.items_sold), 0)::BIGINT AS total_units_sold,
     COALESCE(SUM(b.items_refunded), 0)::BIGINT AS total_units_refunded,
     ROUND(COALESCE(SUM(b.gmv), 0), 2) AS gmv_total,
     ROUND(COALESCE(SUM(b.actual_commission_amount), 0), 2) AS actual_commission_total,
     ROUND(COALESCE(SUM(CASE WHEN b.is_loss_outcome THEN b.gmv ELSE 0 END), 0), 2) AS lost_gmv,
-    ROUND(COALESCE(SUM(CASE WHEN b.is_loss_outcome THEN b.actual_commission_amount ELSE 0 END), 0), 2) AS lost_commission
+    ROUND(COALESCE(SUM(CASE WHEN b.is_loss_outcome THEN b.reported_commission_amount ELSE 0 END), 0), 2) AS lost_commission
   FROM public.content_order_analytics_daily_base b
   GROUP BY b.created_by, b.content_id, b.product_id, b.sku_id, b.currency, b.order_date
 )
@@ -172,7 +232,7 @@ WHERE v.created_by IS NULL
 ORDER BY order_date DESC, created_by, content_id, product_id, sku_id
 LIMIT 50;
 
--- 7) content_product_performance_daily descriptor drift check
+-- 8) content_product_performance_daily descriptor drift check
 SELECT
   created_by,
   content_id,
@@ -188,7 +248,7 @@ HAVING COUNT(DISTINCT COALESCE(product_name, '<<null>>')) > 1
     OR COUNT(DISTINCT COALESCE(content_type, '<<null>>')) > 1
 ORDER BY order_date DESC, created_by, content_id, product_id, sku_id;
 
--- 8) product_performance_daily duplicate grain check
+-- 9) product_performance_daily duplicate grain check
 SELECT
   created_by,
   product_id,
@@ -201,7 +261,7 @@ GROUP BY created_by, product_id, sku_id, currency, order_date
 HAVING COUNT(*) > 1
 ORDER BY order_date DESC, dup_count DESC;
 
--- 9) product_performance_daily reconciliation
+-- 10) product_performance_daily reconciliation
 WITH expected AS (
   SELECT
     b.created_by,
@@ -211,14 +271,14 @@ WITH expected AS (
     b.currency,
     b.order_date,
     COUNT(*)::BIGINT AS total_orders,
-    COUNT(*) FILTER (WHERE b.is_successful)::BIGINT AS successful_orders,
+    COUNT(*) FILTER (WHERE b.is_realized)::BIGINT AS successful_orders,
     COUNT(*) FILTER (WHERE b.is_failed)::BIGINT AS failed_orders,
-    COUNT(*) FILTER (WHERE b.is_cancelled)::BIGINT AS cancelled_orders,
+    COUNT(*) FILTER (WHERE b.is_lost)::BIGINT AS cancelled_orders,
     COALESCE(SUM(b.items_sold), 0)::BIGINT AS total_units_sold,
     ROUND(COALESCE(SUM(b.gmv), 0), 2) AS gmv_total,
     ROUND(COALESCE(SUM(b.actual_commission_amount), 0), 2) AS actual_commission_total,
     ROUND(COALESCE(SUM(CASE WHEN b.is_loss_outcome THEN b.gmv ELSE 0 END), 0), 2) AS lost_gmv,
-    ROUND(COALESCE(SUM(CASE WHEN b.is_loss_outcome THEN b.actual_commission_amount ELSE 0 END), 0), 2) AS lost_commission
+    ROUND(COALESCE(SUM(CASE WHEN b.is_loss_outcome THEN b.reported_commission_amount ELSE 0 END), 0), 2) AS lost_commission
   FROM public.content_order_analytics_daily_base b
   GROUP BY b.created_by, b.product_id, b.sku_id, b.currency, b.order_date
 )
@@ -252,7 +312,7 @@ WHERE v.created_by IS NULL
 ORDER BY order_date DESC, created_by, product_id, sku_id
 LIMIT 50;
 
--- 10) product_performance_daily descriptor drift check
+-- 11) product_performance_daily descriptor drift check
 SELECT
   created_by,
   product_id,
@@ -265,7 +325,7 @@ GROUP BY created_by, product_id, sku_id, currency, order_date
 HAVING COUNT(DISTINCT COALESCE(product_name, '<<null>>')) > 1
 ORDER BY order_date DESC, created_by, product_id, sku_id;
 
--- 11) content_channel_split_daily duplicate grain check
+-- 12) content_channel_split_daily duplicate grain check
 SELECT
   created_by,
   content_id,
@@ -278,7 +338,7 @@ GROUP BY created_by, content_id, currency, order_date, attribution_type
 HAVING COUNT(*) > 1
 ORDER BY order_date DESC, dup_count DESC;
 
--- 12) content_channel_split_daily reconciliation
+-- 13) content_channel_split_daily reconciliation
 WITH expected AS (
   SELECT
     b.created_by,
@@ -290,7 +350,7 @@ WITH expected AS (
     ROUND(COALESCE(SUM(b.gmv), 0), 2) AS gmv_total,
     ROUND(COALESCE(SUM(b.actual_commission_amount), 0), 2) AS actual_commission_total,
     ROUND(COALESCE(SUM(CASE WHEN b.is_loss_outcome THEN b.gmv ELSE 0 END), 0), 2) AS lost_gmv,
-    ROUND(COALESCE(SUM(CASE WHEN b.is_loss_outcome THEN b.actual_commission_amount ELSE 0 END), 0), 2) AS lost_commission
+    ROUND(COALESCE(SUM(CASE WHEN b.is_loss_outcome THEN b.reported_commission_amount ELSE 0 END), 0), 2) AS lost_commission
   FROM public.content_order_analytics_daily_base b
   GROUP BY b.created_by, b.content_id, b.currency, b.order_date, b.attribution_type
 )
@@ -319,7 +379,7 @@ WHERE v.created_by IS NULL
 ORDER BY order_date DESC, created_by, content_id, attribution_type
 LIMIT 50;
 
--- 13) content_loss_daily duplicate grain check
+-- 14) content_loss_daily duplicate grain check
 SELECT
   created_by,
   content_id,
@@ -331,7 +391,7 @@ GROUP BY created_by, content_id, currency, order_date
 HAVING COUNT(*) > 1
 ORDER BY order_date DESC, dup_count DESC;
 
--- 14) content_loss_daily reconciliation
+-- 15) content_loss_daily reconciliation
 WITH expected AS (
   SELECT
     b.created_by,
@@ -340,10 +400,10 @@ WITH expected AS (
     b.order_date,
     COUNT(*) FILTER (WHERE b.is_loss_outcome)::BIGINT AS lost_orders,
     ROUND(COALESCE(SUM(CASE WHEN b.is_loss_outcome THEN b.gmv ELSE 0 END), 0), 2) AS lost_gmv,
-    ROUND(COALESCE(SUM(CASE WHEN b.is_loss_outcome THEN b.actual_commission_amount ELSE 0 END), 0), 2) AS lost_commission,
-    COUNT(*) FILTER (WHERE b.is_cancelled)::BIGINT AS cancelled_orders,
+    ROUND(COALESCE(SUM(CASE WHEN b.is_loss_outcome THEN b.reported_commission_amount ELSE 0 END), 0), 2) AS lost_commission,
+    COUNT(*) FILTER (WHERE b.is_lost)::BIGINT AS cancelled_orders,
     COUNT(*) FILTER (WHERE b.is_failed)::BIGINT AS failed_orders,
-    ROUND((COUNT(*) FILTER (WHERE b.is_cancelled))::NUMERIC / NULLIF(COUNT(*), 0), 6) AS cancel_rate
+    ROUND((COUNT(*) FILTER (WHERE b.is_lost))::NUMERIC / NULLIF(COUNT(*), 0), 6) AS cancel_rate
   FROM public.content_order_analytics_daily_base b
   GROUP BY b.created_by, b.content_id, b.currency, b.order_date
 )

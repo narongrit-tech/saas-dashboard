@@ -4,7 +4,8 @@ Status:
 
 - Affiliate normalization foundation: done.
 - Interim analytics layer: done.
-- Full Phase 3 profit layer: not done yet.
+- Content order attribution layer: done.
+- Full Phase 3 profit layer: done.
 
 ## Status Snapshot
 
@@ -17,14 +18,14 @@ Status:
 ### What is intentionally provisional
 
 - `total_earned_amount` is still treated as a provisional commission signal for analytics.
-- The layer intentionally excludes creator scope, cost inputs, allocation, profit, and ROI.
-- This is not a replacement for existing SaaS logic and not a declaration that Phase 3 is complete.
+- The layer intentionally excludes creator scope and does not replace the final Phase 3 profit summary.
+- This is not a replacement for existing SaaS logic.
 
-### What is next
+### What exists downstream now
 
-- Implement the full Phase 3 profit layer on top of the existing foundation plus interim analytics.
-- Add module-local `ads_cost`, `creator_cost`, and `other_cost` inputs with allocation.
-- Replace provisional analytics-only outputs with final profit and ROI views once Phase 3 is complete.
+- `migration-096-tiktok-content-order-attribution.sql` adds the deterministic final winner layer.
+- `migration-097-tiktok-affiliate-content-profit-layer.sql` adds the module-local cost allocation and final profit summary.
+- This README remains focused on the analytics views only.
 
 ## Scope
 
@@ -190,13 +191,13 @@ Fields:
 
 ## Formulas Implemented
 
-- `successful_orders = COUNT(*) WHERE is_successful = true`
-- `cancelled_orders = COUNT(*) WHERE is_cancelled = true`
-- `failed_orders = COUNT(*) WHERE is_successful = false AND is_cancelled = false`
-- `lost_orders = COUNT(*) WHERE is_successful = false OR is_cancelled = true`
-- `lost_gmv = SUM(gmv) WHERE is_successful = false OR is_cancelled = true`
-- `lost_commission = SUM(total_earned_amount) WHERE is_successful = false OR is_cancelled = true`
-- `actual_commission_total = SUM(total_earned_amount)`
+- `successful_orders = COUNT(*) WHERE outcome_status = 'realized'`
+- `cancelled_orders = COUNT(*) WHERE outcome_status = 'lost'`
+- `failed_orders = COUNT(*) WHERE outcome_status = 'unknown'`
+- `lost_orders = COUNT(*) WHERE outcome_status = 'lost'`
+- `lost_gmv = SUM(gmv) WHERE outcome_status = 'lost'`
+- `lost_commission = SUM(reported_commission_amount) WHERE outcome_status = 'lost'`
+- `actual_commission_total = SUM(actual_commission_amount)` where `actual_commission_amount` is settled-only
 - `success_rate = successful_orders / total_orders`
 - `cancel_rate = cancelled_orders / total_orders`
 
@@ -328,7 +329,7 @@ psql $env:DATABASE_URL -f database-scripts/verify-tiktok-affiliate-content-analy
 ## Known Limitations
 
 - `total_earned_amount` is treated as the requested provisional commission signal for analytics only; this README does not promote it to final business truth.
-- This deliverable is still an interim analytics layer rather than full Phase 3 because creator scope, cost inputs, allocation, profit, and ROI are still missing.
+- This deliverable remains an interim analytics layer even though full Phase 3 now exists downstream, because these views are not the final profit summary.
 - These views do not implement expected commission, commission loss rate, creator performance, ads cost, creator cost, other cost, profit, or ROI.
 - Rows with `order_date IS NULL` are excluded because a daily grain cannot be formed safely.
 - Descriptor fields such as `content_type` and `product_name` use `MAX(...)` inside a grain when multiple values exist; the verification file includes drift checks to surface those inconsistencies.
