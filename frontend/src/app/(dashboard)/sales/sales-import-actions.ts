@@ -26,8 +26,19 @@ import { parse as parseDate, isValid } from 'date-fns'
 // ============================================
 
 /**
- * Generate SHA256 hash for sales order line deduplication
- * Matches PostgreSQL function: public.generate_order_line_hash
+ * Generate SHA256 hash for sales order line deduplication.
+ * Matches PostgreSQL backfill formula in migration-024.
+ *
+ * Hash input includes `userId` (created_by) so that:
+ *   - Same user re-importing the same file produces identical hashes → idempotent upsert.
+ *   - Different users importing the same order produce different hashes → no cross-user conflict.
+ *
+ * Cross-user / cross-file dedup is enforced at the import_batches level
+ * (file_hash + report_type unique index, migration-093).
+ *
+ * DB constraint: sales_orders_unique_order_line_hash ON (order_line_hash)
+ * — single-column, no WHERE clause, required for PostgREST ON CONFLICT inference.
+ * — created by migration-099 (or migration-093 sales_orders block).
  */
 function generateOrderLineHash(
   userId: string,
@@ -1113,6 +1124,18 @@ export async function importSalesChunk(
         hint: upsertError.hint
       })
 
+      // 42P10 = no unique constraint matching ON CONFLICT target 'order_line_hash'
+      // Cause: migration-099 (or migration-093 sales_orders block) has not been applied.
+      // Fix:   Run database-scripts/migration-099-fix-sales-orders-conflict-target.sql
+      //        in the Supabase SQL editor, then retry the import.
+      if (upsertError.code === '42P10') {
+        console.error(
+          '[importSalesChunk] SCHEMA MISMATCH: The unique index "sales_orders_unique_order_line_hash" ' +
+          'is missing from the database. Apply migration-099-fix-sales-orders-conflict-target.sql ' +
+          'via Supabase Dashboard > SQL Editor, then retry.'
+        )
+      }
+
       // Mark batch as failed
       await supabase
         .from('import_batches')
@@ -1122,10 +1145,14 @@ export async function importSalesChunk(
         })
         .eq('id', batchId)
 
+      const userFacingError = upsertError.code === '42P10'
+        ? `Upsert failed: schema not ready — unique index on order_line_hash is missing. Apply migration-099 and retry. (Code: ${upsertError.code})`
+        : `Upsert failed: ${upsertError.message} (Code: ${upsertError.code})`
+
       return {
         success: false,
         inserted: 0,
-        error: `Upsert failed: ${upsertError.message} (Code: ${upsertError.code})`,
+        error: userFacingError,
       }
     }
 
@@ -1708,18 +1735,34 @@ export async function importSalesToSystem(
     if (upsertError) {
       console.error('Upsert error:', upsertError)
 
+      // 42P10 = no unique constraint matching ON CONFLICT target 'order_line_hash'
+      // Cause: migration-099 (or migration-093 sales_orders block) has not been applied.
+      // Fix:   Run database-scripts/migration-099-fix-sales-orders-conflict-target.sql
+      //        in the Supabase SQL editor, then retry the import.
+      if (upsertError.code === '42P10') {
+        console.error(
+          '[importSalesOrder] SCHEMA MISMATCH: The unique index "sales_orders_unique_order_line_hash" ' +
+          'is missing from the database. Apply migration-099-fix-sales-orders-conflict-target.sql ' +
+          'via Supabase Dashboard > SQL Editor, then retry.'
+        )
+      }
+
+      const userFacingError = upsertError.code === '42P10'
+        ? `Upsert failed: schema not ready — unique index on order_line_hash is missing. Apply migration-099 and retry. (Code: ${upsertError.code})`
+        : `Upsert failed: ${upsertError.message}`
+
       await supabase
         .from('import_batches')
         .update({
           status: 'failed',
           error_count: parsedData.length,
-          notes: `Upsert failed: ${upsertError.message}`,
+          notes: userFacingError,
         })
         .eq('id', batch.id)
 
       return {
         success: false,
-        error: `Upsert failed: ${upsertError.message}`,
+        error: userFacingError,
         inserted: 0,
         updated: 0,
         skipped: 0,
