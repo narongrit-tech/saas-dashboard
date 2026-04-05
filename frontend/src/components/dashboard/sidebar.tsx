@@ -33,6 +33,7 @@ import {
   GitFork,
   UserCircle,
   Video,
+  GitBranch,
 } from 'lucide-react'
 
 interface MenuItem {
@@ -103,6 +104,11 @@ const menuGroups: MenuGroup[] = [
         title: 'Content Library',
         href: '/content-ops/library',
         icon: Video,
+      },
+      {
+        title: 'TikTok Affiliate',
+        href: '/content-ops/tiktok-affiliate',
+        icon: GitBranch,
       },
     ],
   },
@@ -204,8 +210,10 @@ export function SidebarContent({ onNavigate }: SidebarContentProps) {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
 
   const isItemActive = useCallback((href: string): boolean => {
-    // Settings sub-pages use startsWith so /settings/general is active on that path
-    if (href.startsWith('/settings/')) return pathname === href || pathname.startsWith(href + '/')
+    // Prefix-match for settings and content-ops sub-sections
+    if (href.startsWith('/settings/') || href.startsWith('/content-ops/')) {
+      return pathname === href || pathname.startsWith(href + '/')
+    }
     return pathname === href
   }, [pathname])
 
