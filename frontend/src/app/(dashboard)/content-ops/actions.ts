@@ -1,6 +1,7 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { getBangkokToday, offsetDate, buildDayArray } from './date-utils'
 
 // ─── Status mapping ────────────────────────────────────────────────────────────
 
@@ -636,7 +637,7 @@ export interface ExplorerRow {
 }
 
 export async function getOrdersExplorer(
-  filters: { query?: string; productId?: string; shopCode?: string; status?: string; contentId?: string } = {},
+  filters: { query?: string; productId?: string; shopCode?: string; status?: string; contentId?: string; from?: string; to?: string } = {},
   limit = 50,
   offset = 0
 ): Promise<{ data: ExplorerRow[]; total: number; error: string | null }> {
@@ -649,6 +650,8 @@ export async function getOrdersExplorer(
     .select('id,order_id,sku_id,product_id,product_name,shop_code,shop_name,content_id,order_settlement_status,order_date', { count: 'exact' })
     .eq('created_by', user.id)
 
+  if (filters.from) q = q.gte('order_date', filters.from)
+  if (filters.to) q = q.lte('order_date', filters.to)
   if (filters.productId) q = q.eq('product_id', filters.productId)
   if (filters.shopCode) q = q.eq('shop_code', filters.shopCode)
   if (filters.contentId) q = q.eq('content_id', filters.contentId)
@@ -897,4 +900,363 @@ export async function getDataHealth(): Promise<{ data: DataHealthData | null; er
     data: { pipeline, knownGaps, coverageMetrics, nextActions },
     error: null,
   }
+}
+
+// ─── Date utilities re-exported from ./date-utils ─────────────────────────────
+// (getBangkokToday, offsetDate, buildDayArray, getDefaultDateRange are imported above)
+
+// ─── Date-filtered overview ────────────────────────────────────────────────────
+
+export interface OverviewDataFiltered {
+  stats: OverviewStats
+  statusBreakdown: StatusBucket[]
+  topProducts: TopProductRow[]
+  topShops: TopShopRow[]
+}
+
+export async function getOverviewDataFiltered(
+  from: string,
+  to: string
+): Promise<{ data: OverviewDataFiltered | null; error: string | null }> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { data: null, error: 'Unauthenticated' }
+
+  const { data, error: dbError } = await supabase
+    .from('content_order_facts')
+    .select('product_id,product_name,shop_code,shop_name,content_id,order_settlement_status')
+    .eq('created_by', user.id)
+    .gte('order_date', from)
+    .lte('order_date', to)
+
+  if (dbError) return { data: null, error: dbError.message }
+
+  const rows = data ?? []
+  const productIds = new Set<string>()
+  const shopCodes = new Set<string>()
+  const contentIds = new Set<string>()
+  const statusCounts = new Map<string, number>()
+  const productMap = new Map<string, { name: string | null; items: number; shops: Set<string> }>()
+  const shopMap = new Map<string, { name: string | null; items: number; products: Set<string> }>()
+
+  for (const r of rows) {
+    if (r.product_id) productIds.add(r.product_id)
+    if (r.shop_code) shopCodes.add(r.shop_code)
+    if (r.content_id) contentIds.add(r.content_id)
+
+    const bucket = mapStatusBucket(r.order_settlement_status ?? '')
+    statusCounts.set(bucket, (statusCounts.get(bucket) ?? 0) + 1)
+
+    if (r.product_id) {
+      const p = productMap.get(r.product_id) ?? { name: null, items: 0, shops: new Set() }
+      p.items++
+      if (!p.name && r.product_name) p.name = r.product_name
+      if (r.shop_code) p.shops.add(r.shop_code)
+      productMap.set(r.product_id, p)
+    }
+    if (r.shop_code) {
+      const s = shopMap.get(r.shop_code) ?? { name: null, items: 0, products: new Set() }
+      s.items++
+      if (!s.name && r.shop_name) s.name = r.shop_name
+      if (r.product_id) s.products.add(r.product_id)
+      shopMap.set(r.shop_code, s)
+    }
+  }
+
+  const total = rows.length
+
+  const statusBreakdown: StatusBucket[] = (['settled', 'pending', 'awaiting_payment', 'ineligible'] as const).map((key) => ({
+    key,
+    label: STATUS_BUCKET_LABELS[key],
+    count: statusCounts.get(key) ?? 0,
+    percent: total > 0 ? Math.round(((statusCounts.get(key) ?? 0) / total) * 1000) / 10 : 0,
+  }))
+
+  const topProducts: TopProductRow[] = [...productMap.entries()]
+    .map(([productId, v]) => ({
+      productId,
+      productName: v.name,
+      orderItems: v.items,
+      shopCount: v.shops.size,
+      sharePercent: total > 0 ? Math.round((v.items / total) * 1000) / 10 : 0,
+    }))
+    .sort((a, b) => b.orderItems - a.orderItems)
+    .slice(0, 10)
+
+  const topShops: TopShopRow[] = [...shopMap.entries()]
+    .map(([shopCode, v]) => ({
+      shopCode,
+      shopName: v.name,
+      orderItems: v.items,
+      productCount: v.products.size,
+      sharePercent: total > 0 ? Math.round((v.items / total) * 1000) / 10 : 0,
+    }))
+    .sort((a, b) => b.orderItems - a.orderItems)
+    .slice(0, 10)
+
+  return {
+    data: {
+      stats: {
+        totalOrderItems: total,
+        uniqueProducts: productIds.size,
+        uniqueShops: shopCodes.size,
+        uniqueContentIds: contentIds.size,
+      },
+      statusBreakdown,
+      topProducts,
+      topShops,
+    },
+    error: null,
+  }
+}
+
+// ─── Trend types ───────────────────────────────────────────────────────────────
+
+export interface ProductTrendRow {
+  productId: string
+  productName: string | null
+  orderItems: number       // current period
+  prevOrderItems: number   // previous period
+  changePercent: number | null  // null when prev = 0
+  isNew: boolean           // true when prev = 0 and current > 0
+  shopCount: number
+  topShopName: string | null
+  dailyCounts: number[]    // per-day counts, current period only, index 0 = oldest day
+}
+
+export interface ShopTrendRow {
+  shopCode: string
+  shopName: string | null
+  orderItems: number
+  prevOrderItems: number
+  changePercent: number | null
+  isNew: boolean
+  productCount: number
+  topProductName: string | null
+  dailyCounts: number[]
+}
+
+// ─── Product trends (top 50 + full list) ──────────────────────────────────────
+
+export interface ProductTableResult {
+  productId: string
+  productName: string | null
+  shopCount: number
+  orderItems: number
+  topShopName: string | null
+}
+
+export interface ShopTableResult {
+  shopCode: string
+  shopName: string | null
+  productCount: number
+  orderItems: number
+  topProductName: string | null
+}
+
+export async function getProductTrends(
+  from: string,
+  to: string,
+  topN = 50
+): Promise<{ top: ProductTrendRow[]; all: ProductTableResult[]; error: string | null }> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { top: [], all: [], error: 'Unauthenticated' }
+
+  // Compute previous period (same duration, immediately before current)
+  const currentDays = buildDayArray(from, to).length
+  const prevTo = offsetDate(from, -1)
+  const prevFrom = offsetDate(prevTo, -(currentDays - 1))
+
+  // Fetch both periods in one query
+  const { data, error: dbError } = await supabase
+    .from('content_order_facts')
+    .select('product_id,product_name,shop_code,shop_name,order_date')
+    .eq('created_by', user.id)
+    .gte('order_date', prevFrom)
+    .lte('order_date', to)
+
+  if (dbError) return { top: [], all: [], error: dbError.message }
+
+  const rows = data ?? []
+  const currentDaySet = new Set(buildDayArray(from, to))
+  const currentDayArray = buildDayArray(from, to)
+
+  type Agg = {
+    name: string | null
+    shops: Map<string, string | null>  // code → name
+    products?: Map<string, string | null>
+    currentItems: number
+    prevItems: number
+    dailyCounts: Map<string, number>
+  }
+
+  const productMap = new Map<string, Agg>()
+
+  for (const r of rows) {
+    if (!r.product_id) continue
+    const day = (r.order_date ?? '').split('T')[0]
+    const isCurrent = currentDaySet.has(day)
+
+    const p = productMap.get(r.product_id) ?? {
+      name: null,
+      shops: new Map(),
+      currentItems: 0,
+      prevItems: 0,
+      dailyCounts: new Map(),
+    }
+
+    if (!p.name && r.product_name) p.name = r.product_name
+    if (r.shop_code) p.shops.set(r.shop_code, r.shop_name ?? null)
+
+    if (isCurrent) {
+      p.currentItems++
+      p.dailyCounts.set(day, (p.dailyCounts.get(day) ?? 0) + 1)
+    } else {
+      p.prevItems++
+    }
+    productMap.set(r.product_id, p)
+  }
+
+  // Also need all-time items for the full list (pass current period)
+  // (full list already filtered by date via the same query above — just use currentItems)
+
+  function computeChange(cur: number, prev: number): { changePercent: number | null; isNew: boolean } {
+    if (prev === 0 && cur > 0) return { changePercent: null, isNew: true }
+    if (prev === 0) return { changePercent: null, isNew: false }
+    return { changePercent: Math.round(((cur - prev) / prev) * 1000) / 10, isNew: false }
+  }
+
+  const allProducts: ProductTrendRow[] = [...productMap.entries()]
+    .map(([productId, v]) => {
+      const topShop = [...v.shops.entries()][0]
+      const { changePercent, isNew } = computeChange(v.currentItems, v.prevItems)
+      const dailyCounts = currentDayArray.map((d) => v.dailyCounts.get(d) ?? 0)
+      return {
+        productId,
+        productName: v.name,
+        orderItems: v.currentItems,
+        prevOrderItems: v.prevItems,
+        changePercent,
+        isNew,
+        shopCount: v.shops.size,
+        topShopName: topShop ? (topShop[1] ?? topShop[0]) : null,
+        dailyCounts,
+      }
+    })
+    .sort((a, b) => b.orderItems - a.orderItems)
+
+  const top = allProducts.slice(0, topN)
+
+  // Full list for the client table
+  const all: ProductTableResult[] = allProducts.map((p) => ({
+    productId: p.productId,
+    productName: p.productName,
+    shopCount: p.shopCount,
+    orderItems: p.orderItems,
+    topShopName: p.topShopName,
+  }))
+
+  return { top, all, error: null }
+}
+
+// ─── Shop trends (top 50 + full list) ─────────────────────────────────────────
+
+export async function getShopTrends(
+  from: string,
+  to: string,
+  topN = 50
+): Promise<{ top: ShopTrendRow[]; all: ShopTableResult[]; error: string | null }> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { top: [], all: [], error: 'Unauthenticated' }
+
+  const currentDays = buildDayArray(from, to).length
+  const prevTo = offsetDate(from, -1)
+  const prevFrom = offsetDate(prevTo, -(currentDays - 1))
+
+  const { data, error: dbError } = await supabase
+    .from('content_order_facts')
+    .select('shop_code,shop_name,product_id,product_name,order_date')
+    .eq('created_by', user.id)
+    .gte('order_date', prevFrom)
+    .lte('order_date', to)
+
+  if (dbError) return { top: [], all: [], error: dbError.message }
+
+  const rows = data ?? []
+  const currentDaySet = new Set(buildDayArray(from, to))
+  const currentDayArray = buildDayArray(from, to)
+
+  type ShopAgg = {
+    name: string | null
+    products: Map<string, string | null>
+    currentItems: number
+    prevItems: number
+    dailyCounts: Map<string, number>
+  }
+
+  const shopMap = new Map<string, ShopAgg>()
+
+  for (const r of rows) {
+    if (!r.shop_code) continue
+    const day = (r.order_date ?? '').split('T')[0]
+    const isCurrent = currentDaySet.has(day)
+
+    const s = shopMap.get(r.shop_code) ?? {
+      name: null,
+      products: new Map(),
+      currentItems: 0,
+      prevItems: 0,
+      dailyCounts: new Map(),
+    }
+
+    if (!s.name && r.shop_name) s.name = r.shop_name
+    if (r.product_id) s.products.set(r.product_id, r.product_name ?? null)
+
+    if (isCurrent) {
+      s.currentItems++
+      s.dailyCounts.set(day, (s.dailyCounts.get(day) ?? 0) + 1)
+    } else {
+      s.prevItems++
+    }
+    shopMap.set(r.shop_code, s)
+  }
+
+  function computeChange(cur: number, prev: number): { changePercent: number | null; isNew: boolean } {
+    if (prev === 0 && cur > 0) return { changePercent: null, isNew: true }
+    if (prev === 0) return { changePercent: null, isNew: false }
+    return { changePercent: Math.round(((cur - prev) / prev) * 1000) / 10, isNew: false }
+  }
+
+  const allShops: ShopTrendRow[] = [...shopMap.entries()]
+    .map(([shopCode, v]) => {
+      const topProduct = [...v.products.entries()][0]
+      const { changePercent, isNew } = computeChange(v.currentItems, v.prevItems)
+      const dailyCounts = currentDayArray.map((d) => v.dailyCounts.get(d) ?? 0)
+      return {
+        shopCode,
+        shopName: v.name,
+        orderItems: v.currentItems,
+        prevOrderItems: v.prevItems,
+        changePercent,
+        isNew,
+        productCount: v.products.size,
+        topProductName: topProduct ? (topProduct[1] ?? topProduct[0]) : null,
+        dailyCounts,
+      }
+    })
+    .sort((a, b) => b.orderItems - a.orderItems)
+
+  const top = allShops.slice(0, topN)
+
+  const all: ShopTableResult[] = allShops.map((s) => ({
+    shopCode: s.shopCode,
+    shopName: s.shopName,
+    productCount: s.productCount,
+    orderItems: s.orderItems,
+    topProductName: s.topProductName,
+  }))
+
+  return { top, all, error: null }
 }

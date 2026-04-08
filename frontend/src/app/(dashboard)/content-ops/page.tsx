@@ -1,104 +1,75 @@
 import Link from 'next/link'
-import {
-  AlertCircle,
-  CheckCircle2,
-  AlertTriangle,
-  Info,
-  ArrowRight,
-  Upload,
-} from 'lucide-react'
+import { AlertCircle } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { getOverviewData } from './actions'
+import { DateRangeFilter } from '@/components/content-ops/date-range-filter'
+import { EntityAvatar } from '@/components/content-ops/entity-avatar'
+import { getOverviewDataFiltered } from './actions'
+import { getDefaultDateRange } from './date-utils'
 
 export const dynamic = 'force-dynamic'
 
-// ─── Status breakdown bar ──────────────────────────────────────────────────────
+// ─── Status colors ─────────────────────────────────────────────────────────────
 
-const STATUS_COLORS: Record<string, string> = {
+const STATUS_BAR: Record<string, string> = {
   settled: 'bg-emerald-500',
   pending: 'bg-blue-400',
   awaiting_payment: 'bg-amber-400',
   ineligible: 'bg-red-400',
-  other: 'bg-muted',
+}
+const STATUS_NUM: Record<string, string> = {
+  settled: 'text-emerald-600',
+  pending: 'text-blue-600',
+  awaiting_payment: 'text-amber-600',
+  ineligible: 'text-red-600',
 }
 
-const STATUS_TEXT: Record<string, string> = {
-  settled: 'text-emerald-700',
-  pending: 'text-blue-700',
-  awaiting_payment: 'text-amber-700',
-  ineligible: 'text-red-700',
-  other: 'text-muted-foreground',
-}
+// ─── Change badge ──────────────────────────────────────────────────────────────
 
-// ─── Health icon ───────────────────────────────────────────────────────────────
+export default async function ContentOpsOverviewPage({
+  searchParams,
+}: {
+  searchParams: { from?: string; to?: string }
+}) {
+  const defaults = getDefaultDateRange()
+  const from = searchParams.from ?? defaults.from
+  const to = searchParams.to ?? defaults.to
 
-function HealthIcon({ status }: { status: 'ok' | 'warning' | 'error' | 'info' }) {
-  if (status === 'ok') return <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-  if (status === 'warning') return <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
-  if (status === 'error') return <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
-  return <Info className="h-4 w-4 text-muted-foreground shrink-0" />
-}
-
-// ─── Priority badge ────────────────────────────────────────────────────────────
-
-const PRIORITY_STYLE: Record<string, string> = {
-  high: 'border-red-300 text-red-700',
-  medium: 'border-amber-300 text-amber-700',
-  low: 'border-muted-foreground/30 text-muted-foreground',
-}
-
-export default async function ContentOpsOverviewPage() {
-  const { data, error } = await getOverviewData()
+  const { data, error } = await getOverviewDataFiltered(from, to)
 
   if (error || !data) {
     return (
       <div className="flex items-center gap-2 text-sm text-destructive border border-destructive/30 rounded-md px-3 py-2">
         <AlertCircle className="h-4 w-4 shrink-0" />
-        {error ?? 'Failed to load overview data'}
+        {error ?? 'Failed to load overview'}
       </div>
     )
   }
 
-  const { stats, statusBreakdown, topProducts, topShops, healthSnapshot } = data
-  const totalItems = stats.totalOrderItems
-
-  const nextActions = [
-    ...(healthSnapshot.find((h) => h.label === 'Cost data' && h.status === 'warning')
-      ? [{ title: 'Enter cost data', description: 'Required for profit calculation', href: '/content-ops/tiktok-affiliate/costs', priority: 'high' as const }]
-      : []),
-    { title: 'Explore products', description: `${stats.uniqueProducts} products in system`, href: '/content-ops/products', priority: 'medium' as const },
-    { title: 'Explore shops', description: `${stats.uniqueShops} shops in system`, href: '/content-ops/shops', priority: 'medium' as const },
-    { title: 'Connect showcase', description: 'Showcase data not linked', href: '/content-ops/data-health', priority: 'medium' as const },
-    { title: 'Upload new data', description: 'Add more TikTok order files', href: '/content-ops/tiktok-affiliate/upload', priority: 'low' as const },
-  ].slice(0, 5)
+  const { stats, statusBreakdown, topProducts, topShops } = data
+  const total = stats.totalOrderItems
 
   return (
-    <div className="space-y-6 max-w-7xl">
-      {/* Page header */}
-      <div className="flex items-start justify-between gap-4">
+    <div className="space-y-5 max-w-7xl">
+      {/* Header + date filter */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold">Content Ops</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Real affiliate data summary and system state
-          </p>
+          <p className="text-sm text-muted-foreground mt-0.5">Real affiliate data summary</p>
         </div>
-        <Button asChild size="sm" variant="outline">
-          <Link href="/content-ops/tiktok-affiliate/upload">
-            <Upload className="h-3.5 w-3.5 mr-1.5" />
-            Upload data
-          </Link>
-        </Button>
+      </div>
+
+      {/* Sticky date filter */}
+      <div className="sticky top-0 z-10 bg-background/95 backdrop-blur py-2 -mx-4 px-4 border-b">
+        <DateRangeFilter from={from} to={to} />
       </div>
 
       {/* KPI strip */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Order Items', value: totalItems.toLocaleString(), href: '/content-ops/analysis/orders' },
-          { label: 'Products', value: stats.uniqueProducts.toLocaleString(), href: '/content-ops/products' },
-          { label: 'Shops', value: stats.uniqueShops.toLocaleString(), href: '/content-ops/shops' },
-          { label: 'Content IDs', value: stats.uniqueContentIds.toLocaleString(), href: '/content-ops/analysis/attribution' },
+          { label: 'Order Items', value: total.toLocaleString(), href: `/content-ops/analysis/orders?from=${from}&to=${to}` },
+          { label: 'Products', value: stats.uniqueProducts.toLocaleString(), href: `/content-ops/products?from=${from}&to=${to}` },
+          { label: 'Shops', value: stats.uniqueShops.toLocaleString(), href: `/content-ops/shops?from=${from}&to=${to}` },
+          { label: 'Content IDs', value: stats.uniqueContentIds.toLocaleString(), href: `/content-ops/analysis/attribution?from=${from}&to=${to}` },
         ].map((kpi) => (
           <Link key={kpi.label} href={kpi.href}>
             <Card className="hover:border-foreground/30 transition-colors cursor-pointer">
@@ -112,61 +83,66 @@ export default async function ContentOpsOverviewPage() {
       </div>
 
       {/* Status breakdown */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base font-medium">Order Status Breakdown</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {/* Stacked bar */}
-          <div className="flex h-3 rounded-full overflow-hidden gap-0.5">
-            {statusBreakdown.map((bucket) =>
-              bucket.count > 0 ? (
-                <div
-                  key={bucket.key}
-                  className={`${STATUS_COLORS[bucket.key]} transition-all`}
-                  style={{ width: `${bucket.percent}%` }}
-                  title={`${bucket.label}: ${bucket.count.toLocaleString()} (${bucket.percent}%)`}
-                />
-              ) : null
-            )}
-          </div>
-          {/* Legend */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {statusBreakdown.map((bucket) => (
-              <Link
-                key={bucket.key}
-                href={`/content-ops/analysis/orders?status=${encodeURIComponent(bucket.label)}`}
-                className="flex flex-col gap-0.5 rounded-md p-2 hover:bg-muted/50 transition-colors"
-              >
-                <div className="flex items-center gap-1.5">
-                  <span className={`inline-block w-2.5 h-2.5 rounded-sm ${STATUS_COLORS[bucket.key]}`} />
-                  <span className="text-xs text-muted-foreground">{bucket.label}</span>
-                </div>
-                <p className={`text-lg font-semibold tabular-nums leading-none ${STATUS_TEXT[bucket.key]}`}>
-                  {bucket.count.toLocaleString()}
-                </p>
-                <p className="text-xs text-muted-foreground">{bucket.percent}%</p>
-              </Link>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+      {total > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base font-medium">Order Status</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex h-2.5 rounded-full overflow-hidden gap-px">
+              {statusBreakdown.map((b) =>
+                b.count > 0 ? (
+                  <div
+                    key={b.key}
+                    className={STATUS_BAR[b.key]}
+                    style={{ width: `${b.percent}%` }}
+                    title={`${b.label}: ${b.count.toLocaleString()} (${b.percent}%)`}
+                  />
+                ) : null
+              )}
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">
+              {statusBreakdown.map((b) => (
+                <Link
+                  key={b.key}
+                  href={`/content-ops/analysis/orders?status=${encodeURIComponent(b.label)}&from=${from}&to=${to}`}
+                  className="rounded-md px-2 py-1.5 hover:bg-muted/50 transition-colors"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span className={`inline-block w-2 h-2 rounded-sm ${STATUS_BAR[b.key]}`} />
+                    <span className="text-xs text-muted-foreground">{b.label}</span>
+                  </div>
+                  <p className={`text-xl font-semibold tabular-nums leading-tight mt-0.5 ${STATUS_NUM[b.key]}`}>
+                    {b.count.toLocaleString()}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{b.percent}%</p>
+                </Link>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
-      {/* Top products + top shops */}
+      {/* Top Products + Top Shops */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Top products */}
         <Card>
-          <CardHeader className="pb-2">
+          <CardHeader className="pb-0">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base font-medium">Top Products</CardTitle>
-              <Link href="/content-ops/products" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
-                View all <ArrowRight className="h-3 w-3" />
+              <Link
+                href={`/content-ops/products?from=${from}&to=${to}`}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                View all →
               </Link>
             </div>
           </CardHeader>
-          <CardContent className="p-0">
+          <CardContent className="p-0 mt-2">
             {topProducts.length === 0 ? (
-              <p className="text-sm text-muted-foreground px-4 pb-4">No product data</p>
+              <p className="text-sm text-muted-foreground px-4 pb-4">
+                No product data in this period
+              </p>
             ) : (
               <div className="divide-y">
                 {topProducts.map((p, i) => (
@@ -175,9 +151,12 @@ export default async function ContentOpsOverviewPage() {
                     href={`/content-ops/products/${encodeURIComponent(p.productId)}`}
                     className="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/40 transition-colors group"
                   >
-                    <span className="text-xs text-muted-foreground w-4 shrink-0 tabular-nums">{i + 1}</span>
+                    <span className="text-xs text-muted-foreground w-5 shrink-0 tabular-nums text-right">
+                      {i + 1}
+                    </span>
+                    <EntityAvatar name={p.productName ?? p.productId} size="sm" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">
+                      <p className="text-sm font-medium truncate group-hover:underline">
                         {p.productName ?? p.productId}
                       </p>
                       <p className="text-xs text-muted-foreground">{p.shopCount} shops</p>
@@ -195,17 +174,22 @@ export default async function ContentOpsOverviewPage() {
 
         {/* Top shops */}
         <Card>
-          <CardHeader className="pb-2">
+          <CardHeader className="pb-0">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base font-medium">Top Shops</CardTitle>
-              <Link href="/content-ops/shops" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
-                View all <ArrowRight className="h-3 w-3" />
+              <Link
+                href={`/content-ops/shops?from=${from}&to=${to}`}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                View all →
               </Link>
             </div>
           </CardHeader>
-          <CardContent className="p-0">
+          <CardContent className="p-0 mt-2">
             {topShops.length === 0 ? (
-              <p className="text-sm text-muted-foreground px-4 pb-4">No shop data</p>
+              <p className="text-sm text-muted-foreground px-4 pb-4">
+                No shop data in this period
+              </p>
             ) : (
               <div className="divide-y">
                 {topShops.map((s, i) => (
@@ -214,9 +198,12 @@ export default async function ContentOpsOverviewPage() {
                     href={`/content-ops/shops/${encodeURIComponent(s.shopCode)}`}
                     className="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/40 transition-colors group"
                   >
-                    <span className="text-xs text-muted-foreground w-4 shrink-0 tabular-nums">{i + 1}</span>
+                    <span className="text-xs text-muted-foreground w-5 shrink-0 tabular-nums text-right">
+                      {i + 1}
+                    </span>
+                    <EntityAvatar name={s.shopName ?? s.shopCode} size="sm" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">
+                      <p className="text-sm font-medium truncate group-hover:underline">
                         {s.shopName ?? s.shopCode}
                       </p>
                       <p className="text-xs text-muted-foreground">{s.productCount} products</p>
@@ -233,65 +220,20 @@ export default async function ContentOpsOverviewPage() {
         </Card>
       </div>
 
-      {/* Data health snapshot + next actions */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Data health snapshot */}
+      {/* Empty state when no data in period */}
+      {total === 0 && (
         <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base font-medium">Data Health</CardTitle>
-              <Link href="/content-ops/data-health" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
-                Details <ArrowRight className="h-3 w-3" />
+          <CardContent className="flex flex-col items-center justify-center py-12 text-center gap-2">
+            <p className="text-sm font-medium">No order data in this period</p>
+            <p className="text-xs text-muted-foreground">
+              Try selecting a wider date range, or{' '}
+              <Link href="/content-ops/tiktok-affiliate/upload" className="underline hover:no-underline">
+                upload more data
               </Link>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {healthSnapshot.map((item) => (
-              <div key={item.label} className="flex items-start gap-2.5">
-                <HealthIcon status={item.status} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium">{item.label}</p>
-                  <p className="text-xs text-muted-foreground">{item.description}</p>
-                </div>
-                {item.href && (
-                  <Link href={item.href} className="text-xs text-muted-foreground hover:text-foreground shrink-0">
-                    →
-                  </Link>
-                )}
-              </div>
-            ))}
+            </p>
           </CardContent>
         </Card>
-
-        {/* Next actions */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base font-medium">Next Actions</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {nextActions.map((action) => (
-              <Link
-                key={action.title}
-                href={action.href}
-                className="flex items-center gap-3 rounded-md border px-3 py-2.5 hover:border-foreground/30 hover:bg-muted/30 transition-colors group"
-              >
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium">{action.title}</p>
-                  {action.description && (
-                    <p className="text-xs text-muted-foreground">{action.description}</p>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <Badge variant="outline" className={`text-xs ${PRIORITY_STYLE[action.priority]}`}>
-                    {action.priority}
-                  </Badge>
-                  <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors" />
-                </div>
-              </Link>
-            ))}
-          </CardContent>
-        </Card>
-      </div>
+      )}
     </div>
   )
 }

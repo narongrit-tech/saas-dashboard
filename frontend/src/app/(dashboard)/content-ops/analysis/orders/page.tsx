@@ -5,7 +5,9 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
+import { DateRangeFilter } from '@/components/content-ops/date-range-filter'
 import { getOrdersExplorer } from '../../actions'
+import { getDefaultDateRange } from '../../date-utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -56,11 +58,17 @@ export default async function OrdersExplorerPage({
     status?: string
     content_id?: string
     page?: string
+    from?: string
+    to?: string
   }
 }) {
   const page = Math.max(1, parseInt(searchParams.page ?? '1', 10))
   const limit = 50
   const offset = (page - 1) * limit
+
+  const defaults = getDefaultDateRange()
+  const from = searchParams.from ?? defaults.from
+  const to = searchParams.to ?? defaults.to
 
   const { data: rows, total, error } = await getOrdersExplorer(
     {
@@ -69,6 +77,8 @@ export default async function OrdersExplorerPage({
       shopCode: searchParams.shop_code,
       status: searchParams.status,
       contentId: searchParams.content_id,
+      from,
+      to,
     },
     limit,
     offset
@@ -92,6 +102,8 @@ export default async function OrdersExplorerPage({
       shop_code: searchParams.shop_code,
       status: searchParams.status,
       content_id: searchParams.content_id,
+      from,
+      to,
       ...overrides,
     }
     for (const [k, v] of Object.entries(merged)) {
@@ -113,6 +125,11 @@ export default async function OrdersExplorerPage({
           Inspect and filter order-line facts — {total.toLocaleString()} rows
           {activeFilters.length > 0 && ` (${activeFilters.length} filter${activeFilters.length > 1 ? 's' : ''} active)`}
         </p>
+      </div>
+
+      {/* Date filter */}
+      <div className="sticky top-0 z-10 bg-background/95 backdrop-blur py-2 -mx-4 px-4 border-b">
+        <DateRangeFilter from={from} to={to} />
       </div>
 
       {/* Filter bar */}
