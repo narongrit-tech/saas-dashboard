@@ -32,8 +32,11 @@ import {
   Zap,
   GitFork,
   UserCircle,
-  Video,
+  Package2,
+  Store,
+  Search,
   GitBranch,
+  HeartPulse,
 } from 'lucide-react'
 
 interface MenuItem {
@@ -101,14 +104,34 @@ const menuGroups: MenuGroup[] = [
     defaultExpanded: true,
     items: [
       {
-        title: 'Content Library',
-        href: '/content-ops/library',
-        icon: Video,
+        title: 'Overview',
+        href: '/content-ops',
+        icon: LayoutDashboard,
       },
       {
-        title: 'TikTok Affiliate',
-        href: '/content-ops/tiktok-affiliate',
+        title: 'Products',
+        href: '/content-ops/products',
+        icon: Package2,
+      },
+      {
+        title: 'Shops',
+        href: '/content-ops/shops',
+        icon: Store,
+      },
+      {
+        title: 'Orders Explorer',
+        href: '/content-ops/analysis/orders',
+        icon: Search,
+      },
+      {
+        title: 'Attribution',
+        href: '/content-ops/analysis/attribution',
         icon: GitBranch,
+      },
+      {
+        title: 'Data Health',
+        href: '/content-ops/data-health',
+        icon: HeartPulse,
       },
     ],
   },
