@@ -553,3 +553,134 @@ export async function runVerification(): Promise<VerificationResult[]> {
 
   return results
 }
+
+// ─── Product Master (derived from facts) ─────────────────────────────────────
+
+export interface ProductSummary {
+  product_id: string
+  product_name: string | null
+  shop_code: string | null
+  shop_name: string | null
+  total_order_items: number
+  settled_order_items: number
+  total_gmv: number | null
+  total_earned: number | null
+  currency: string | null
+  first_seen_at: string | null
+  last_seen_at: string | null
+}
+
+export interface ShopSummary {
+  shop_code: string
+  shop_name: string | null
+  total_products: number
+  total_order_items: number
+  settled_order_items: number
+  total_gmv: number | null
+  total_earned: number | null
+  currency: string | null
+}
+
+export async function getProductMaster(
+  limit = 200,
+  offset = 0
+): Promise<{ data: ProductSummary[]; total: number; error: string | null }> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { data: [], total: 0, error: 'Unauthenticated' }
+
+  const { data, error } = await supabase
+    .from('content_order_facts')
+    .select('product_id,product_name,shop_code,shop_name,gmv,total_earned_amount,currency,order_date,is_successful')
+    .eq('created_by', user.id)
+    .not('product_id', 'in', '("PROD-001")')
+
+  if (error) return { data: [], total: 0, error: error.message }
+
+  const rows = data ?? []
+  const productMap = new Map<string, ProductSummary>()
+
+  for (const r of rows) {
+    if (!r.product_id) continue
+    const existing = productMap.get(r.product_id)
+    if (!existing) {
+      productMap.set(r.product_id, {
+        product_id: r.product_id,
+        product_name: r.product_name ?? null,
+        shop_code: r.shop_code ?? null,
+        shop_name: r.shop_name ?? null,
+        total_order_items: 1,
+        settled_order_items: r.is_successful ? 1 : 0,
+        total_gmv: r.gmv ?? null,
+        total_earned: r.total_earned_amount ?? null,
+        currency: r.currency ?? null,
+        first_seen_at: r.order_date ?? null,
+        last_seen_at: r.order_date ?? null,
+      })
+    } else {
+      existing.total_order_items += 1
+      if (r.is_successful) existing.settled_order_items += 1
+      if (r.gmv) existing.total_gmv = (existing.total_gmv ?? 0) + r.gmv
+      if (r.total_earned_amount) existing.total_earned = (existing.total_earned ?? 0) + r.total_earned_amount
+      if (r.order_date) {
+        if (!existing.first_seen_at || r.order_date < existing.first_seen_at) existing.first_seen_at = r.order_date
+        if (!existing.last_seen_at || r.order_date > existing.last_seen_at) existing.last_seen_at = r.order_date
+      }
+      if (!existing.product_name && r.product_name) existing.product_name = r.product_name
+      if (!existing.shop_code && r.shop_code) existing.shop_code = r.shop_code
+      if (!existing.shop_name && r.shop_name) existing.shop_name = r.shop_name
+    }
+  }
+
+  const allProducts = [...productMap.values()].sort((a, b) => (b.total_gmv ?? 0) - (a.total_gmv ?? 0))
+  const paged = allProducts.slice(offset, offset + limit)
+
+  return { data: paged, total: allProducts.length, error: null }
+}
+
+export async function getShopMaster(): Promise<{ data: ShopSummary[]; error: string | null }> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { data: [], error: 'Unauthenticated' }
+
+  const { data, error } = await supabase
+    .from('content_order_facts')
+    .select('shop_code,shop_name,product_id,gmv,total_earned_amount,currency,is_successful')
+    .eq('created_by', user.id)
+    .not('shop_code', 'in', '("SHOP-001")')
+
+  if (error) return { data: [], error: error.message }
+
+  const rows = data ?? []
+  const shopMap = new Map<string, { shop_name: string | null; products: Set<string>; items: number; settled: number; gmv: number; earned: number; currency: string | null }>()
+
+  for (const r of rows) {
+    if (!r.shop_code) continue
+    const existing = shopMap.get(r.shop_code)
+    if (!existing) {
+      shopMap.set(r.shop_code, { shop_name: r.shop_name ?? null, products: new Set([r.product_id ?? '']), items: 1, settled: r.is_successful ? 1 : 0, gmv: r.gmv ?? 0, earned: r.total_earned_amount ?? 0, currency: r.currency ?? null })
+    } else {
+      if (r.product_id) existing.products.add(r.product_id)
+      existing.items += 1
+      if (r.is_successful) existing.settled += 1
+      existing.gmv += r.gmv ?? 0
+      existing.earned += r.total_earned_amount ?? 0
+      if (!existing.shop_name && r.shop_name) existing.shop_name = r.shop_name
+    }
+  }
+
+  const allShops: ShopSummary[] = [...shopMap.entries()]
+    .map(([code, v]) => ({
+      shop_code: code,
+      shop_name: v.shop_name,
+      total_products: v.products.size,
+      total_order_items: v.items,
+      settled_order_items: v.settled,
+      total_gmv: v.gmv || null,
+      total_earned: v.earned || null,
+      currency: v.currency,
+    }))
+    .sort((a, b) => (b.total_gmv ?? 0) - (a.total_gmv ?? 0))
+
+  return { data: allShops, error: null }
+}

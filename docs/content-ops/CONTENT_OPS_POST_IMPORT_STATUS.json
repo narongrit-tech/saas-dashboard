@@ -1,0 +1,88 @@
+{
+  "generated_at": "2026-04-08",
+  "run": "PART_1_EXECUTION",
+
+  "preflight": {
+    "timezone_fix_applied": false,
+    "timezone_fix_reason": "Requires direct Supabase SQL Editor access — SQL fix provided in IMPORT_EXECUTION_REPORT.md",
+    "import_script_resolved": true,
+    "import_script_path": "frontend/scripts/import-affiliate-js.ts",
+    "created_by_resolved": true,
+    "created_by_uuid": "2c4e254d-c779-4f8a-af93-603dc26e6af0",
+    "created_by_email": "narongrit@nimittmind.com"
+  },
+
+  "normalization_rpc_issue": {
+    "root_cause": "PL/pgSQL EXCEPTION blocks in parse_timestamp (~97K savepoints) + correlated subqueries in ON CONFLICT WHERE",
+    "fix": "JS-based normalizer written in normalize-staged-batch.ts and import-affiliate-js.ts",
+    "fix_status": "APPLIED"
+  },
+
+  "import_results": {
+    "files_found": 11,
+    "files_imported": 11,
+    "files_failed": 0,
+    "total_raw_rows": 107987,
+    "total_staged_rows": 107987,
+    "total_winner_rows": 107987,
+    "missing_key_rows": 0,
+    "duplicate_non_winner_rows": 0,
+    "cross_file_duplicates": 0
+  },
+
+  "db_state": {
+    "batch_count": 12,
+    "staging_count": 107988,
+    "facts_count": 107988,
+    "facts_settled": 82769,
+    "facts_ineligible": 12394,
+    "facts_pending": 9842,
+    "facts_awaiting_payment": 2982,
+    "attribution_view_live": true,
+    "costs_count": 0,
+    "profit_summary_count": 0
+  },
+
+  "data_quality": {
+    "total_gmv_thb": 19760786.29,
+    "total_earned_thb": 1488835.58,
+    "unique_products": 281,
+    "unique_shops": 190,
+    "unique_content_ids": 647,
+    "currency": "THB"
+  },
+
+  "product_shop_master": {
+    "server_actions_added": true,
+    "migration_102_written": true,
+    "migration_102_applied": false,
+    "migration_102_reason": "Requires Supabase SQL Editor — file ready at database-scripts/migration-102-tiktok-affiliate-product-shop-master.sql"
+  },
+
+  "snapshot_status": {
+    "snapshot_still_file_based": true,
+    "snapshot_count": 3,
+    "snapshot_content_items": 45,
+    "snapshot_db_persistence": false
+  },
+
+  "showcase_status": {
+    "showcase_still_disconnected": true,
+    "showcase_scraper_exists": true,
+    "showcase_db_table_exists": false
+  },
+
+  "verification_ran": false,
+  "verification_note": "Run manually at /content-ops/tiktok-affiliate/verification — will now show real results",
+
+  "ceo_readable_now": true,
+  "ceo_readable_note": "Facts page shows 107,987 real orders with Thai product names. Attribution live. Profit needs costs added.",
+
+  "immediate_actions_remaining": [
+    "Apply Bangkok timezone fix in Supabase SQL Editor",
+    "Apply migration-102 in Supabase SQL Editor",
+    "Add real cost entries via /costs page",
+    "Run Refresh Profit",
+    "Run pipeline verification"
+  ]
+}

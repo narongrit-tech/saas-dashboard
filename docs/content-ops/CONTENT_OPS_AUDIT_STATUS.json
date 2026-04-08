@@ -1,0 +1,66 @@
+{
+  "generated_at": "2026-04-08",
+  "auditor": "Claude Code ORCH run",
+  "overall_assessment": "ARCHITECTURE_COMPLETE_DATA_EMPTY",
+
+  "modules": {
+    "content_snapshot_ingestion": "PARTIAL",
+    "snapshot_automation": "NOT_IMPLEMENTED",
+    "showcase_ingestion_script": "EXISTS_DISCONNECTED",
+    "showcase_to_dashboard_connection": "NOT_IMPLEMENTED",
+    "affiliate_import_code": "WORKING",
+    "affiliate_import_data": "READY_NOT_TRIGGERED",
+    "normalized_facts": "TECHNICALLY_READY",
+    "attribution": "TECHNICALLY_READY",
+    "cost_input": "WORKING",
+    "profit_summary": "VISIBLE_BUT_NOT_USABLE",
+    "pipeline_verification": "PARTIAL"
+  },
+
+  "data_state": {
+    "tiktok_affiliate_import_batches": 0,
+    "tiktok_affiliate_order_raw_staging": 0,
+    "content_order_facts": 0,
+    "content_order_attribution": 0,
+    "tt_content_costs": 0,
+    "tt_content_cost_allocations": 0,
+    "content_profit_attribution_summary": 0,
+    "studio_snapshots_local_filesystem": 3,
+    "studio_content_items_local_filesystem": 45,
+    "raw_affiliate_xlsx_files_waiting": 11
+  },
+
+  "grain_correctness": {
+    "content_order_facts_grain": "CORRECT",
+    "wrong_1order_1product_assumption": false,
+    "sku_id_preserved_in_facts": true,
+    "sku_id_collapsed_in_attribution_candidates": true,
+    "attribution_candidates_grain": "created_by + order_id + product_id + content_id",
+    "attribution_winners_grain": "created_by + order_id + product_id"
+  },
+
+  "automation": {
+    "studio_snapshot_cron": false,
+    "showcase_ingest_cron": false,
+    "affiliate_import_cron": false,
+    "any_automation_exists": false
+  },
+
+  "risks": {
+    "bangkok_timezone_in_parse_function": "MEDIUM",
+    "snapshot_data_filesystem_only": "MEDIUM",
+    "showcase_scraper_disconnected": "HIGH",
+    "zero_data_in_db": "CRITICAL"
+  },
+
+  "immediate_actions": [
+    "Fix Bangkok timezone in normalize_tiktok_affiliate_order_batch helper function",
+    "Import all 11 XLSX files from /data/raw/tiktok-affiliate-orders/",
+    "Run pipeline verification after import",
+    "Build product_master view from content_order_facts",
+    "Connect content_id to studio post_id in UI"
+  ],
+
+  "ceo_readable_today": false,
+  "ceo_readable_blocker": "All pages show 0 — no data has been imported despite 11 real files being available"
+}

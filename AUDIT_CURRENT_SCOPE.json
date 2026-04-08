@@ -1,0 +1,395 @@
+{
+  "meta": {
+    "generated_at": "2026-04-05",
+    "generated_by": "claude-sonnet-4-6",
+    "source": "file-truth audit — real files only, no memory",
+    "repo_root": "D:\\AI_OS\\projects\\saas-dashboard",
+    "supabase_project_ref": "ntvzawokbmbjwphsqbnd",
+    "last_updated": "2026-04-05",
+    "last_update_reason": "Precheck queries executed against live DB (project ntvzawokbmbjwphsqbnd). All schema blockers resolved. Operational blockers now reflect true state."
+  },
+
+  "current_branch": "feat/tiktok-studio-visible-import-phase1",
+  "branch_name_stale": true,
+  "branch_name_note": "Branch name reflects an earlier phase. Active work is the Phase 3 profit layer (migrations 094-098), not 'tiktok-studio-visible-import-phase1'.",
+
+  "working_tree": {
+    "is_dirty": true,
+    "modified_tracked": [
+      "database-scripts/README-tiktok-affiliate-content-analytics.md",
+      "database-scripts/README-tiktok-affiliate-content-attribution.md",
+      "database-scripts/verify-tiktok-affiliate-content-analytics.sql"
+    ],
+    "untracked": [
+      "PHASE3_DB_EXECUTION_REPORT.md",
+      "database-scripts/README-tiktok-affiliate-content-profit-layer.md",
+      "database-scripts/README-tiktok-content-order-attribution.md",
+      "database-scripts/tiktok-affiliate-content-profit-pipeline.sql",
+      "supabase/.gitignore",
+      "supabase/config.toml"
+    ]
+  },
+
+  "active_module": {
+    "name": "TikTok Affiliate Content Ops / Attribution / Profit Layer",
+    "classification": "INDEPENDENT_CONTENT_MODULE",
+    "isolated_from_saas_core": true,
+    "isolation_confirmed_by": [
+      "database-scripts/PHASE3_DB_EXECUTION_REPORT.md — explicit scope: no sales_orders, no wallet, no finance, no reconciliation",
+      "migration-094 through migration-098 scope headers — all state isolation explicitly",
+      "database-scripts/README-tiktok-affiliate-content-profit-layer.md — lists what the module does NOT add"
+    ],
+    "phase": "Phase 3 — all schema migrations applied. Operational phase: load real data and run profit refresh."
+  },
+
+  "in_scope_files": [
+    {
+      "path": "database-scripts/migration-094-tiktok-affiliate-content-attribution.sql",
+      "role": "Foundation: module-local import batches, raw staging, content_order_facts, normalization functions + RPC",
+      "classification": "INDEPENDENT_CONTENT_MODULE",
+      "execution_status": "applied",
+      "execution_confirmed_by": "Live DB precheck 2026-04-05 — tables tiktok_affiliate_import_batches, tiktok_affiliate_order_raw_staging, content_order_facts confirmed present. Functions normalize_tiktok_affiliate_order_batch, tiktok_affiliate_status_rank confirmed present."
+    },
+    {
+      "path": "database-scripts/migration-095-tiktok-affiliate-content-analytics.sql",
+      "role": "Analytics views on content_order_facts. Superseded in part by 098.",
+      "classification": "INDEPENDENT_CONTENT_MODULE",
+      "execution_status": "applied",
+      "execution_confirmed_by": "Live DB precheck 2026-04-05 — views content_performance_daily, content_product_performance_daily, product_performance_daily, content_channel_split_daily, content_loss_daily confirmed present."
+    },
+    {
+      "path": "database-scripts/migration-096-tiktok-content-order-attribution.sql",
+      "role": "Attribution candidates view + final last-touch winner view + 3 helper functions",
+      "classification": "INDEPENDENT_CONTENT_MODULE",
+      "execution_status": "applied",
+      "execution_confirmed_by": "Live DB precheck 2026-04-05 — views content_order_attribution_candidates, content_order_attribution confirmed present. Functions tiktok_affiliate_resolve_actual_commission, tiktok_affiliate_rollup_status, tiktok_affiliate_map_business_bucket confirmed present."
+    },
+    {
+      "path": "database-scripts/migration-097-tiktok-affiliate-content-profit-layer.sql",
+      "role": "Profit layer: tt_content_costs, tt_content_cost_allocations, content_profit_attribution_summary, 3 refresh functions",
+      "classification": "INDEPENDENT_CONTENT_MODULE",
+      "execution_status": "applied",
+      "execution_confirmed_by": "Live DB precheck 2026-04-05 — tables tt_content_costs, tt_content_cost_allocations, content_profit_attribution_summary confirmed present. Functions refresh_tt_content_cost_allocations, refresh_content_profit_attribution_summary, refresh_content_profit_layer confirmed present."
+    },
+    {
+      "path": "database-scripts/migration-098-tiktok-affiliate-content-review-fixes.sql",
+      "role": "Replaces content_order_analytics_daily_base with corrected status semantics (is_realized/is_open/is_lost). Adds traceability join keys.",
+      "classification": "INDEPENDENT_CONTENT_MODULE",
+      "execution_status": "applied",
+      "execution_confirmed_by": "Live DB precheck 2026-04-05 — content_order_analytics_daily_base confirmed present with all 098-specific columns: import_batch_id, order_id, order_settlement_status, outcome_status, is_realized, is_open, is_lost, reported_commission_amount."
+    },
+    {
+      "path": "database-scripts/verify-tiktok-affiliate-content-attribution.sql",
+      "role": "Verification queries for migration-094",
+      "classification": "INDEPENDENT_CONTENT_MODULE"
+    },
+    {
+      "path": "database-scripts/verify-tiktok-affiliate-content-analytics.sql",
+      "role": "Verification queries for migration-095",
+      "classification": "INDEPENDENT_CONTENT_MODULE",
+      "note": "Modified (tracked, not committed)"
+    },
+    {
+      "path": "database-scripts/verify-tiktok-content-order-attribution.sql",
+      "role": "Verification queries for migration-096",
+      "classification": "INDEPENDENT_CONTENT_MODULE"
+    },
+    {
+      "path": "database-scripts/verify-tiktok-affiliate-content-profit-layer.sql",
+      "role": "Verification queries for migration-097. 8 checks including grain, allocation shape, cost conservation, profit formula, ROI.",
+      "classification": "INDEPENDENT_CONTENT_MODULE"
+    },
+    {
+      "path": "database-scripts/tiktok-affiliate-content-profit-pipeline.sql",
+      "role": "Phase 3 refresh pipeline — populates profit summary for a given created_by UUID",
+      "classification": "INDEPENDENT_CONTENT_MODULE",
+      "note": "Untracked, not yet committed"
+    },
+    {
+      "path": "PHASE3_DB_EXECUTION_REPORT.md",
+      "role": "Execution attempt log from 2026-04-03. Now stale — all migrations have since been applied from another session or machine.",
+      "classification": "INDEPENDENT_CONTENT_MODULE",
+      "note": "Untracked, not yet committed. STALE — NO-GO recommendation no longer reflects DB state as of 2026-04-05.",
+      "stale": true,
+      "stale_reason": "Report dated 2026-04-03 stated no migrations had been executed. Live DB precheck on 2026-04-05 confirmed all 5 migrations (094-098) are fully applied. Report must be updated or superseded before being committed."
+    }
+  ],
+
+  "out_of_scope_files": [
+    {
+      "path": "database-scripts/migration-024-sales-order-line-hash.sql",
+      "reason": "Alters public.sales_orders (seller-side SaaS core). Adds order_line_hash for TikTok cashflow import dedup. No relationship to content_order_facts or any content module table.",
+      "classification": "CORE_SELLER_SAAS",
+      "execution_status": "applied",
+      "execution_confirmed_by": "Live DB precheck 2026-04-05 — sales_orders.order_line_hash column present. Backfill complete: 10,147 / 10,147 rows have a hash (rows_with_hash = total_rows)."
+    },
+    {
+      "path": "database-scripts/migration-001 through migration-093 (general)",
+      "reason": "Seller-side SaaS core: P&L, wallets, bank, expenses, COGS, reconciliation, inventory, team-shared visibility",
+      "classification": "CORE_SELLER_SAAS",
+      "exceptions": "migration-088 through migration-093 are team-shared and constraint hardening — still seller-side, not content module"
+    }
+  ],
+
+  "relevant_migrations": [
+    {
+      "file": "migration-094-tiktok-affiliate-content-attribution.sql",
+      "order": 1,
+      "key_objects": [
+        "public.tiktok_affiliate_import_batches",
+        "public.tiktok_affiliate_order_raw_staging",
+        "public.content_order_facts",
+        "public.normalize_tiktok_affiliate_order_batch (RPC)"
+      ],
+      "depends_on": ["auth.users", "auth.uid()", "update_updated_at_column()"],
+      "touches_saas_core": false,
+      "applied": true
+    },
+    {
+      "file": "migration-095-tiktok-affiliate-content-analytics.sql",
+      "order": 2,
+      "key_objects": [
+        "public.content_order_analytics_daily_base (superseded by 098)",
+        "public.content_performance_daily",
+        "public.content_product_performance_daily",
+        "public.product_performance_daily",
+        "public.content_channel_split_daily",
+        "public.content_loss_daily"
+      ],
+      "depends_on": ["public.content_order_facts (094)"],
+      "touches_saas_core": false,
+      "note": "content_order_analytics_daily_base is replaced by migration-098",
+      "applied": true
+    },
+    {
+      "file": "migration-096-tiktok-content-order-attribution.sql",
+      "order": 3,
+      "key_objects": [
+        "public.tiktok_affiliate_resolve_actual_commission(numeric, numeric)",
+        "public.tiktok_affiliate_rollup_status(text[])",
+        "public.tiktok_affiliate_map_business_bucket(text)",
+        "public.content_order_attribution_candidates (view)",
+        "public.content_order_attribution (view)"
+      ],
+      "depends_on": [
+        "public.content_order_facts (094)",
+        "public.tiktok_affiliate_order_raw_staging (094)",
+        "public.tiktok_affiliate_status_rank(text) (094)"
+      ],
+      "touches_saas_core": false,
+      "applied": true,
+      "previously_unverified_dependency_resolved": "public.tiktok_affiliate_status_rank(text) confirmed present in live DB on 2026-04-05"
+    },
+    {
+      "file": "migration-097-tiktok-affiliate-content-profit-layer.sql",
+      "order": 4,
+      "key_objects": [
+        "public.tt_content_costs",
+        "public.tt_content_cost_allocations",
+        "public.content_profit_attribution_summary",
+        "public.refresh_tt_content_cost_allocations(uuid)",
+        "public.refresh_content_profit_attribution_summary(uuid)",
+        "public.refresh_content_profit_layer(uuid)"
+      ],
+      "depends_on": [
+        "public.content_order_attribution (096)",
+        "public.tt_content_costs (same migration, earlier in file)",
+        "public.update_updated_at_column()",
+        "auth.users",
+        "auth.uid()"
+      ],
+      "touches_saas_core": false,
+      "applied": true
+    },
+    {
+      "file": "migration-098-tiktok-affiliate-content-review-fixes.sql",
+      "order": 5,
+      "key_objects": [
+        "public.content_order_analytics_daily_base (replaced — corrected status semantics)",
+        "public.content_performance_daily (replaced)",
+        "public.content_product_performance_daily (replaced)",
+        "public.product_performance_daily (replaced)",
+        "public.content_channel_split_daily (replaced)",
+        "public.content_loss_daily (replaced)"
+      ],
+      "depends_on": ["public.content_order_facts (094)"],
+      "touches_saas_core": false,
+      "corrections_vs_095": [
+        "actual_commission_amount is settled-only (was total_earned_amount regardless of status)",
+        "is_failed uses order_settlement_status NOT IN known set (was NOT is_successful AND NOT is_cancelled)",
+        "is_loss_outcome is now order_settlement_status = ineligible only",
+        "Adds import_batch_id, order_id, order_settlement_status, outcome_status, is_realized, is_open, is_lost, reported_commission_amount to base view"
+      ],
+      "applied": true
+    }
+  ],
+
+  "irrelevant_migrations": [
+    {
+      "file": "migration-024-sales-order-line-hash.sql",
+      "reason": "CORE_SELLER_SAAS — alters sales_orders. Zero overlap with content module tables or objects.",
+      "was_incorrectly_treated_as_blocker": true,
+      "applied": true,
+      "application_note": "Confirmed applied. Backfill complete: all 10,147 rows in sales_orders have order_line_hash populated."
+    }
+  ],
+
+  "live_data_state": {
+    "checked_at": "2026-04-05",
+    "source": "pg_stat_user_tables live row counts via npx supabase db query --linked",
+    "tables": [
+      { "table": "tiktok_affiliate_import_batches", "live_rows": 1, "note": "One import batch — likely a test run" },
+      { "table": "tiktok_affiliate_order_raw_staging", "live_rows": 1, "note": "One staged row from the test batch" },
+      { "table": "content_order_facts", "live_rows": 1, "note": "One normalized fact row" },
+      { "table": "content_profit_attribution_summary", "live_rows": 1, "note": "One summary row — matches the single fact row" },
+      { "table": "tt_content_costs", "live_rows": 0, "note": "EMPTY — no cost data entered" },
+      { "table": "tt_content_cost_allocations", "live_rows": 0, "note": "EMPTY — no allocations exist because tt_content_costs is empty" }
+    ]
+  },
+
+  "true_blockers": [
+    {
+      "id": "BLOCKER_001",
+      "type": "operational",
+      "severity": "high",
+      "description": "tt_content_costs is empty — no cost data has been entered",
+      "impact": "refresh_content_profit_layer() will produce summaries with zero costs. profit = commission_realized - 0 for all rows. ROI will be NULL for all rows. Cost allocation table remains empty.",
+      "resolution": "Insert real cost records into public.tt_content_costs for each content_id with actual ads, creator, and misc costs before running the refresh pipeline."
+    },
+    {
+      "id": "BLOCKER_002",
+      "type": "operational",
+      "severity": "high",
+      "description": "Real affiliate import data has not been loaded — only 1 test row exists across the pipeline",
+      "impact": "content_order_facts has 1 row. content_profit_attribution_summary has 1 row. All analytics views reflect a single test record, not real business data. Any verification against these views is not meaningful.",
+      "resolution": "Run normalize_tiktok_affiliate_order_batch() against a real TikTok affiliate export file to populate the pipeline with actual order data."
+    },
+    {
+      "id": "BLOCKER_003",
+      "type": "operational",
+      "severity": "medium",
+      "description": "refresh_content_profit_layer() has not been run against real data",
+      "impact": "content_profit_attribution_summary reflects only the 1 test row. Profit, ROI, and cost allocation outputs are not validated against real volumes.",
+      "resolution": "After loading real import data (BLOCKER_002) and inserting cost data (BLOCKER_001), call: SELECT * FROM public.refresh_content_profit_layer('<real_created_by_uuid>'); and verify output against verify-tiktok-affiliate-content-profit-layer.sql."
+    },
+    {
+      "id": "BLOCKER_004",
+      "type": "operational",
+      "severity": "low",
+      "description": "PHASE3_DB_EXECUTION_REPORT.md is stale and uncommitted",
+      "impact": "The report's NO-GO recommendation no longer reflects DB state. Committing it as-is would create misleading documentation in git history.",
+      "resolution": "Update PHASE3_DB_EXECUTION_REPORT.md to reflect that all migrations were confirmed applied on 2026-04-05. Then commit it along with all other untracked files."
+    },
+    {
+      "id": "BLOCKER_005",
+      "type": "environment",
+      "severity": "low",
+      "description": "psql is not installed — run commands in README-tiktok-affiliate-content-profit-layer.md are written for psql",
+      "impact": "Documentation run commands will not work as written on this machine. Must use npx supabase db query --linked instead.",
+      "resolution": "Either install psql or update the README run commands to use npx supabase db query --linked syntax."
+    }
+  ],
+
+  "next_actions": [
+    {
+      "order": 1,
+      "action": "Load real TikTok affiliate export data into the pipeline",
+      "detail": "Run the normalization RPC against a real TikTok affiliate orders export. This populates tiktok_affiliate_order_raw_staging and content_order_facts with real rows.",
+      "function": "public.normalize_tiktok_affiliate_order_batch(<batch_uuid>)",
+      "resolves": "BLOCKER_002"
+    },
+    {
+      "order": 2,
+      "action": "Insert real cost data into tt_content_costs",
+      "detail": "For each content_id that has real order data, insert rows with actual cost amounts. Cost types: ads, creator, misc. Currency must match the order currency. cost_date must match business date of the orders.",
+      "table": "public.tt_content_costs",
+      "resolves": "BLOCKER_001"
+    },
+    {
+      "order": 3,
+      "action": "Run the Phase 3 profit refresh pipeline against a real created_by UUID",
+      "detail": "After real import data and cost data are present, run the full refresh. This populates tt_content_cost_allocations and rebuilds content_profit_attribution_summary.",
+      "command": "SELECT * FROM public.refresh_content_profit_layer('<real_created_by_uuid>');",
+      "file": "database-scripts/tiktok-affiliate-content-profit-pipeline.sql",
+      "resolves": "BLOCKER_003",
+      "requires_prior_approval": true
+    },
+    {
+      "order": 4,
+      "action": "Run verification queries against real data",
+      "detail": "Execute verify-tiktok-affiliate-content-profit-layer.sql against the live DB to confirm grain uniqueness, cost conservation, profit formula, ROI constraints, and unallocated cost visibility.",
+      "file": "database-scripts/verify-tiktok-affiliate-content-profit-layer.sql",
+      "command": "npx supabase db query --linked --file database-scripts/verify-tiktok-affiliate-content-profit-layer.sql"
+    },
+    {
+      "order": 5,
+      "action": "Update PHASE3_DB_EXECUTION_REPORT.md to reflect actual DB state",
+      "detail": "The report's NO-GO is stale. Add a section documenting that live precheck on 2026-04-05 confirmed all migrations (094-098) applied. Do not delete the original content — it has historical value.",
+      "resolves": "BLOCKER_004"
+    },
+    {
+      "order": 6,
+      "action": "Commit all untracked and modified files",
+      "detail": "Commit after PHASE3_DB_EXECUTION_REPORT.md is updated and verification passes.",
+      "files_to_commit": [
+        "PHASE3_DB_EXECUTION_REPORT.md",
+        "AUDIT_CURRENT_SCOPE.json",
+        "database-scripts/README-tiktok-affiliate-content-profit-layer.md",
+        "database-scripts/README-tiktok-content-order-attribution.md",
+        "database-scripts/tiktok-affiliate-content-profit-pipeline.sql",
+        "database-scripts/README-tiktok-affiliate-content-analytics.md",
+        "database-scripts/README-tiktok-affiliate-content-attribution.md",
+        "database-scripts/verify-tiktok-affiliate-content-analytics.sql"
+      ],
+      "constraint": "Do not commit AUDIT_CURRENT_SCOPE.json if it contains the SUPABASE_ACCESS_TOKEN — verify no credentials are embedded in any file before committing."
+    },
+    {
+      "order": 7,
+      "action": "Do NOT touch migration-024 — fully applied, out of scope for this module",
+      "type": "constraint",
+      "detail": "migration-024 is CORE_SELLER_SAAS. It is applied and complete. No action needed or permitted from this module's workstream."
+    }
+  ],
+
+  "wrong_prior_assumptions": [
+    {
+      "assumption": "migration-024 is the primary blocker for the current work",
+      "correct_finding": "migration-024 alters public.sales_orders (seller-side SaaS core). The content module has no dependency on sales_orders or order_line_hash. Zero overlap confirmed by reading all 094-098 migration scope headers and PHASE3_DB_EXECUTION_REPORT.md.",
+      "evidence_files": [
+        "database-scripts/migration-024-sales-order-line-hash.sql — scope: sales_orders only",
+        "database-scripts/PHASE3_DB_EXECUTION_REPORT.md — explicit: no sales_orders work",
+        "database-scripts/migration-094 through 098 — none reference sales_orders"
+      ]
+    },
+    {
+      "assumption": "The DB execution environment might be partially available",
+      "correct_finding": "PHASE3_DB_EXECUTION_REPORT.md from 2026-04-03 already fully documented: no psql, no supabase CLI, no DATABASE_URL, no .env file. This was not a new discovery — it was a known recorded state.",
+      "evidence_files": [
+        "PHASE3_DB_EXECUTION_REPORT.md — section: Environment Discovery Result"
+      ]
+    },
+    {
+      "assumption": "Migrations 094 and 095 status was unknown before running 096",
+      "correct_finding": "Live DB precheck on 2026-04-05 confirmed all 5 migrations (094-098) were already fully applied. tiktok_affiliate_status_rank() — the previously unverified dependency — was confirmed present.",
+      "evidence_files": [
+        "Live DB precheck results 2026-04-05 — pg_proc, information_schema.tables, pg_views queries"
+      ]
+    },
+    {
+      "assumption": "The branch name describes the current active work",
+      "correct_finding": "Branch feat/tiktok-studio-visible-import-phase1 is a stale label from an earlier phase. The actual active work is the Phase 3 profit layer (094-098). Do not use branch name to infer scope.",
+      "evidence_files": [
+        "git branch output",
+        "database-scripts/README-tiktok-affiliate-content-profit-layer.md — describes Phase 3 as current scope"
+      ]
+    },
+    {
+      "assumption": "Phase 3 SQL being written but PHASE3_DB_EXECUTION_REPORT.md saying NO-GO meant no migrations had run",
+      "correct_finding": "PHASE3_DB_EXECUTION_REPORT.md (2026-04-03) said NO-GO from that machine at that time. All migrations have since been applied from another session or machine. The report is stale as of 2026-04-05.",
+      "evidence_files": [
+        "Live DB precheck 2026-04-05 — all 6 expected tables, 8 expected functions, 8 expected views confirmed present",
+        "content_order_analytics_daily_base column list — all 098-specific columns confirmed present"
+      ]
+    }
+  ]
+}
