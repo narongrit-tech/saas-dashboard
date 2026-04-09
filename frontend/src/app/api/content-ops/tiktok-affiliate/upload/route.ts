@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { importTikTokAffiliateFile } from '@/lib/content-ops/tiktok-affiliate-orders'
 
-export const maxDuration = 60
+export const maxDuration = 300
 
 export async function POST(request: NextRequest) {
   // Verify authentication

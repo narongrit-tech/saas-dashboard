@@ -53,11 +53,19 @@ export default async function DataHealthPage() {
   return (
     <div className="space-y-6 max-w-5xl">
       {/* Header */}
-      <div>
-        <h1 className="text-xl font-semibold">Data Health</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          System readiness — what&apos;s working, what&apos;s missing, and what decisions you should not yet make
-        </p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-xl font-semibold">Data Health</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            System readiness — what&apos;s working, what&apos;s missing, and what decisions you should not yet make
+          </p>
+        </div>
+        <Button asChild>
+          <Link href="/content-ops/tiktok-affiliate/upload">
+            <ArrowRight className="h-4 w-4 mr-1.5" />
+            Upload Data
+          </Link>
+        </Button>
       </div>
 
       {/* Pipeline status grid */}
