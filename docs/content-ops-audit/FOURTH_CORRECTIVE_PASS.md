@@ -120,6 +120,105 @@ ability to re-import corrected files without needing a special bypass flow.
 
 ---
 
+## Header Localization Fix (2026-04-18)
+
+### Problem
+
+Real Thai-locale TikTok affiliate exports use Thai header strings (e.g.
+`หมายเลขคำสั่งซื้อ` instead of `Order ID`). The existing parser only
+searched for `'Order ID'` and `'Content ID'` as literals, causing all
+Thai files to fail at header detection with an uninformative English-only
+error message.
+
+### What Was Fixed
+
+**`tiktok-affiliate-orders.ts`** — three changes, no other files touched:
+
+1. **`normalizeHeader(header: string): string`** (exported helper)
+   - NFC Unicode normalization
+   - Strips zero-width characters (U+200B, U+200C, U+200D, U+FEFF)
+   - Collapses whitespace runs to a single space
+   - Trims leading/trailing whitespace
+   - Applied consistently in header-row detection, alias lookup, and
+     required-column checks
+
+2. **`THAI_HEADER_ALIASES`** — 43-entry map of Thai export headers →
+   `ParsedRowTextField`. Covers all fields that `OBSERVED_HEADERS` covers.
+   Two Thai columns (`Est. CedularTax` / `cedular_tax`) are intentionally
+   omitted — they have no corresponding field in `TikTokAffiliateParsedRow`.
+
+3. **`NORMALIZED_HEADER_TO_FIELD`** — `ReadonlyMap<string, ParsedRowTextField>`
+   built at module load from both `HEADER_ALIASES` (English) and
+   `THAI_HEADER_ALIASES`. Used in `mapRawRow` instead of the previous
+   `OBSERVED_HEADERS` loop.
+
+4. **`findHeaderRowIndex`** — now normalizes each scanned cell value before
+   checking against `REQUIRED_ORDER_ID_HEADERS` (contains `'Order ID'` and
+   `'หมายเลขคำสั่งซื้อ'`) and `REQUIRED_CONTENT_ID_HEADERS` (contains
+   `'Content ID'` and `'รหัสเนื้อหา'`). Error message improved to bilingual:
+
+   ```
+   Could not find required columns. Expected one of:
+     - Order ID / หมายเลขคำสั่งซื้อ
+     - Content ID / รหัสเนื้อหา
+   ```
+
+5. **`mapRawRow`** — builds a `normalizedRawRow: Map<string, unknown>` from
+   the raw XLSX row, then iterates `NORMALIZED_HEADER_TO_FIELD` to populate
+   `parsedRow`. Both English and Thai files resolve through the same path.
+
+### Headers Supported
+
+| English (existing) | Thai (new) |
+|--------------------|------------|
+| Order ID | หมายเลขคำสั่งซื้อ |
+| SKU ID | ID ของ SKU |
+| Product name | ชื่อสินค้า |
+| Product ID | รหัสสินค้า |
+| Price | ราคา |
+| Items sold | สินค้าที่ขายได้ |
+| Items refunded | สินค้าที่มีการคืนเงิน |
+| Shop name | ชื่อร้านค้า |
+| Shop code | รหัสร้านค้า |
+| Affiliate partner | พาร์ทเนอร์แอฟฟิลิเอต |
+| Agency | เอเจนซี่ |
+| Currency | สกุลเงิน |
+| Order type | ประเภทคำสั่งซื้อ |
+| Order settlement status | สถานะการชำระคำสั่งซื้อ |
+| Indirect | โดยอ้อม |
+| Commission type | ประเภทค่าคอมมิชชั่น |
+| Content Type | ประเภทเนื้อหา |
+| Content ID | รหัสเนื้อหา |
+| Standard | มาตรฐาน |
+| Shop ads | โฆษณาร้านค้า |
+| TikTok bonus | โบนัส TikTok |
+| Partner bonus | โบนัสจากพาร์ทเนอร์ |
+| Revenue sharing portion | สัดส่วนการแบ่งรายได้ |
+| GMV | GMV |
+| Est. commission base | ฐานค่าคอมมิชชั่นโดยประมาณ |
+| Est. standard commission | ค่าคอมมิชชั่นมาตรฐานโดยประมาณ |
+| Est. Shop Ads commission | ค่าคอมมิชชั่นโฆษณาร้านค้าโดยประมาณ |
+| Est. Bonus | โบนัสโดยประมาณ |
+| Est. Affiliate partner bonus | โบนัสจากพาร์ทเนอร์แอฟฟิลิเอตโดยประมาณ |
+| Est. IVA | IVA โดยประมาณ |
+| Est. ISR | ISR โดยประมาณ |
+| Est. PIT | PIT โดยประมาณ |
+| Est. revenue sharing portion | สัดส่วนการแบ่งรายได้โดยประมาณ |
+| Actual commission base | ฐานค่าคอมมิชชั่นตามจริง |
+| Standard commission | ค่าคอมมิชชั่นมาตรฐาน |
+| Shop Ads commission | ค่าคอมมิชชั่นโฆษณาร้านค้า |
+| Bonus | โบนัส |
+| Affiliate partner bonus | โบนัสจากพาร์ทเนอร์แอฟฟิลิเอต |
+| Tax - ISR | ภาษี - ISR |
+| Tax - IVA | ภาษี - IVA |
+| Tax - PIT | ภาษี - PIT |
+| Shared with partner | แบ่งกับพาร์ทเนอร์ |
+| Total final earned amount | ยอดรายได้รวมสุดท้าย |
+| Order date | วันที่สั่งซื้อ |
+| Commission settlement date | วันที่ชำระเงินค่าคอมมิชชั่น |
+
+---
+
 ## Verification
 
 ```

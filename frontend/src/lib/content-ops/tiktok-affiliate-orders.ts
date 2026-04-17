@@ -223,6 +223,120 @@ const HEADER_ALIASES: Record<ObservedHeader, ParsedRowTextField> = {
   'Commission settlement date': 'commissionSettlementDateText',
 }
 
+// ─── Thai header aliases ───────────────────────────────────────────────────────
+
+/**
+ * Maps Thai-language TikTok export header strings to the same ParsedRowTextField
+ * targets as HEADER_ALIASES. Thai exports use these headers when the seller's
+ * account locale is set to Thai (TH).
+ *
+ * Columns that appear in Thai exports but have no corresponding ParsedRowTextField
+ * (Est. CedularTax / cedular_tax) are intentionally omitted — they are not parsed
+ * by this pipeline.
+ */
+const THAI_HEADER_ALIASES: Record<string, ParsedRowTextField> = {
+  'หมายเลขคำสั่งซื้อ': 'orderId',
+  'ID ของ SKU': 'skuId',
+  'ชื่อสินค้า': 'productName',
+  'รหัสสินค้า': 'productId',
+  'ราคา': 'priceText',
+  'สินค้าที่ขายได้': 'itemsSoldText',
+  'สินค้าที่มีการคืนเงิน': 'itemsRefundedText',
+  'ชื่อร้านค้า': 'shopName',
+  'รหัสร้านค้า': 'shopCode',
+  'พาร์ทเนอร์แอฟฟิลิเอต': 'affiliatePartner',
+  'เอเจนซี่': 'agency',
+  'สกุลเงิน': 'currency',
+  'ประเภทคำสั่งซื้อ': 'orderType',
+  'สถานะการชำระคำสั่งซื้อ': 'orderSettlementStatus',
+  'โดยอ้อม': 'indirectFlag',
+  'ประเภทค่าคอมมิชชั่น': 'commissionType',
+  'ประเภทเนื้อหา': 'contentType',
+  'รหัสเนื้อหา': 'contentId',
+  'มาตรฐาน': 'standardRateText',
+  'โฆษณาร้านค้า': 'shopAdsRateText',
+  'โบนัส TikTok': 'tiktokBonusRateText',
+  'โบนัสจากพาร์ทเนอร์': 'partnerBonusRateText',
+  'สัดส่วนการแบ่งรายได้': 'revenueSharingPortionRateText',
+  GMV: 'gmvText',
+  'ฐานค่าคอมมิชชั่นโดยประมาณ': 'estCommissionBaseText',
+  'ค่าคอมมิชชั่นมาตรฐานโดยประมาณ': 'estStandardCommissionText',
+  'ค่าคอมมิชชั่นโฆษณาร้านค้าโดยประมาณ': 'estShopAdsCommissionText',
+  'โบนัสโดยประมาณ': 'estBonusText',
+  'โบนัสจากพาร์ทเนอร์แอฟฟิลิเอตโดยประมาณ': 'estAffiliatePartnerBonusText',
+  'IVA โดยประมาณ': 'estIvaText',
+  'ISR โดยประมาณ': 'estIsrText',
+  'PIT โดยประมาณ': 'estPitText',
+  'สัดส่วนการแบ่งรายได้โดยประมาณ': 'estRevenueSharingPortionText',
+  'ฐานค่าคอมมิชชั่นตามจริง': 'actualCommissionBaseText',
+  'ค่าคอมมิชชั่นมาตรฐาน': 'standardCommissionText',
+  'ค่าคอมมิชชั่นโฆษณาร้านค้า': 'shopAdsCommissionText',
+  'โบนัส': 'bonusText',
+  'โบนัสจากพาร์ทเนอร์แอฟฟิลิเอต': 'affiliatePartnerBonusText',
+  'ภาษี - ISR': 'taxIsrText',
+  'ภาษี - IVA': 'taxIvaText',
+  'ภาษี - PIT': 'taxPitText',
+  'แบ่งกับพาร์ทเนอร์': 'sharedWithPartnerText',
+  'ยอดรายได้รวมสุดท้าย': 'totalFinalEarnedAmountText',
+  'วันที่สั่งซื้อ': 'orderDateText',
+  'วันที่ชำระเงินค่าคอมมิชชั่น': 'commissionSettlementDateText',
+}
+
+// ─── Header normalization ──────────────────────────────────────────────────────
+
+/**
+ * Normalizes a header string for deterministic matching:
+ * - NFC Unicode normalization (canonical decomposition + recomposition)
+ * - Strip zero-width characters (U+200B ZWSP, U+200C ZWNJ, U+200D ZWJ, U+FEFF BOM)
+ * - Collapse internal whitespace runs to a single space
+ * - Trim leading / trailing whitespace
+ *
+ * Applied consistently when scanning the sheet for the header row,
+ * when building the alias lookup, and when checking required columns.
+ */
+export function normalizeHeader(header: string): string {
+  return header
+    .normalize('NFC')
+    .replace(/[\u200B\u200C\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * Combined lookup: normalized header string → ParsedRowTextField.
+ * Built once at module load from both English (HEADER_ALIASES) and
+ * Thai (THAI_HEADER_ALIASES) entries. Used in mapRawRow to resolve
+ * column values without branching on file locale.
+ */
+const NORMALIZED_HEADER_TO_FIELD: ReadonlyMap<string, ParsedRowTextField> = (() => {
+  const map = new Map<string, ParsedRowTextField>()
+  for (const header of OBSERVED_HEADERS) {
+    map.set(normalizeHeader(header), HEADER_ALIASES[header])
+  }
+  for (const [thaiHeader, field] of Object.entries(THAI_HEADER_ALIASES)) {
+    map.set(normalizeHeader(thaiHeader), field)
+  }
+  return map
+})()
+
+/**
+ * Normalized forms of the required "Order ID" column.
+ * A candidate header row must contain at least one of these.
+ */
+const REQUIRED_ORDER_ID_HEADERS = new Set([
+  normalizeHeader('Order ID'),
+  normalizeHeader('หมายเลขคำสั่งซื้อ'),
+])
+
+/**
+ * Normalized forms of the required "Content ID" column.
+ * A candidate header row must contain at least one of these.
+ */
+const REQUIRED_CONTENT_ID_HEADERS = new Set([
+  normalizeHeader('Content ID'),
+  normalizeHeader('รหัสเนื้อหา'),
+])
+
 export async function previewTikTokAffiliateFile(
   fileBuffer: Buffer,
   fileName: string,
@@ -491,13 +605,19 @@ function findHeaderRowIndex(worksheet: XLSX.WorkSheet): number {
   const scanLimit = Math.min(rowCount, 15)
 
   for (let rowIndex = 0; rowIndex < scanLimit; rowIndex += 1) {
-    const values = readRowValues(worksheet, rowIndex)
-    if (values.includes('Order ID') && values.includes('Content ID')) {
+    const normalizedValues = readRowValues(worksheet, rowIndex).map(normalizeHeader)
+    const hasOrderId = normalizedValues.some((v) => REQUIRED_ORDER_ID_HEADERS.has(v))
+    const hasContentId = normalizedValues.some((v) => REQUIRED_CONTENT_ID_HEADERS.has(v))
+    if (hasOrderId && hasContentId) {
       return rowIndex
     }
   }
 
-  throw new Error('Could not find TikTok affiliate header row with "Order ID" and "Content ID".')
+  throw new Error(
+    'Could not find required columns. Expected one of:\n' +
+    '  - Order ID / หมายเลขคำสั่งซื้อ\n' +
+    '  - Content ID / รหัสเนื้อหา'
+  )
 }
 
 function getWorksheetRowCount(worksheet: XLSX.WorkSheet): number {
@@ -600,9 +720,18 @@ function mapRawRow(rawRow: Record<string, unknown>, sourceRowNumber: number): Ti
     commissionSettlementDateText: '',
   }
 
-  for (const header of OBSERVED_HEADERS) {
-    const fieldName = HEADER_ALIASES[header]
-    parsedRow[fieldName] = preserveRawText(rawRow[header])
+  // Build a normalized-key → value map from the raw row so that both English
+  // and Thai header exports are handled without branching on file locale.
+  const normalizedRawRow = new Map<string, unknown>()
+  for (const [key, value] of Object.entries(rawRow)) {
+    normalizedRawRow.set(normalizeHeader(key), value)
+  }
+
+  for (const [normalizedHeader, fieldName] of NORMALIZED_HEADER_TO_FIELD) {
+    const value = normalizedRawRow.get(normalizedHeader)
+    if (value !== undefined) {
+      parsedRow[fieldName] = preserveRawText(value)
+    }
   }
 
   return parsedRow
