@@ -1,24 +1,26 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import {
+  type AttributionDiagnostics,
+  type AttributionSurfaceState,
+  buildAttributionLimitedMessage,
+  createAttributionDiagnostics,
+  getAttributionQueryMeta,
+  getAttributionSurfaceState,
+  logAttributionDiagnostics,
+} from './attribution-query-utils'
 import { getBangkokToday, offsetDate, buildDayArray } from './date-utils'
+import {
+  CONTENT_OPS_STATUS_LABELS,
+  normalizeContentOpsStatus,
+} from './status-utils'
 
 // ─── Status mapping ────────────────────────────────────────────────────────────
 
 function mapStatusBucket(status: string): 'settled' | 'pending' | 'awaiting_payment' | 'ineligible' | 'other' {
-  const s = (status ?? '').toLowerCase().replace(/\s+/g, '_')
-  if (s === 'settled' || s === 'completed') return 'settled'
-  if (s === 'pending') return 'pending'
-  if (s === 'awaiting_payment' || s.includes('awaiting')) return 'awaiting_payment'
-  if (s === 'ineligible' || s === 'cancelled') return 'ineligible'
-  return 'other'
-}
-
-const STATUS_BUCKET_LABELS: Record<string, string> = {
-  settled: 'Settled',
-  pending: 'Pending',
-  awaiting_payment: 'Awaiting Payment',
-  ineligible: 'Ineligible',
+  const normalized = normalizeContentOpsStatus(status)
+  return normalized ?? 'other'
 }
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -129,7 +131,7 @@ export async function getOverviewData(): Promise<{ data: OverviewData | null; er
 
   const statusBreakdown: StatusBucket[] = (['settled', 'pending', 'awaiting_payment', 'ineligible'] as const).map((key) => ({
     key,
-    label: STATUS_BUCKET_LABELS[key],
+    label: CONTENT_OPS_STATUS_LABELS[key],
     count: statusCounts.get(key) ?? 0,
     percent: total > 0 ? Math.round(((statusCounts.get(key) ?? 0) / total) * 1000) / 10 : 0,
   }))
@@ -194,116 +196,6 @@ export async function getOverviewData(): Promise<{ data: OverviewData | null; er
   }
 }
 
-// ─── Product list ──────────────────────────────────────────────────────────────
-
-export interface ProductListRow {
-  productId: string
-  productName: string | null
-  shopCount: number
-  orderItems: number
-  topShopName: string | null
-  topContentId: string | null
-}
-
-export interface ProductListResult {
-  rows: ProductListRow[]
-  total: number
-}
-
-export async function getProductList(
-  filters: { search?: string; shopCode?: string; sort?: string } = {},
-  limit = 50,
-  offset = 0
-): Promise<{ data: ProductListResult | null; error: string | null }> {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { data: null, error: 'Unauthenticated' }
-
-  const { data, error } = await supabase
-    .from('content_order_facts')
-    .select('product_id,product_name,shop_code,shop_name,content_id')
-    .eq('created_by', user.id)
-
-  if (error) return { data: null, error: error.message }
-
-  const rows = data ?? []
-
-  // Aggregate per product
-  type ProductAgg = {
-    productName: string | null
-    shops: Map<string, { name: string | null; count: number }>
-    contents: Map<string, number>
-    orderItems: number
-  }
-
-  const productMap = new Map<string, ProductAgg>()
-
-  for (const r of rows) {
-    if (!r.product_id) continue
-    const p = productMap.get(r.product_id) ?? {
-      productName: null,
-      shops: new Map(),
-      contents: new Map(),
-      orderItems: 0,
-    }
-    p.orderItems++
-    if (!p.productName && r.product_name) p.productName = r.product_name
-    if (r.shop_code) {
-      const s = p.shops.get(r.shop_code) ?? { name: r.shop_name ?? null, count: 0 }
-      s.count++
-      if (!s.name && r.shop_name) s.name = r.shop_name
-      p.shops.set(r.shop_code, s)
-    }
-    if (r.content_id) {
-      p.contents.set(r.content_id, (p.contents.get(r.content_id) ?? 0) + 1)
-    }
-    productMap.set(r.product_id, p)
-  }
-
-  let products: ProductListRow[] = [...productMap.entries()].map(([productId, v]) => {
-    const topShop = [...v.shops.entries()].sort((a, b) => b[1].count - a[1].count)[0]
-    const topContent = [...v.contents.entries()].sort((a, b) => b[1] - a[1])[0]
-    return {
-      productId,
-      productName: v.productName,
-      shopCount: v.shops.size,
-      orderItems: v.orderItems,
-      topShopName: topShop ? (topShop[1].name ?? topShop[0]) : null,
-      topContentId: topContent ? topContent[0] : null,
-    }
-  })
-
-  // Apply filters
-  if (filters.search) {
-    const q = filters.search.toLowerCase()
-    products = products.filter(
-      (p) =>
-        p.productId.toLowerCase().includes(q) ||
-        (p.productName ?? '').toLowerCase().includes(q)
-    )
-  }
-  if (filters.shopCode) {
-    // Re-filter based on original rows
-    const matchingProducts = new Set<string>()
-    for (const r of rows) {
-      if (r.shop_code === filters.shopCode && r.product_id) matchingProducts.add(r.product_id)
-    }
-    products = products.filter((p) => matchingProducts.has(p.productId))
-  }
-
-  // Sort
-  if (filters.sort === 'name') {
-    products.sort((a, b) => (a.productName ?? a.productId).localeCompare(b.productName ?? b.productId))
-  } else if (filters.sort === 'shops') {
-    products.sort((a, b) => b.shopCount - a.shopCount)
-  } else {
-    // Default: by order items desc
-    products.sort((a, b) => b.orderItems - a.orderItems)
-  }
-
-  const total = products.length
-  return { data: { rows: products.slice(offset, offset + limit), total }, error: null }
-}
 
 // ─── Product detail ────────────────────────────────────────────────────────────
 
@@ -340,30 +232,48 @@ export async function getProductDetail(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { data: null, error: 'Unauthenticated' }
 
-  const { data, error } = await supabase
-    .from('content_order_facts')
-    .select('order_id,sku_id,product_name,shop_code,shop_name,content_id,order_settlement_status,is_successful')
-    .eq('created_by', user.id)
-    .eq('product_id', productId)
+  // ── Source 1: tt_product_master (identity) ────────────────────────────────────
+  // Used for: canonical product_name — resolves to most recent non-null name across
+  // all import batches, which is more stable than scanning individual fact rows.
+  // NOT used for counts: master stats may be stale between refresh runs.
+  //
+  // ── Source 2: content_order_facts (metrics) ────────────────────────────────────
+  // Used for: all counts (totalOrderItems, settledCount, shopCount), status
+  // breakdown, top shops list, top content IDs, related orders.
+  // Facts are always current — no refresh required.
+  const [masterRes, factsRes] = await Promise.all([
+    supabase
+      .from('tt_product_master')
+      .select('product_id,product_name,shop_code,shop_name')
+      .eq('created_by', user.id)
+      .eq('product_id', productId)
+      .maybeSingle(),
+    supabase
+      .from('content_order_facts')
+      .select('order_id,sku_id,product_name,shop_code,shop_name,content_id,order_settlement_status,is_successful')
+      .eq('created_by', user.id)
+      .eq('product_id', productId),
+  ])
 
-  if (error) return { data: null, error: error.message }
+  if (factsRes.error) return { data: null, error: factsRes.error.message }
 
-  const rows = data ?? []
-  if (rows.length === 0) return { data: null, error: 'Product not found' }
+  const rows = factsRes.data ?? []
+  const master = masterRes.data  // null when master refresh has not yet run
 
+  if (!master && rows.length === 0) return { data: null, error: 'Product not found' }
+
+  // Aggregate facts for all derived metrics
   const shopMap = new Map<string, { name: string | null; count: number }>()
   const contentMap = new Map<string, number>()
   const statusCounts = new Map<string, number>()
+  let productNameFromFacts: string | null = null
   let settledCount = 0
-  let productName: string | null = null
 
   for (const r of rows) {
-    if (!productName && r.product_name) productName = r.product_name
+    if (!productNameFromFacts && r.product_name) productNameFromFacts = r.product_name
     if (r.is_successful) settledCount++
-
     const bucket = mapStatusBucket(r.order_settlement_status ?? '')
     statusCounts.set(bucket, (statusCounts.get(bucket) ?? 0) + 1)
-
     if (r.shop_code) {
       const s = shopMap.get(r.shop_code) ?? { name: null, count: 0 }
       s.count++
@@ -378,6 +288,9 @@ export async function getProductDetail(
   const topShopEntry = [...shopMap.entries()].sort((a, b) => b[1].count - a[1].count)[0]
   const total = rows.length
 
+  // Identity from master (canonical); fallback to first non-null value in facts
+  const productName = master?.product_name ?? productNameFromFacts
+
   const stats: ProductDetailStats = {
     productId,
     productName,
@@ -390,7 +303,7 @@ export async function getProductDetail(
 
   const statusBreakdown: StatusBucket[] = (['settled', 'pending', 'awaiting_payment', 'ineligible'] as const).map((key) => ({
     key,
-    label: STATUS_BUCKET_LABELS[key],
+    label: CONTENT_OPS_STATUS_LABELS[key],
     count: statusCounts.get(key) ?? 0,
     percent: total > 0 ? Math.round(((statusCounts.get(key) ?? 0) / total) * 1000) / 10 : 0,
   }))
@@ -420,99 +333,6 @@ export async function getProductDetail(
   return { data: { stats, statusBreakdown, topShops, topContentIds, relatedOrders }, error: null }
 }
 
-// ─── Shop list ─────────────────────────────────────────────────────────────────
-
-export interface ShopListRow {
-  shopCode: string
-  shopName: string | null
-  productCount: number
-  orderItems: number
-  topProductName: string | null
-  topContentId: string | null
-}
-
-export interface ShopListResult {
-  rows: ShopListRow[]
-  total: number
-}
-
-export async function getShopList(
-  filters: { search?: string; sort?: string } = {},
-  limit = 50,
-  offset = 0
-): Promise<{ data: ShopListResult | null; error: string | null }> {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { data: null, error: 'Unauthenticated' }
-
-  const { data, error } = await supabase
-    .from('content_order_facts')
-    .select('shop_code,shop_name,product_id,product_name,content_id')
-    .eq('created_by', user.id)
-
-  if (error) return { data: null, error: error.message }
-
-  const rows = data ?? []
-
-  type ShopAgg = {
-    shopName: string | null
-    products: Map<string, { name: string | null; count: number }>
-    contents: Map<string, number>
-    orderItems: number
-  }
-
-  const shopMap = new Map<string, ShopAgg>()
-
-  for (const r of rows) {
-    if (!r.shop_code) continue
-    const s = shopMap.get(r.shop_code) ?? { shopName: null, products: new Map(), contents: new Map(), orderItems: 0 }
-    s.orderItems++
-    if (!s.shopName && r.shop_name) s.shopName = r.shop_name
-    if (r.product_id) {
-      const p = s.products.get(r.product_id) ?? { name: r.product_name ?? null, count: 0 }
-      p.count++
-      if (!p.name && r.product_name) p.name = r.product_name
-      s.products.set(r.product_id, p)
-    }
-    if (r.content_id) {
-      s.contents.set(r.content_id, (s.contents.get(r.content_id) ?? 0) + 1)
-    }
-    shopMap.set(r.shop_code, s)
-  }
-
-  let shops: ShopListRow[] = [...shopMap.entries()].map(([shopCode, v]) => {
-    const topProduct = [...v.products.entries()].sort((a, b) => b[1].count - a[1].count)[0]
-    const topContent = [...v.contents.entries()].sort((a, b) => b[1] - a[1])[0]
-    return {
-      shopCode,
-      shopName: v.shopName,
-      productCount: v.products.size,
-      orderItems: v.orderItems,
-      topProductName: topProduct ? (topProduct[1].name ?? topProduct[0]) : null,
-      topContentId: topContent ? topContent[0] : null,
-    }
-  })
-
-  if (filters.search) {
-    const q = filters.search.toLowerCase()
-    shops = shops.filter(
-      (s) =>
-        s.shopCode.toLowerCase().includes(q) ||
-        (s.shopName ?? '').toLowerCase().includes(q)
-    )
-  }
-
-  if (filters.sort === 'name') {
-    shops.sort((a, b) => (a.shopName ?? a.shopCode).localeCompare(b.shopName ?? b.shopCode))
-  } else if (filters.sort === 'products') {
-    shops.sort((a, b) => b.productCount - a.productCount)
-  } else {
-    shops.sort((a, b) => b.orderItems - a.orderItems)
-  }
-
-  const total = shops.length
-  return { data: { rows: shops.slice(offset, offset + limit), total }, error: null }
-}
 
 // ─── Shop detail ───────────────────────────────────────────────────────────────
 
@@ -541,30 +361,48 @@ export async function getShopDetail(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { data: null, error: 'Unauthenticated' }
 
-  const { data, error } = await supabase
-    .from('content_order_facts')
-    .select('order_id,sku_id,product_id,product_name,shop_name,content_id,order_settlement_status,is_successful')
-    .eq('created_by', user.id)
-    .eq('shop_code', shopCode)
+  // ── Source 1: tt_shop_master (identity) ───────────────────────────────────────
+  // Used for: canonical shop_name — resolves to most recent non-null name across
+  // all import batches, more stable than scanning individual fact rows.
+  // NOT used for counts: master stats may be stale between refresh runs.
+  //
+  // ── Source 2: content_order_facts (metrics) ────────────────────────────────────
+  // Used for: all counts (totalOrderItems, settledCount, productCount), status
+  // breakdown, top products list, top content IDs, related orders.
+  // Facts are always current — no refresh required.
+  const [masterRes, factsRes] = await Promise.all([
+    supabase
+      .from('tt_shop_master')
+      .select('shop_code,shop_name')
+      .eq('created_by', user.id)
+      .eq('shop_code', shopCode)
+      .maybeSingle(),
+    supabase
+      .from('content_order_facts')
+      .select('order_id,sku_id,product_id,product_name,shop_name,content_id,order_settlement_status,is_successful')
+      .eq('created_by', user.id)
+      .eq('shop_code', shopCode),
+  ])
 
-  if (error) return { data: null, error: error.message }
+  if (factsRes.error) return { data: null, error: factsRes.error.message }
 
-  const rows = data ?? []
-  if (rows.length === 0) return { data: null, error: 'Shop not found' }
+  const rows = factsRes.data ?? []
+  const master = masterRes.data  // null when master refresh has not yet run
 
+  if (!master && rows.length === 0) return { data: null, error: 'Shop not found' }
+
+  // Aggregate facts for all derived metrics
   const productMap = new Map<string, { name: string | null; count: number }>()
   const contentMap = new Map<string, number>()
   const statusCounts = new Map<string, number>()
+  let shopNameFromFacts: string | null = null
   let settledCount = 0
-  let shopName: string | null = null
 
   for (const r of rows) {
-    if (!shopName && r.shop_name) shopName = r.shop_name
+    if (!shopNameFromFacts && r.shop_name) shopNameFromFacts = r.shop_name
     if (r.is_successful) settledCount++
-
     const bucket = mapStatusBucket(r.order_settlement_status ?? '')
     statusCounts.set(bucket, (statusCounts.get(bucket) ?? 0) + 1)
-
     if (r.product_id) {
       const p = productMap.get(r.product_id) ?? { name: null, count: 0 }
       p.count++
@@ -579,6 +417,9 @@ export async function getShopDetail(
   const topProductEntry = [...productMap.entries()].sort((a, b) => b[1].count - a[1].count)[0]
   const total = rows.length
 
+  // Identity from master (canonical); fallback to first non-null value in facts
+  const shopName = master?.shop_name ?? shopNameFromFacts
+
   const stats: ShopDetailStats = {
     shopCode,
     shopName,
@@ -591,7 +432,7 @@ export async function getShopDetail(
 
   const statusBreakdown: StatusBucket[] = (['settled', 'pending', 'awaiting_payment', 'ineligible'] as const).map((key) => ({
     key,
-    label: STATUS_BUCKET_LABELS[key],
+    label: CONTENT_OPS_STATUS_LABELS[key],
     count: statusCounts.get(key) ?? 0,
     percent: total > 0 ? Math.round(((statusCounts.get(key) ?? 0) / total) * 1000) / 10 : 0,
   }))
@@ -613,7 +454,7 @@ export async function getShopDetail(
   const relatedOrders: RelatedOrderRow[] = rows.slice(0, 10).map((r) => ({
     orderId: r.order_id,
     skuId: r.sku_id ?? null,
-    shopName: shopName,
+    shopName,
     status: r.order_settlement_status,
     contentId: r.content_id,
   }))
@@ -655,7 +496,13 @@ export async function getOrdersExplorer(
   if (filters.productId) q = q.eq('product_id', filters.productId)
   if (filters.shopCode) q = q.eq('shop_code', filters.shopCode)
   if (filters.contentId) q = q.eq('content_id', filters.contentId)
-  if (filters.status) q = q.eq('order_settlement_status', filters.status)
+  if (filters.status) {
+    const normalizedStatus = normalizeContentOpsStatus(filters.status)
+    if (!normalizedStatus) {
+      return { data: [], total: 0, error: `Unsupported status filter: ${filters.status}` }
+    }
+    q = q.eq('order_settlement_status', normalizedStatus)
+  }
   if (filters.query) q = q.or(`order_id.ilike.%${filters.query}%,product_name.ilike.%${filters.query}%,content_id.ilike.%${filters.query}%`)
 
   const { data, count, error } = await q
@@ -686,6 +533,7 @@ export interface AttributionSummary {
   mappedRows: number
   uniqueContentIds: number
   uniqueProducts: number
+  mode: 'exact' | 'page_slice'
 }
 
 export interface AttributionFullRow {
@@ -705,36 +553,107 @@ export async function getAttributionFull(
   filters: { contentId?: string; bucket?: string } = {},
   limit = 50,
   offset = 0
-): Promise<{ data: AttributionFullRow[]; summary: AttributionSummary; total: number; error: string | null }> {
+): Promise<{
+  data: AttributionFullRow[]
+  summary: AttributionSummary
+  total: number | null
+  totalKnown: boolean
+  hasMore: boolean
+  state: AttributionSurfaceState
+  notice: string | null
+  error: string | null
+  diagnostics: AttributionDiagnostics
+}> {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { data: [], summary: { mappedRows: 0, uniqueContentIds: 0, uniqueProducts: 0 }, total: 0, error: 'Unauthenticated' }
+  if (!user) {
+    return {
+      data: [],
+      summary: { mappedRows: 0, uniqueContentIds: 0, uniqueProducts: 0, mode: 'page_slice' },
+      total: null,
+      totalKnown: false,
+      hasMore: false,
+      state: 'failed',
+      notice: null,
+      error: 'Unauthenticated',
+      diagnostics: createAttributionDiagnostics({
+        queryPath: 'analysis_attribution_unauthenticated',
+        durationMs: 0,
+        degraded: false,
+        timedOut: false,
+        totalMode: 'skipped',
+        summaryMode: 'skipped',
+      }),
+    }
+  }
 
+  const startedAt = Date.now()
   let q = supabase
     .from('content_order_attribution')
-    .select('order_id,product_id,product_name,content_id,currency,order_date,normalized_status,business_bucket,is_realized,source_fact_count', { count: 'exact' })
+    .select('order_id,product_id,product_name,content_id,currency,order_date,normalized_status,business_bucket,is_realized,source_fact_count')
     .eq('created_by', user.id)
 
   if (filters.contentId) q = q.eq('content_id', filters.contentId)
   if (filters.bucket) q = q.eq('business_bucket', filters.bucket)
 
-  const { data, count, error } = await q
+  const { data, error } = await q
     .order('order_date', { ascending: false })
-    .range(offset, offset + limit - 1)
+    .range(offset, offset + limit)
 
-  if (error) return { data: [], summary: { mappedRows: 0, uniqueContentIds: 0, uniqueProducts: 0 }, total: 0, error: error.message }
+  const durationMs = Date.now() - startedAt
+
+  if (error) {
+    const attributionQuery = getAttributionQueryMeta(error, null, 'Attribution')
+    const diagnostics = createAttributionDiagnostics({
+      queryPath: 'stable_page_slice',
+      durationMs,
+      degraded: false,
+      timedOut: attributionQuery.state === 'timed_out',
+      totalMode: 'skipped',
+      summaryMode: 'skipped',
+    })
+    const state = getAttributionSurfaceState(attributionQuery, 0, false)
+    logAttributionDiagnostics('analysis_attribution_rows', state, diagnostics, attributionQuery.message)
+
+    return {
+      data: [],
+      summary: { mappedRows: 0, uniqueContentIds: 0, uniqueProducts: 0, mode: 'page_slice' },
+      total: null,
+      totalKnown: false,
+      hasMore: false,
+      state,
+      notice: null,
+      error: attributionQuery.message,
+      diagnostics,
+    }
+  }
 
   // Compute summary from current page — for full summary, we'd need all rows
   // Use a separate count query for unique content IDs and products
-  const [contentCountRes, productCountRes] = await Promise.all([
-    supabase.from('content_order_attribution').select('content_id').eq('created_by', user.id),
-    supabase.from('content_order_attribution').select('product_id').eq('created_by', user.id),
-  ])
+  const rawRows = data ?? []
+  const hasMore = rawRows.length > limit
+  const pageRows = rawRows.slice(0, limit)
+  const totalKnown = !hasMore && (offset === 0 || pageRows.length > 0)
+  const total = totalKnown ? offset + pageRows.length : null
+  const summaryMode: AttributionSummary['mode'] = offset === 0 && !hasMore ? 'exact' : 'page_slice'
+  const queryMeta = getAttributionQueryMeta(null, pageRows.length, 'Attribution')
+  const diagnostics = createAttributionDiagnostics({
+    queryPath: 'stable_page_slice',
+    durationMs,
+    degraded: hasMore || summaryMode !== 'exact',
+    timedOut: false,
+    totalMode: totalKnown ? 'derived_last_page' : 'skipped',
+    summaryMode: summaryMode === 'exact' ? 'exact' : 'page_slice',
+  })
+  const state = getAttributionSurfaceState(queryMeta, pageRows.length, diagnostics.degraded)
+  const notice = state === 'partial'
+    ? buildAttributionLimitedMessage('Attribution', {
+        exactTotals: totalKnown,
+        exactSummary: summaryMode === 'exact',
+      })
+    : null
 
-  const uniqueContentIds = new Set((contentCountRes.data ?? []).map((r) => r.content_id)).size
-  const uniqueProducts = new Set((productCountRes.data ?? []).map((r) => r.product_id)).size
-
-  const rows: AttributionFullRow[] = (data ?? []).map((r) => ({
+  const rows: AttributionFullRow[] = pageRows.map((r) => ({
     orderId: r.order_id,
     productId: r.product_id,
     productName: r.product_name ?? null,
@@ -747,11 +666,25 @@ export async function getAttributionFull(
     orderDate: r.order_date ?? null,
   }))
 
+  const summary: AttributionSummary = {
+    mappedRows: summaryMode === 'exact' && total !== null ? total : pageRows.length,
+    uniqueContentIds: new Set(pageRows.map((r) => r.content_id)).size,
+    uniqueProducts: new Set(pageRows.map((r) => r.product_id)).size,
+    mode: summaryMode,
+  }
+
+  logAttributionDiagnostics('analysis_attribution_rows', state, diagnostics, notice)
+
   return {
     data: rows,
-    summary: { mappedRows: count ?? 0, uniqueContentIds, uniqueProducts },
-    total: count ?? 0,
+    summary,
+    total,
+    totalKnown,
+    hasMore,
+    state,
+    notice,
     error: null,
+    diagnostics,
   }
 }
 
@@ -771,7 +704,7 @@ export interface KnownGapItem {
 
 export interface CoverageMetricItem {
   label: string
-  value: number
+  value: number | null
   suffix: string
 }
 
@@ -793,10 +726,9 @@ export async function getDataHealth(): Promise<{ data: DataHealthData | null; er
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { data: null, error: 'Unauthenticated' }
 
-  const [factsRes, batchesRes, attributionRes, costsRes, profitRes] = await Promise.all([
+  const [factsRes, batchesRes, costsRes, profitRes] = await Promise.all([
     supabase.from('content_order_facts').select('id,product_id,shop_code,content_id', { count: 'exact' }).eq('created_by', user.id),
     supabase.from('tiktok_affiliate_import_batches').select('id', { count: 'exact', head: true }).eq('created_by', user.id),
-    supabase.from('content_order_attribution').select('order_id', { count: 'exact', head: true }).eq('created_by', user.id),
     supabase.from('tt_content_costs').select('id', { count: 'exact', head: true }).eq('created_by', user.id),
     supabase.from('content_profit_attribution_summary').select('content_id', { count: 'exact', head: true }).eq('created_by', user.id),
   ])
@@ -804,9 +736,55 @@ export async function getDataHealth(): Promise<{ data: DataHealthData | null; er
   const factRows = factsRes.data ?? []
   const factsCount = factsRes.count ?? 0
   const batchCount = batchesRes.count ?? 0
-  const attributionCount = attributionRes.count ?? 0
   const costsCount = costsRes.count ?? 0
   const profitCount = profitRes.count ?? 0
+  let attributionState: AttributionSurfaceState = factsCount > 0 ? 'partial' : 'no_data'
+  let attributionDetail = factsCount > 0
+    ? 'Partial: attribution probe has not run yet.'
+    : 'No normalized facts available for attribution.'
+  let attributionCoverage: number | null = factsCount === 0 ? 0 : null
+
+  if (factsCount > 0) {
+    const attributionProbeStartedAt = Date.now()
+    const attributionProbe = await supabase
+      .from('content_order_attribution')
+      .select('order_id')
+      .eq('created_by', user.id)
+      .limit(1)
+
+    const attributionProbeDurationMs = Date.now() - attributionProbeStartedAt
+    const attributionQuery = getAttributionQueryMeta(
+      attributionProbe.error,
+      attributionProbe.data?.length ?? 0,
+      'Attribution'
+    )
+    const diagnostics = createAttributionDiagnostics({
+      queryPath: 'stable_probe',
+      durationMs: attributionProbeDurationMs,
+      degraded: true,
+      timedOut: attributionQuery.state === 'timed_out',
+      totalMode: 'skipped',
+      summaryMode: 'probe',
+    })
+
+    attributionState = getAttributionSurfaceState(
+      attributionQuery,
+      attributionProbe.data?.length ?? 0,
+      true
+    )
+
+    attributionDetail =
+      attributionState === 'success'
+        ? `Attribution loaded. ${diagnostics.queryPath} completed in ${diagnostics.durationMs} ms.`
+        : attributionState === 'partial'
+        ? `${buildAttributionLimitedMessage('Attribution', { probeOnly: true })} ${diagnostics.queryPath} completed in ${diagnostics.durationMs} ms.`
+        : attributionState === 'no_data'
+        ? 'No attribution rows found.'
+        : `${attributionQuery.message ?? 'Attribution query failed.'} ${diagnostics.queryPath} completed in ${diagnostics.durationMs} ms.`
+
+    attributionCoverage = attributionState === 'no_data' ? 0 : null
+    logAttributionDiagnostics('data_health_attribution_probe', attributionState, diagnostics, attributionDetail)
+  }
 
   // Compute coverage
   const uniqueProducts = new Set(factRows.map((r) => r.product_id).filter(Boolean)).size
@@ -831,8 +809,13 @@ export async function getDataHealth(): Promise<{ data: DataHealthData | null; er
     },
     {
       label: 'Attribution',
-      status: attributionCount > 0 ? 'ok' : (factsCount > 0 ? 'warning' : 'error'),
-      detail: attributionCount > 0 ? `${attributionCount.toLocaleString()} attribution rows` : 'Attribution not available',
+      status:
+        attributionState === 'success'
+          ? 'ok'
+          : attributionState === 'partial' || attributionState === 'no_data'
+          ? 'warning'
+          : 'error',
+      detail: attributionDetail,
     },
     {
       label: 'Cost allocation',
@@ -870,7 +853,11 @@ export async function getDataHealth(): Promise<{ data: DataHealthData | null; er
     { label: 'Products mapped', value: productMapped, suffix: '%' },
     { label: 'Shops mapped', value: shopMapped, suffix: '%' },
     { label: 'Content linked', value: contentLinked, suffix: '%' },
-    { label: 'Attribution coverage', value: factsCount > 0 ? Math.round((attributionCount / factsCount) * 100) : 0, suffix: '%' },
+    {
+      label: 'Attribution coverage',
+      value: attributionCoverage,
+      suffix: '%',
+    },
   ]
 
   const nextActions: TechnicalNextAction[] = [
@@ -967,7 +954,7 @@ export async function getOverviewDataFiltered(
 
   const statusBreakdown: StatusBucket[] = (['settled', 'pending', 'awaiting_payment', 'ineligible'] as const).map((key) => ({
     key,
-    label: STATUS_BUCKET_LABELS[key],
+    label: CONTENT_OPS_STATUS_LABELS[key],
     count: statusCounts.get(key) ?? 0,
     percent: total > 0 ? Math.round(((statusCounts.get(key) ?? 0) / total) * 1000) / 10 : 0,
   }))
@@ -1008,6 +995,220 @@ export async function getOverviewDataFiltered(
     },
     error: null,
   }
+}
+
+// ─── Content list ─────────────────────────────────────────────────────────────
+
+export interface ContentSummaryRow {
+  contentId: string
+  totalOrders: number
+  settledOrders: number
+  productCount: number
+  totalCommission: number | null  // sum of total_commission_amount from facts — always fresh
+  firstOrderDate: string | null
+  lastOrderDate: string | null
+}
+
+export async function getContentList(): Promise<{
+  data: ContentSummaryRow[]
+  total: number
+  error: string | null
+}> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { data: [], total: 0, error: 'Unauthenticated' }
+
+  const { data, error } = await supabase
+    .from('content_order_facts')
+    .select('content_id,product_id,is_successful,total_commission_amount,order_date')
+    .eq('created_by', user.id)
+
+  if (error) return { data: [], total: 0, error: error.message }
+
+  const rows = data ?? []
+
+  type ContentAgg = {
+    totalOrders: number
+    settledOrders: number
+    products: Set<string>
+    totalCommission: number
+    hasCommission: boolean
+    firstOrderDate: string | null
+    lastOrderDate: string | null
+  }
+
+  const contentMap = new Map<string, ContentAgg>()
+
+  for (const r of rows) {
+    if (!r.content_id) continue
+    const agg = contentMap.get(r.content_id) ?? {
+      totalOrders: 0,
+      settledOrders: 0,
+      products: new Set<string>(),
+      totalCommission: 0,
+      hasCommission: false,
+      firstOrderDate: null,
+      lastOrderDate: null,
+    }
+    agg.totalOrders++
+    if (r.is_successful) agg.settledOrders++
+    if (r.product_id) agg.products.add(r.product_id)
+    if (r.total_commission_amount !== null && r.total_commission_amount !== undefined) {
+      agg.totalCommission += Number(r.total_commission_amount)
+      agg.hasCommission = true
+    }
+    const d = r.order_date ? String(r.order_date).slice(0, 10) : null
+    if (d) {
+      if (!agg.firstOrderDate || d < agg.firstOrderDate) agg.firstOrderDate = d
+      if (!agg.lastOrderDate || d > agg.lastOrderDate) agg.lastOrderDate = d
+    }
+    contentMap.set(r.content_id, agg)
+  }
+
+  const summary: ContentSummaryRow[] = [...contentMap.entries()]
+    .map(([contentId, agg]) => ({
+      contentId,
+      totalOrders: agg.totalOrders,
+      settledOrders: agg.settledOrders,
+      productCount: agg.products.size,
+      totalCommission: agg.hasCommission ? Math.round(agg.totalCommission * 100) / 100 : null,
+      firstOrderDate: agg.firstOrderDate,
+      lastOrderDate: agg.lastOrderDate,
+    }))
+    .sort((a, b) => b.totalOrders - a.totalOrders)
+
+  return { data: summary, total: summary.length, error: null }
+}
+
+// ─── Content detail ────────────────────────────────────────────────────────────
+
+export interface ContentDetailStats {
+  contentId: string
+  totalOrders: number
+  settledOrders: number
+  settledPercent: number
+  productCount: number
+  topProductName: string | null
+}
+
+export interface ContentProfitSummary {
+  commissionRealized: number
+  totalCost: number
+  profit: number
+  hasCostData: boolean
+}
+
+export interface ContentDetailProduct {
+  productId: string
+  productName: string | null
+  orderCount: number
+  href: string
+}
+
+export interface ContentDetail {
+  stats: ContentDetailStats
+  statusBreakdown: StatusBucket[]
+  topProducts: ContentDetailProduct[]
+  // null = profit refresh has not been run; rows present = at least one profit summary row exists
+  profitSummary: ContentProfitSummary | null
+  relatedOrders: RelatedOrderRow[]
+}
+
+export async function getContentDetail(
+  contentId: string
+): Promise<{ data: ContentDetail | null; error: string | null }> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { data: null, error: 'Unauthenticated' }
+
+  const [factsRes, profitRes] = await Promise.all([
+    supabase
+      .from('content_order_facts')
+      .select('order_id,sku_id,product_id,product_name,shop_name,order_settlement_status,is_successful')
+      .eq('created_by', user.id)
+      .eq('content_id', contentId),
+    supabase
+      .from('content_profit_attribution_summary')
+      .select('commission_realized,total_cost,profit')
+      .eq('created_by', user.id)
+      .eq('content_id', contentId),
+  ])
+
+  if (factsRes.error) return { data: null, error: factsRes.error.message }
+
+  const rows = factsRes.data ?? []
+  if (rows.length === 0) return { data: null, error: 'Content not found' }
+
+  // Aggregate facts
+  const productMap = new Map<string, { name: string | null; count: number }>()
+  const statusCounts = new Map<string, number>()
+  let settledOrders = 0
+
+  for (const r of rows) {
+    if (r.is_successful) settledOrders++
+    const bucket = mapStatusBucket(r.order_settlement_status ?? '')
+    statusCounts.set(bucket, (statusCounts.get(bucket) ?? 0) + 1)
+    if (r.product_id) {
+      const p = productMap.get(r.product_id) ?? { name: null, count: 0 }
+      p.count++
+      if (!p.name && r.product_name) p.name = r.product_name
+      productMap.set(r.product_id, p)
+    }
+  }
+
+  const total = rows.length
+  const topProductEntry = [...productMap.entries()].sort((a, b) => b[1].count - a[1].count)[0]
+
+  const stats: ContentDetailStats = {
+    contentId,
+    totalOrders: total,
+    settledOrders,
+    settledPercent: total > 0 ? Math.round((settledOrders / total) * 1000) / 10 : 0,
+    productCount: productMap.size,
+    topProductName: topProductEntry ? (topProductEntry[1].name ?? topProductEntry[0]) : null,
+  }
+
+  const statusBreakdown: StatusBucket[] = (['settled', 'pending', 'awaiting_payment', 'ineligible'] as const).map((key) => ({
+    key,
+    label: CONTENT_OPS_STATUS_LABELS[key],
+    count: statusCounts.get(key) ?? 0,
+    percent: total > 0 ? Math.round(((statusCounts.get(key) ?? 0) / total) * 1000) / 10 : 0,
+  }))
+
+  const topProducts: ContentDetailProduct[] = [...productMap.entries()]
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, 10)
+    .map(([productId, v]) => ({
+      productId,
+      productName: v.name,
+      orderCount: v.count,
+      href: `/content-ops/products/${encodeURIComponent(productId)}`,
+    }))
+
+  // Aggregate profit summary across all (content_id, product_id) rows for this content
+  const profitRows = profitRes.data ?? []
+  let profitSummary: ContentProfitSummary | null = null
+  if (profitRows.length > 0) {
+    const commissionRealized = profitRows.reduce((s, r) => s + (Number(r.commission_realized) || 0), 0)
+    const totalCost = profitRows.reduce((s, r) => s + (Number(r.total_cost) || 0), 0)
+    const profit = profitRows.reduce((s, r) => s + (Number(r.profit) || 0), 0)
+    profitSummary = {
+      commissionRealized: Math.round(commissionRealized * 100) / 100,
+      totalCost: Math.round(totalCost * 100) / 100,
+      profit: Math.round(profit * 100) / 100,
+      hasCostData: totalCost > 0,
+    }
+  }
+
+  const relatedOrders: RelatedOrderRow[] = rows.slice(0, 10).map((r) => ({
+    orderId: r.order_id,
+    skuId: r.sku_id ?? null,
+    shopName: r.shop_name ?? null,
+    status: r.order_settlement_status,
+    contentId,
+  }))
+
+  return { data: { stats, statusBreakdown, topProducts, profitSummary, relatedOrders }, error: null }
 }
 
 // ─── Trend types ───────────────────────────────────────────────────────────────

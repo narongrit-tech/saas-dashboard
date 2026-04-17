@@ -135,16 +135,32 @@ export default async function DataHealthPage() {
               <div key={metric.label}>
                 <p className="text-xs text-muted-foreground">{metric.label}</p>
                 <div className="flex items-baseline gap-1 mt-1">
-                  <p className={`text-2xl font-semibold tabular-nums ${metric.value >= 80 ? 'text-emerald-600' : metric.value >= 50 ? 'text-amber-600' : 'text-destructive'}`}>
-                    {metric.value}
+                  <p className={`text-2xl font-semibold tabular-nums ${
+                    metric.value === null
+                      ? 'text-muted-foreground'
+                      : metric.value >= 80
+                        ? 'text-emerald-600'
+                        : metric.value >= 50
+                          ? 'text-amber-600'
+                          : 'text-destructive'
+                  }`}>
+                    {metric.value === null ? '—' : metric.value}
                   </p>
                   <span className="text-sm text-muted-foreground">{metric.suffix}</span>
                 </div>
                 {/* Progress bar */}
                 <div className="h-1.5 bg-muted rounded-full mt-2">
                   <div
-                    className={`h-1.5 rounded-full ${metric.value >= 80 ? 'bg-emerald-500' : metric.value >= 50 ? 'bg-amber-400' : 'bg-red-400'}`}
-                    style={{ width: `${Math.min(metric.value, 100)}%` }}
+                    className={`h-1.5 rounded-full ${
+                      metric.value === null
+                        ? 'bg-muted-foreground/20'
+                        : metric.value >= 80
+                          ? 'bg-emerald-500'
+                          : metric.value >= 50
+                            ? 'bg-amber-400'
+                            : 'bg-red-400'
+                    }`}
+                    style={{ width: `${metric.value === null ? 0 : Math.min(metric.value, 100)}%` }}
                   />
                 </div>
               </div>

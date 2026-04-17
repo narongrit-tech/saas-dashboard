@@ -7,6 +7,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import { getAttribution } from '../actions'
+import { formatAttributionDiagnostics } from '../../attribution-query-utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,12 +32,35 @@ export default async function AttributionPage({
   const limit = 50
   const offset = (page - 1) * limit
 
-  const { data: rows, total, error } = await getAttribution(
+  const {
+    data: rows,
+    total,
+    totalKnown,
+    hasMore,
+    state,
+    notice,
+    error,
+    diagnostics,
+  } = await getAttribution(
     { contentId: searchParams.content_id, bucket: searchParams.bucket },
     limit,
     offset
   )
-  const totalPages = Math.ceil(total / limit)
+
+  function filterHref(overrides: Record<string, string | undefined>) {
+    const params = new URLSearchParams()
+    const merged = {
+      page: searchParams.page,
+      bucket: searchParams.bucket,
+      content_id: searchParams.content_id,
+      ...overrides,
+    }
+    for (const [key, value] of Object.entries(merged)) {
+      if (value) params.set(key, value)
+    }
+    const query = params.toString()
+    return query ? `?${query}` : '?'
+  }
 
   return (
     <div className="space-y-5 max-w-6xl">
@@ -51,9 +75,29 @@ export default async function AttributionPage({
 
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h1 className="text-xl font-semibold">Attribution Winners</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-semibold">Attribution Winners</h1>
+            <Badge variant="outline" className="text-xs">
+              {state === 'success'
+                ? 'Success'
+                : state === 'partial'
+                ? 'Limited'
+                : state === 'timed_out'
+                ? 'Timed Out'
+                : state === 'failed'
+                ? 'Failed'
+                : 'No Data'}
+            </Badge>
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            {totalKnown && total !== null
+              ? `${total.toLocaleString()} rows in scope`
+              : rows.length > 0
+              ? `${rows.length.toLocaleString()} rows loaded in stable mode`
+              : 'No rows loaded yet'}
+          </p>
           <p className="text-sm text-muted-foreground mt-0.5">
-            One row per (order_id, product_id) — last-touch winner. {total.toLocaleString()} rows.
+            One row per (order_id, product_id) — last-touch winner.{total !== null ? ` ${total.toLocaleString()} rows.` : ''}
           </p>
         </div>
         {/* Bucket filter */}
@@ -65,7 +109,7 @@ export default async function AttributionPage({
               size="sm"
               variant={(!searchParams.bucket && !b) || searchParams.bucket === b ? 'default' : 'outline'}
             >
-              <Link href={`?${b ? `bucket=${b}` : ''}${searchParams.content_id ? `&content_id=${searchParams.content_id}` : ''}`}>
+              <Link href={filterHref({ bucket: b || undefined, page: '1' })}>
                 {b || 'All'}
               </Link>
             </Button>
@@ -73,14 +117,24 @@ export default async function AttributionPage({
         </div>
       </div>
 
-      {error && (
-        <div className="flex items-center gap-2 text-sm text-destructive border border-destructive/30 rounded-md px-3 py-2">
-          <AlertCircle className="h-4 w-4 shrink-0" />
-          {error}
+      {notice && (
+        <div className="text-sm text-amber-700 border border-amber-300/60 bg-amber-50 rounded-md px-3 py-2">
+          <p>{notice}</p>
+          <p className="text-xs text-amber-700/80 mt-1">{formatAttributionDiagnostics(diagnostics)}</p>
         </div>
       )}
 
-      {rows.length === 0 && !error && (
+      {error && (
+        <div className="flex items-center gap-2 text-sm text-destructive border border-destructive/30 rounded-md px-3 py-2">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <div>
+            <p>{error}</p>
+            <p className="text-xs text-destructive/80 mt-1">{formatAttributionDiagnostics(diagnostics)}</p>
+          </div>
+        </div>
+      )}
+
+      {rows.length === 0 && state === 'no_data' && !error && (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12 text-center gap-3">
             <GitBranch className="h-8 w-8 text-muted-foreground" />
@@ -117,7 +171,7 @@ export default async function AttributionPage({
                     <TableRow key={`${row.order_id}-${row.product_id}-${i}`}>
                       <TableCell>
                         <Link
-                          href={`/content-ops/tiktok-affiliate/facts?content_id=${row.content_id}`}
+                          href={`/content-ops/content/${encodeURIComponent(row.content_id)}`}
                           className="text-sm font-mono hover:underline text-primary"
                         >
                           {row.content_id}
@@ -157,18 +211,22 @@ export default async function AttributionPage({
         </Card>
       )}
 
-      {totalPages > 1 && (
+      {(page > 1 || hasMore) && (
         <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">Page {page} of {totalPages}</span>
+          <span className="text-muted-foreground">
+            {totalKnown && total !== null
+              ? `Page ${page} · ${total.toLocaleString()} rows`
+              : `Page ${page} · exact total unavailable in stable mode`}
+          </span>
           <div className="flex gap-2">
             {page > 1 && (
               <Button asChild variant="outline" size="sm">
-                <Link href={`?page=${page - 1}${searchParams.bucket ? `&bucket=${searchParams.bucket}` : ''}`}>Previous</Link>
+                <Link href={filterHref({ page: String(page - 1) })}>Previous</Link>
               </Button>
             )}
-            {page < totalPages && (
+            {hasMore && (
               <Button asChild variant="outline" size="sm">
-                <Link href={`?page=${page + 1}${searchParams.bucket ? `&bucket=${searchParams.bucket}` : ''}`}>Next</Link>
+                <Link href={filterHref({ page: String(page + 1) })}>Next</Link>
               </Button>
             )}
           </div>

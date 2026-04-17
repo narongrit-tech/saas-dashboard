@@ -22,8 +22,10 @@ function fmt(n: number): string {
 }
 
 function today(): string {
-  const d = new Date()
-  return d.toISOString().slice(0, 10)
+  // Bangkok is UTC+7 — shift now to the correct local date before slicing
+  const now = new Date()
+  const bangkokDate = new Date(now.getTime() + 7 * 60 * 60 * 1000)
+  return bangkokDate.toISOString().slice(0, 10)
 }
 
 export default function CostsPage() {

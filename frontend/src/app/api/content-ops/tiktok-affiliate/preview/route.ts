@@ -1,20 +1,10 @@
-import crypto from 'node:crypto'
-import os from 'node:os'
-import path from 'node:path'
-import fs from 'node:fs/promises'
-
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { importTikTokAffiliateFile } from '@/lib/content-ops/tiktok-affiliate-orders'
+import { previewTikTokAffiliateFile } from '@/lib/content-ops/tiktok-affiliate-orders'
 
-export const maxDuration = 300
+export const maxDuration = 60
 
-function errorResponse(
-  status: number,
-  code: string,
-  message: string,
-  stage?: string
-) {
+function errorResponse(status: number, code: string, message: string, stage?: string) {
   return NextResponse.json(
     {
       ok: false,
@@ -29,9 +19,11 @@ function errorResponse(
 }
 
 export async function POST(request: NextRequest) {
-  // Verify authentication
   const supabase = createClient()
-  const { data: { user }, error: authError } = await supabase.auth.getUser()
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser()
 
   if (authError || !user) {
     return errorResponse(401, 'unauthenticated', 'Unauthenticated', 'auth')
@@ -59,26 +51,12 @@ export async function POST(request: NextRequest) {
     return errorResponse(400, 'file_too_large', 'File exceeds 50 MB limit', 'request_validation')
   }
 
-  // Write to temp file
-  const tmpId = crypto.randomUUID()
-  const tmpPath = path.join(os.tmpdir(), `tiktok-affiliate-${tmpId}.xlsx`)
-
   try {
     const buffer = Buffer.from(await file.arrayBuffer())
-    await fs.writeFile(tmpPath, buffer)
-
-    const result = await importTikTokAffiliateFile({
-      filePath: tmpPath,
-      createdBy: user.id,
-      originalFileName: file.name,
-      sheetName: sheetName ?? undefined,
-    })
-
-    return NextResponse.json({ ok: true, result })
+    const preview = await previewTikTokAffiliateFile(buffer, file.name, user.id, sheetName ?? undefined)
+    return NextResponse.json({ ok: true, preview })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return errorResponse(500, 'import_failed', message, 'import_pipeline')
-  } finally {
-    await fs.unlink(tmpPath).catch(() => undefined)
+    return errorResponse(500, 'preview_failed', message, 'preview_pipeline')
   }
 }

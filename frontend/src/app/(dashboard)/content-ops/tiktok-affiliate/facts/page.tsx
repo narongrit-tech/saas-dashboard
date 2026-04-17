@@ -7,14 +7,20 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import { getFacts } from '../actions'
+import {
+  CONTENT_OPS_STATUSES,
+  CONTENT_OPS_STATUS_LABELS,
+  getContentOpsStatusLabel,
+  normalizeContentOpsStatus,
+} from '../../status-utils'
 
 export const dynamic = 'force-dynamic'
 
 const STATUS_STYLE: Record<string, string> = {
-  Completed: 'text-emerald-700 bg-emerald-50 border-emerald-200',
-  Settled: 'text-emerald-700 bg-emerald-50 border-emerald-200',
-  Cancelled: 'text-red-700 bg-red-50 border-red-200',
-  Pending: 'text-blue-700 bg-blue-50 border-blue-200',
+  settled: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+  pending: 'text-blue-700 bg-blue-50 border-blue-200',
+  awaiting_payment: 'text-amber-700 bg-amber-50 border-amber-200',
+  ineligible: 'text-red-700 bg-red-50 border-red-200',
 }
 
 function fmt(n: number | null, decimals = 2): string {
@@ -30,11 +36,12 @@ export default async function FactsPage({
   const page = Math.max(1, parseInt(searchParams.page ?? '1', 10))
   const limit = 50
   const offset = (page - 1) * limit
+  const selectedStatus = normalizeContentOpsStatus(searchParams.status) ?? undefined
 
   const { data: rows, total, error } = await getFacts(
     {
       contentId: searchParams.content_id,
-      status: searchParams.status,
+      status: selectedStatus,
       batchId: searchParams.batch_id,
     },
     limit,
@@ -42,13 +49,11 @@ export default async function FactsPage({
   )
   const totalPages = Math.ceil(total / limit)
 
-  const statuses = ['Completed', 'Cancelled', 'Pending', 'Settled']
-
   function filterHref(overrides: Record<string, string | undefined>) {
     const params = new URLSearchParams()
     const merged = {
       content_id: searchParams.content_id,
-      status: searchParams.status,
+      status: selectedStatus,
       batch_id: searchParams.batch_id,
       ...overrides,
     }
@@ -97,15 +102,15 @@ export default async function FactsPage({
       {/* Status filter */}
       <div className="flex items-center gap-1.5 flex-wrap">
         <span className="text-xs text-muted-foreground">Status:</span>
-        {(['', ...statuses] as const).map((s) => (
+        {(['', ...CONTENT_OPS_STATUSES] as const).map((s) => (
           <Button
             key={s || 'all'}
             asChild
             size="sm"
-            variant={(!searchParams.status && !s) || searchParams.status === s ? 'default' : 'outline'}
+            variant={(!selectedStatus && !s) || selectedStatus === s ? 'default' : 'outline'}
           >
             <Link href={filterHref({ status: s || undefined, page: '1' })}>
-              {s || 'All'}
+              {s ? CONTENT_OPS_STATUS_LABELS[s] : 'All'}
             </Link>
           </Button>
         ))}
@@ -180,7 +185,7 @@ export default async function FactsPage({
                       <TableCell className="text-xs font-mono">{row.order_id}</TableCell>
                       <TableCell>
                         <span className={`text-xs px-2 py-0.5 rounded border font-medium ${STATUS_STYLE[row.order_settlement_status] ?? 'text-muted-foreground bg-muted border-border'}`}>
-                          {row.order_settlement_status}
+                          {getContentOpsStatusLabel(row.order_settlement_status)}
                         </span>
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">{row.attribution_type}</TableCell>

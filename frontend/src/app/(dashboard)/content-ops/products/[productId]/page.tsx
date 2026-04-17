@@ -119,11 +119,15 @@ export default async function ProductDetailPage({
             ) : (
               <div className="divide-y">
                 {topContentIds.map((c, i) => (
-                  <div key={i} className="flex items-center gap-3 px-4 py-2.5">
+                  <Link
+                    key={i}
+                    href={`/content-ops/content/${encodeURIComponent(c.label)}`}
+                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/40 transition-colors"
+                  >
                     <span className="text-xs text-muted-foreground w-4 shrink-0">{i + 1}</span>
-                    <p className="flex-1 text-xs font-mono text-muted-foreground truncate">{c.label}</p>
+                    <p className="flex-1 text-xs font-mono text-primary hover:underline truncate">{c.label}</p>
                     <p className="text-sm font-semibold tabular-nums shrink-0">{c.value.toLocaleString()}</p>
-                  </div>
+                  </Link>
                 ))}
               </div>
             )}
@@ -152,7 +156,7 @@ export default async function ProductDetailPage({
             {statusBreakdown.map((bucket) => (
               <Link
                 key={bucket.key}
-                href={`/content-ops/analysis/orders?product_id=${encodeURIComponent(productId)}&status=${encodeURIComponent(bucket.label)}`}
+                href={`/content-ops/analysis/orders?product_id=${encodeURIComponent(productId)}&status=${encodeURIComponent(bucket.key)}`}
                 className="rounded-md p-2 hover:bg-muted/50 transition-colors"
               >
                 <span className={`text-xs px-2 py-0.5 rounded border font-medium inline-block ${STATUS_STYLE[bucket.key] ?? ''}`}>

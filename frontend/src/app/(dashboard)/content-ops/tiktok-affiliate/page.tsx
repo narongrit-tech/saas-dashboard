@@ -16,6 +16,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { getPipelineStatus } from './actions'
+import { MasterRefreshButton } from './refresh-buttons'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,9 +31,9 @@ function StageCard({
   href: string
   icon: React.ElementType
   label: string
-  count: number
+  count: number | null
   subtitle: string
-  status: 'empty' | 'has-data' | 'warning'
+  status: 'empty' | 'has-data' | 'warning' | 'partial'
 }) {
   return (
     <Link href={href}>
@@ -45,10 +46,11 @@ function StageCard({
             </div>
             {status === 'empty' && <Badge variant="outline" className="text-xs text-muted-foreground">Empty</Badge>}
             {status === 'has-data' && <Badge variant="outline" className="text-xs text-emerald-600 border-emerald-300">Active</Badge>}
+            {status === 'partial' && <Badge variant="outline" className="text-xs text-amber-700 border-amber-300">Limited</Badge>}
             {status === 'warning' && <Badge variant="outline" className="text-xs text-amber-600 border-amber-300">Check</Badge>}
           </div>
           <div className="mt-2">
-            <p className="text-2xl font-semibold tabular-nums">{count.toLocaleString()}</p>
+            <p className="text-2xl font-semibold tabular-nums">{count === null ? '—' : count.toLocaleString()}</p>
             <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>
           </div>
         </CardContent>
@@ -83,6 +85,10 @@ export default async function TikTokAffiliateOverviewPage() {
     if (status.unallocatedCosts > 0) {
       blockers.push(`${status.unallocatedCosts} unallocated cost rows — cost_date may not match any order data`)
       nextActions.push({ label: 'View verification', href: '/content-ops/tiktok-affiliate/verification' })
+    }
+    if (status.attributionState === 'timed_out' || status.attributionState === 'failed') {
+      blockers.push(status.attributionMessage ?? 'Attribution query failed and counts are unavailable.')
+      nextActions.push({ label: 'Inspect attribution', href: '/content-ops/tiktok-affiliate/attribution' })
     }
   }
 
@@ -119,7 +125,7 @@ export default async function TikTokAffiliateOverviewPage() {
       )}
 
       {/* Quick actions */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-start gap-2">
         <Button asChild size="sm" variant="default">
           <Link href="/content-ops/tiktok-affiliate/upload">
             <Upload className="h-3.5 w-3.5 mr-1.5" />
@@ -134,6 +140,7 @@ export default async function TikTokAffiliateOverviewPage() {
             </Link>
           </Button>
         ))}
+        <MasterRefreshButton />
         <Button asChild size="sm" variant="outline">
           <Link href="/content-ops/tiktok-affiliate/verification">
             <FlaskConical className="h-3.5 w-3.5 mr-1.5" />
@@ -166,9 +173,19 @@ export default async function TikTokAffiliateOverviewPage() {
             href="/content-ops/tiktok-affiliate/attribution"
             icon={GitBranch}
             label="Attribution"
-            count={status?.attributionRows ?? 0}
-            subtitle="winner rows"
-            status={!status || status.attributionRows === 0 ? 'empty' : 'has-data'}
+            count={status?.attributionRows ?? null}
+            subtitle={status?.attributionMessage ?? 'winner rows'}
+            status={
+              !status
+                ? 'empty'
+                : status.attributionState === 'partial'
+                ? 'partial'
+                : status.attributionState === 'timed_out' || status.attributionState === 'failed'
+                  ? 'warning'
+                  : status.attributionState === 'no_data' || status.attributionRows === 0
+                    ? 'empty'
+                    : 'has-data'
+            }
           />
           <StageCard
             href="/content-ops/tiktok-affiliate/profit"

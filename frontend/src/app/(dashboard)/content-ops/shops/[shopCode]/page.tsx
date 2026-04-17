@@ -152,7 +152,7 @@ export default async function ShopDetailPage({
             {statusBreakdown.map((bucket) => (
               <Link
                 key={bucket.key}
-                href={`/content-ops/analysis/orders?shop_code=${encodeURIComponent(shopCode)}&status=${encodeURIComponent(bucket.label)}`}
+                href={`/content-ops/analysis/orders?shop_code=${encodeURIComponent(shopCode)}&status=${encodeURIComponent(bucket.key)}`}
                 className="rounded-md p-2 hover:bg-muted/50 transition-colors"
               >
                 <span className={`text-xs px-2 py-0.5 rounded border font-medium inline-block ${STATUS_STYLE[bucket.key] ?? ''}`}>

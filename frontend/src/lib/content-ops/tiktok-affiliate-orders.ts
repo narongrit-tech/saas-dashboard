@@ -119,6 +119,7 @@ export interface TikTokAffiliateParsedWorkbook {
 export interface ImportTikTokAffiliateFileOptions {
   filePath: string
   createdBy: string
+  originalFileName?: string
   sheetName?: string
 }
 
@@ -129,6 +130,7 @@ export interface ImportTikTokAffiliateFileResult {
   headerRowNumber: number
   rawRowCount: number
   stagedRowCount: number
+  preWriteRejectedRowCount: number
   validCandidateRowCount: number
   winnerRowCount: number
   missingKeyRowCount: number
@@ -160,6 +162,17 @@ export interface TikTokAffiliateImportRejectionDetails {
   invalidValueFieldCounts: Record<string, number>
   invalidValueSampleRows: TikTokAffiliateRejectedRowSample[]
   duplicateNonWinnerSampleRows: TikTokAffiliateDuplicateRowSample[]
+}
+
+export interface TikTokAffiliatePreviewResult {
+  fileName: string
+  sheetName: string
+  rowCount: number
+  validRowCount: number
+  preWriteRejectedRowCount: number
+  missingCriticalFieldCounts: Record<string, number>
+  isDuplicateFile: boolean
+  existingBatchId: string | null
 }
 
 const HEADER_ALIASES: Record<ObservedHeader, ParsedRowTextField> = {
@@ -210,14 +223,61 @@ const HEADER_ALIASES: Record<ObservedHeader, ParsedRowTextField> = {
   'Commission settlement date': 'commissionSettlementDateText',
 }
 
+export async function previewTikTokAffiliateFile(
+  fileBuffer: Buffer,
+  fileName: string,
+  createdBy: string,
+  sheetName?: string
+): Promise<TikTokAffiliatePreviewResult> {
+  const supabase = createServiceClient()
+  const sourceFileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex')
+  const parsed = parseTikTokAffiliateWorkbook(fileBuffer, fileName, sheetName)
+
+  const { data: existing } = await supabase
+    .from('tiktok_affiliate_import_batches')
+    .select('id')
+    .eq('created_by', createdBy)
+    .eq('source_file_hash', sourceFileHash)
+    .limit(1)
+    .maybeSingle()
+
+  const missingCounts: Record<string, number> = {}
+  let preWriteRejectedRowCount = 0
+
+  for (const row of parsed.rows) {
+    const failed = getCriticalFieldFailures(row)
+    if (failed.length > 0) {
+      preWriteRejectedRowCount++
+      for (const field of failed) {
+        missingCounts[field] = (missingCounts[field] ?? 0) + 1
+      }
+    }
+  }
+
+  return {
+    fileName: parsed.fileName,
+    sheetName: parsed.sheetName,
+    rowCount: parsed.rowCount,
+    validRowCount: parsed.rowCount - preWriteRejectedRowCount,
+    preWriteRejectedRowCount,
+    missingCriticalFieldCounts: missingCounts,
+    isDuplicateFile: Boolean(existing),
+    existingBatchId: existing?.id ?? null,
+  }
+}
+
 export async function importTikTokAffiliateFile(
   options: ImportTikTokAffiliateFileOptions
 ): Promise<ImportTikTokAffiliateFileResult> {
   const supabase = createServiceClient()
   const fileBuffer = await fs.readFile(options.filePath)
-  const fileName = path.basename(options.filePath)
+  const fileName = options.originalFileName?.trim() || path.basename(options.filePath)
   const sourceFileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex')
   const parsedWorkbook = parseTikTokAffiliateWorkbook(fileBuffer, fileName, options.sheetName)
+
+  // Pre-write validation: reject rows missing critical keys before staging
+  const validRows = parsedWorkbook.rows.filter((row) => getCriticalFieldFailures(row).length === 0)
+  const preWriteRejectedRowCount = parsedWorkbook.rowCount - validRows.length
 
   const { data: batch, error: batchError } = await supabase
     .from('tiktok_affiliate_import_batches')
@@ -245,7 +305,7 @@ export async function importTikTokAffiliateFile(
   }
 
   try {
-    const stagingRows = parsedWorkbook.rows.map((row) => ({
+    const stagingRows = validRows.map((row) => ({
       created_by: options.createdBy,
       import_batch_id: batch.id,
       source_file_name: parsedWorkbook.fileName,
@@ -306,7 +366,7 @@ export async function importTikTokAffiliateFile(
       .from('tiktok_affiliate_import_batches')
       .update({
         status: 'staged',
-        staged_row_count: stagingRows.length,
+        staged_row_count: validRows.length,
       })
       .eq('id', batch.id)
 
@@ -342,6 +402,7 @@ export async function importTikTokAffiliateFile(
       headerRowNumber: parsedWorkbook.headerRowNumber,
       rawRowCount: batchSummary.raw_row_count,
       stagedRowCount: batchSummary.staged_row_count,
+      preWriteRejectedRowCount,
       validCandidateRowCount: normalizationSummary?.valid_candidate_row_count ?? 0,
       winnerRowCount: normalizationSummary?.winner_row_count ?? 0,
       missingKeyRowCount: normalizationSummary?.missing_key_row_count ?? 0,
@@ -560,6 +621,16 @@ function isBlankParsedRow(row: TikTokAffiliateParsedRow): boolean {
     const fieldName = HEADER_ALIASES[header]
     return row[fieldName].trim() === ''
   })
+}
+
+// Returns the names of critical DB key fields that are missing in this row.
+// Used for pre-write validation before staging insertion.
+function getCriticalFieldFailures(row: TikTokAffiliateParsedRow): string[] {
+  const failed: string[] = []
+  if (!row.orderId.trim()) failed.push('order_id')
+  if (!row.contentId.trim()) failed.push('content_id')
+  if (!row.productId.trim()) failed.push('product_id')
+  return failed
 }
 
 function extractRejectionDetails(metadata: unknown): TikTokAffiliateImportRejectionDetails {

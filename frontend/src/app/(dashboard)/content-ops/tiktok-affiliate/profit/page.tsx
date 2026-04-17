@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, BarChart3, RefreshCw, AlertCircle, TrendingUp, TrendingDown, Minus } from 'lucide-react'
+import { ArrowLeft, BarChart3, RefreshCw, AlertCircle, TrendingUp, TrendingDown, Minus, Info } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -77,6 +77,9 @@ export default function ProfitPage() {
     { gmv_realized: 0, commission_realized: 0, total_cost: 0, profit: 0, total_orders: 0 }
   )
 
+  // True when summary rows exist but no costs have been entered — profit = commission only
+  const noCostData = rows.length > 0 && totals.total_cost === 0
+
   return (
     <div className="space-y-5 max-w-6xl">
       <div className="flex items-center gap-3">
@@ -148,6 +151,22 @@ export default function ProfitPage() {
         </div>
       )}
 
+      {/* No-cost-data banner — shown when summary exists but all costs are zero */}
+      {noCostData && (
+        <div className="flex items-start gap-2 text-sm border border-amber-300/60 bg-amber-50/50 dark:bg-amber-950/20 rounded-md px-3 py-2.5">
+          <Info className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+          <div className="space-y-0.5">
+            <p className="font-medium text-amber-900 dark:text-amber-200">No cost data — profit equals commission only</p>
+            <p className="text-xs text-amber-800 dark:text-amber-300">
+              All rows show total_cost = 0. Add costs and run a refresh to compute real profit.{' '}
+              <Link href="/content-ops/tiktok-affiliate/costs" className="underline hover:text-amber-900">
+                Add costs →
+              </Link>
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* KPI strip */}
       {rows.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -180,8 +199,12 @@ export default function ProfitPage() {
           <CardContent className="flex flex-col items-center justify-center py-12 text-center gap-3">
             <BarChart3 className="h-8 w-8 text-muted-foreground" />
             <p className="text-sm font-medium">No profit data</p>
-            <p className="text-xs text-muted-foreground">
-              Run a refresh to compute profit from attribution and costs. Make sure facts are loaded first.
+            <p className="text-xs text-muted-foreground max-w-sm">
+              To get meaningful profit: (1){' '}
+              <Link href="/content-ops/tiktok-affiliate/costs" className="underline hover:text-foreground">
+                add costs
+              </Link>
+              , (2) run refresh. Without cost data, profit will equal commission only.
             </p>
             <Button size="sm" className="mt-2" onClick={handleRefresh} disabled={isPending}>
               <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isPending ? 'animate-spin' : ''}`} />

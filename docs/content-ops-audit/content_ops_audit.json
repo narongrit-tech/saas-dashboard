@@ -1,0 +1,118 @@
+{
+  "current_state": {
+    "done_for_real": [
+      "TikTok affiliate upload API exists and imports real .xlsx files into module-local pipeline tables.",
+      "Raw staging and normalized facts are real and populated: tiktok_affiliate_import_batches=24, tiktok_affiliate_order_raw_staging=228171, content_order_facts=107988.",
+      "Attribution SQL exists at the locked business grain and uses TikTok last-touch selection in content_order_attribution.",
+      "Product/shop master tables exist and are populated: tt_product_master=401, tt_shop_master=279.",
+      "Cost input UI and isolated cost/profit schema exist.",
+      "Content library page loads real file-backed TikTok Studio registry data when the local registry is present."
+    ],
+    "visible_but_not_usable": [
+      "Attribution pages exist but the broad query pattern times out on current real data volume.",
+      "Verification page exists but relies on the same unstable attribution surface for part of its checks.",
+      "Content library is visible but still contains placeholder actions and unassigned workflow states.",
+      "Profit page exists but live cost/allocation data is empty, so output is not business-usable."
+    ],
+    "partial_or_misleading": [
+      "Upload UI claims idempotent re-upload behavior, but duplicate file hashes already exist across import batches.",
+      "Status filtering is broken because UI sends title-cased labels while DB stores lowercase normalized statuses.",
+      "Facts page still exposes legacy statuses Completed and Cancelled even though live facts only use settled, pending, awaiting_payment, and ineligible.",
+      "Data Health coverage metrics assume 100 percent when data exists and can misreport attribution availability.",
+      "Product/shop master tables exist in DB but runtime pages still aggregate directly from content_order_facts.",
+      "Several in-repo Content Ops docs still claim migration 102 is pending even though the tables now exist."
+    ],
+    "not_implemented": [
+      "A real end-to-end operator flow of Upload Sales -> Map Product -> Link Video -> Add Cost -> See Profit.",
+      "A DB-backed video/content entity layer linked to sales, costs, and profit.",
+      "Preview-before-import for the Content Ops upload path.",
+      "Reject-bad-rows-before-write behavior for Content Ops imports.",
+      "Trustworthy live profit reporting with populated costs and allocations.",
+      "Retirement or isolation of the old order_attribution-based affiliate flow outside Content Ops."
+    ]
+  },
+  "routes": [
+    "/content-ops",
+    "/content-ops/analysis/orders",
+    "/content-ops/analysis/attribution",
+    "/content-ops/data-health",
+    "/content-ops/library",
+    "/content-ops/products",
+    "/content-ops/products/[productId]",
+    "/content-ops/shops",
+    "/content-ops/shops/[shopCode]",
+    "/content-ops/tiktok-affiliate",
+    "/content-ops/tiktok-affiliate/upload",
+    "/content-ops/tiktok-affiliate/batches",
+    "/content-ops/tiktok-affiliate/facts",
+    "/content-ops/tiktok-affiliate/attribution",
+    "/content-ops/tiktok-affiliate/costs",
+    "/content-ops/tiktok-affiliate/profit",
+    "/content-ops/tiktok-affiliate/verification"
+  ],
+  "components": [
+    "frontend/src/components/content-ops/date-range-filter.tsx",
+    "frontend/src/components/content-ops/entity-avatar.tsx",
+    "frontend/src/components/content-ops/full-table.tsx",
+    "frontend/src/components/content-ops/sparkline.tsx"
+  ],
+  "data_sources": [
+    "tiktok_affiliate_import_batches",
+    "tiktok_affiliate_order_raw_staging",
+    "content_order_facts",
+    "content_order_attribution_candidates",
+    "content_order_attribution",
+    "tt_content_costs",
+    "tt_content_cost_allocations",
+    "content_profit_attribution_summary",
+    "tt_product_master",
+    "tt_shop_master",
+    "frontend/src/lib/content-ops/tiktok-studio-import.ts",
+    "frontend/src/lib/content-ops/sample-data/tiktok-studio/**"
+  ],
+  "blocked_by": {
+    "architecture": [
+      "Legacy order_attribution-based affiliate flow still coexists with the new content_order_attribution pipeline.",
+      "Runtime product/shop pages ignore persistent tt_product_master and tt_shop_master tables.",
+      "Video/content layer is still a separate file-backed viewer instead of a linked module entity layer."
+    ],
+    "data": [
+      "content_order_attribution query pattern times out on real data volume.",
+      "Profit is not trustworthy because tt_content_costs and tt_content_cost_allocations are empty and summary data appears stale/manual.",
+      "In-repo docs are stale about migration 102 and no longer match the live DB."
+    ],
+    "flow": [
+      "Status filters are broken across overview, orders, facts, product detail, and shop detail flows.",
+      "Content Ops import path lacks preview-before-import and validate-before-write behavior.",
+      "Duplicate file handling is weaker than the upload UI claims."
+    ],
+    "ui": [
+      "Main operator console still preserves the dev-centric Facts -> Attribution -> Profit mental model.",
+      "Data Health presents confidence-sounding metrics that are not real coverage metrics.",
+      "Cost page copy does not match actual commission-first allocation logic."
+    ]
+  },
+  "target_gap": {
+    "video": "A file-backed Content Library exists, but it is not a DB-backed video/content system and is not linked into the sales-cost-profit operator flow.",
+    "product_shop": "Product and shop pages exist and product/shop master tables exist, but runtime pages still read from content_order_facts instead of the persistent master layer.",
+    "sales_import": "The technical import pipeline is real and populated, but it lacks preview-before-import, validate-before-write behavior, and truthful duplicate handling.",
+    "cost": "The cost table and UI exist, but no live costs are present and the operator guidance is slightly inconsistent with the DB allocation rules.",
+    "profit": "The profit schema and page exist, but live allocations are empty and the current summary output is not trustworthy for business use."
+  },
+  "immediate_next_step": {
+    "goal": "Stabilize the Sales Import -> Facts -> Attribution truth path before any UX rebuild.",
+    "why": "This is the narrowest change that most improves trustworthiness: it fixes broken status filters, stops treating attribution query failure as zero rows, and removes misleading import messaging without broad refactor.",
+    "files_to_touch_first": [
+      "frontend/src/app/(dashboard)/content-ops/actions.ts",
+      "frontend/src/app/(dashboard)/content-ops/page.tsx",
+      "frontend/src/app/(dashboard)/content-ops/analysis/orders/page.tsx",
+      "frontend/src/app/(dashboard)/content-ops/products/[productId]/page.tsx",
+      "frontend/src/app/(dashboard)/content-ops/shops/[shopCode]/page.tsx",
+      "frontend/src/app/(dashboard)/content-ops/tiktok-affiliate/actions.ts",
+      "frontend/src/app/(dashboard)/content-ops/tiktok-affiliate/facts/page.tsx",
+      "frontend/src/app/(dashboard)/content-ops/tiktok-affiliate/upload/page.tsx",
+      "frontend/src/app/api/content-ops/tiktok-affiliate/upload/route.ts",
+      "frontend/src/lib/content-ops/tiktok-affiliate-orders.ts"
+    ]
+  }
+}

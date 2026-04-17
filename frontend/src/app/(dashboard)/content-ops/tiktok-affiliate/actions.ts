@@ -3,6 +3,16 @@
 import { createClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { revalidatePath } from 'next/cache'
+import {
+  type AttributionDiagnostics,
+  type AttributionSurfaceState,
+  buildAttributionLimitedMessage,
+  createAttributionDiagnostics,
+  getAttributionSurfaceState,
+  getAttributionQueryMeta,
+  logAttributionDiagnostics,
+} from '../attribution-query-utils'
+import { normalizeContentOpsStatus } from '../status-utils'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -105,7 +115,10 @@ export interface PipelineStatus {
   batches: number
   stagingRows: number
   factRows: number
-  attributionRows: number
+  attributionRows: number | null
+  attributionState: AttributionSurfaceState
+  attributionMessage: string | null
+  attributionDiagnostics: AttributionDiagnostics | null
   costs: number
   costAllocations: number
   profitSummaryRows: number
@@ -144,17 +157,61 @@ export async function getPipelineStatus(): Promise<{ data: PipelineStatus | null
     .eq('allocation_status', 'unallocated')
 
   // attribution is a view — count via facts as proxy
-  const attribution = await supabase
-    .from('content_order_attribution')
-    .select('order_id', { count: 'exact', head: true })
-    .eq('created_by', user.id)
+  let attributionState: AttributionSurfaceState = facts.count ? 'partial' : 'no_data'
+  let attributionMessage = facts.count
+    ? 'Partial: attribution probe has not run yet.'
+    : 'No normalized facts available for attribution.'
+  let attributionRows: number | null = facts.count ? null : 0
+  let attributionDiagnostics: AttributionDiagnostics | null = null
+
+  if ((facts.count ?? 0) > 0) {
+    const attributionProbeStartedAt = Date.now()
+    const attributionProbe = await supabase
+      .from('content_order_attribution')
+      .select('order_id')
+      .eq('created_by', user.id)
+      .limit(1)
+
+    const attributionProbeDurationMs = Date.now() - attributionProbeStartedAt
+    const attributionQuery = getAttributionQueryMeta(
+      attributionProbe.error,
+      attributionProbe.data?.length ?? 0,
+      'Attribution'
+    )
+
+    attributionDiagnostics = createAttributionDiagnostics({
+      queryPath: 'stable_probe',
+      durationMs: attributionProbeDurationMs,
+      degraded: true,
+      timedOut: attributionQuery.state === 'timed_out',
+      totalMode: 'skipped',
+      summaryMode: 'probe',
+    })
+    attributionState = getAttributionSurfaceState(
+      attributionQuery,
+      attributionProbe.data?.length ?? 0,
+      true
+    )
+    attributionRows = attributionState === 'no_data' ? 0 : null
+    attributionMessage =
+      attributionState === 'partial'
+        ? `${buildAttributionLimitedMessage('Attribution', { probeOnly: true })} ${attributionDiagnostics.queryPath} completed in ${attributionDiagnostics.durationMs} ms.`
+        : attributionState === 'no_data'
+        ? 'No attribution rows found.'
+        : `${attributionQuery.message ?? 'Attribution query failed.'} ${attributionDiagnostics.queryPath} completed in ${attributionDiagnostics.durationMs} ms.`
+
+    logAttributionDiagnostics('tiktok_affiliate_pipeline_probe', attributionState, attributionDiagnostics, attributionMessage)
+  }
 
   return {
     data: {
       batches: batches.count ?? 0,
       stagingRows: staging.count ?? 0,
       factRows: facts.count ?? 0,
-      attributionRows: attribution.count ?? 0,
+      attributionRows,
+      attributionState,
+      attributionMessage,
+      attributionDiagnostics,
       costs: costs.count ?? 0,
       costAllocations: allocations.count ?? 0,
       profitSummaryRows: profit.count ?? 0,
@@ -199,7 +256,13 @@ export async function getFacts(
     .eq('created_by', user.id)
 
   if (filters.contentId) query = query.eq('content_id', filters.contentId)
-  if (filters.status) query = query.eq('order_settlement_status', filters.status)
+  if (filters.status) {
+    const normalizedStatus = normalizeContentOpsStatus(filters.status)
+    if (!normalizedStatus) {
+      return { data: [], total: 0, error: `Unsupported status filter: ${filters.status}` }
+    }
+    query = query.eq('order_settlement_status', normalizedStatus)
+  }
   if (filters.batchId) query = query.eq('import_batch_id', filters.batchId)
 
   const { data, count, error } = await query
@@ -232,25 +295,107 @@ export async function getAttribution(
   filters: { contentId?: string; bucket?: string } = {},
   limit = 50,
   offset = 0
-): Promise<{ data: AttributionRow[]; total: number; error: string | null }> {
+): Promise<{
+  data: AttributionRow[]
+  total: number | null
+  totalKnown: boolean
+  hasMore: boolean
+  state: AttributionSurfaceState
+  notice: string | null
+  error: string | null
+  diagnostics: AttributionDiagnostics
+}> {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { data: [], total: 0, error: 'Unauthenticated' }
+  if (!user) {
+    return {
+      data: [],
+      total: null,
+      totalKnown: false,
+      hasMore: false,
+      state: 'failed',
+      notice: null,
+      error: 'Unauthenticated',
+      diagnostics: createAttributionDiagnostics({
+        queryPath: 'tiktok_affiliate_attribution_unauthenticated',
+        durationMs: 0,
+        degraded: false,
+        timedOut: false,
+        totalMode: 'skipped',
+        summaryMode: 'skipped',
+      }),
+    }
+  }
 
+  const startedAt = Date.now()
   let query = supabase
     .from('content_order_attribution')
-    .select('created_by,order_id,product_id,content_id,content_type,product_name,currency,order_date,normalized_status,business_bucket,is_realized,is_open,is_lost,gmv,commission,actual_commission_total,source_fact_count,content_candidate_count', { count: 'exact' })
+    .select('created_by,order_id,product_id,content_id,content_type,product_name,currency,order_date,normalized_status,business_bucket,is_realized,is_open,is_lost,gmv,commission,actual_commission_total,source_fact_count,content_candidate_count')
     .eq('created_by', user.id)
 
   if (filters.contentId) query = query.eq('content_id', filters.contentId)
   if (filters.bucket) query = query.eq('business_bucket', filters.bucket)
 
-  const { data, count, error } = await query
+  const { data, error } = await query
     .order('order_date', { ascending: false })
-    .range(offset, offset + limit - 1)
+    .range(offset, offset + limit)
 
-  if (error) return { data: [], total: 0, error: error.message }
-  return { data: (data ?? []) as AttributionRow[], total: count ?? 0, error: null }
+  const durationMs = Date.now() - startedAt
+
+  if (error) {
+    const attributionQuery = getAttributionQueryMeta(error, null, 'Attribution')
+    const diagnostics = createAttributionDiagnostics({
+      queryPath: 'stable_page_slice',
+      durationMs,
+      degraded: false,
+      timedOut: attributionQuery.state === 'timed_out',
+      totalMode: 'skipped',
+      summaryMode: 'skipped',
+    })
+    const state = getAttributionSurfaceState(attributionQuery, 0, false)
+    logAttributionDiagnostics('tiktok_affiliate_attribution_rows', state, diagnostics, attributionQuery.message)
+    return {
+      data: [],
+      total: null,
+      totalKnown: false,
+      hasMore: false,
+      state,
+      notice: null,
+      error: attributionQuery.message,
+      diagnostics,
+    }
+  }
+  const rawRows = (data ?? []) as AttributionRow[]
+  const hasMore = rawRows.length > limit
+  const rows = rawRows.slice(0, limit)
+  const totalKnown = !hasMore && (offset === 0 || rows.length > 0)
+  const total = totalKnown ? offset + rows.length : null
+  const queryMeta = getAttributionQueryMeta(null, rows.length, 'Attribution')
+  const diagnostics = createAttributionDiagnostics({
+    queryPath: 'stable_page_slice',
+    durationMs,
+    degraded: hasMore,
+    timedOut: false,
+    totalMode: totalKnown ? 'derived_last_page' : 'skipped',
+    summaryMode: 'skipped',
+  })
+  const state = getAttributionSurfaceState(queryMeta, rows.length, diagnostics.degraded)
+  const notice = state === 'partial'
+    ? buildAttributionLimitedMessage('Attribution', { exactTotals: totalKnown })
+    : null
+
+  logAttributionDiagnostics('tiktok_affiliate_attribution_rows', state, diagnostics, notice)
+
+  return {
+    data: rows,
+    total,
+    totalKnown,
+    hasMore,
+    state,
+    notice,
+    error: null,
+    diagnostics,
+  }
 }
 
 // ─── Costs ───────────────────────────────────────────────────────────────────
@@ -508,17 +653,22 @@ export async function runVerification(): Promise<VerificationResult[]> {
   }
 
   // Check 7: Facts → attribution row count agreement
+  // Uses a bounded probe (limit 1) on content_order_attribution instead of count:exact
+  // to avoid query timeouts on large fact volumes.
   await check(
     'Facts vs attribution coverage',
     'content_order_attribution has rows when content_order_facts has rows',
     async () => {
-      const [factsRes, attrRes] = await Promise.all([
+      const [factsRes, attrProbe] = await Promise.all([
         supabase.from('content_order_facts').select('id', { count: 'exact', head: true }).eq('created_by', uid),
-        supabase.from('content_order_attribution').select('order_id', { count: 'exact', head: true }).eq('created_by', uid),
+        supabase.from('content_order_attribution').select('order_id').eq('created_by', uid).limit(1),
       ])
+      if (attrProbe.error) {
+        return { data: [], error: attrProbe.error }
+      }
       const factsCount = factsRes.count ?? 0
-      const attrCount = attrRes.count ?? 0
-      if (factsCount > 0 && attrCount === 0) {
+      const attrHasRows = (attrProbe.data?.length ?? 0) > 0
+      if (factsCount > 0 && !attrHasRows) {
         return { data: [{ issue: `${factsCount} facts exist but 0 attribution rows found` }], error: null }
       }
       return { data: [], error: null }
@@ -564,7 +714,7 @@ export interface ProductSummary {
   total_order_items: number
   settled_order_items: number
   total_gmv: number | null
-  total_earned: number | null
+  total_commission: number | null  // sum of total_earned_amount from facts at last refresh
   currency: string | null
   first_seen_at: string | null
   last_seen_at: string | null
@@ -577,8 +727,10 @@ export interface ShopSummary {
   total_order_items: number
   settled_order_items: number
   total_gmv: number | null
-  total_earned: number | null
+  total_commission: number | null  // sum of total_earned_amount from facts at last refresh
   currency: string | null
+  first_seen_at: string | null
+  last_seen_at: string | null
 }
 
 export async function getProductMaster(
@@ -589,98 +741,102 @@ export async function getProductMaster(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { data: [], total: 0, error: 'Unauthenticated' }
 
-  const { data, error } = await supabase
-    .from('content_order_facts')
-    .select('product_id,product_name,shop_code,shop_name,gmv,total_earned_amount,currency,order_date,is_successful')
+  // Reads from tt_product_master — the persistent product registry.
+  // Populated and updated by refresh_tt_product_shop_master(). May be stale
+  // if a new import batch has not yet triggered a refresh.
+  const { data, count, error } = await supabase
+    .from('tt_product_master')
+    .select(
+      'product_id,product_name,shop_code,shop_name,total_order_items,settled_order_items,total_gmv,total_commission,currency,first_seen_at,last_seen_at',
+      { count: 'exact' }
+    )
     .eq('created_by', user.id)
-    .not('product_id', 'in', '("PROD-001")')
+    .order('total_order_items', { ascending: false })
+    .range(offset, offset + limit - 1)
 
   if (error) return { data: [], total: 0, error: error.message }
 
-  const rows = data ?? []
-  const productMap = new Map<string, ProductSummary>()
+  const rows: ProductSummary[] = (data ?? []).map((r) => ({
+    product_id: r.product_id,
+    product_name: r.product_name ?? null,
+    shop_code: r.shop_code ?? null,
+    shop_name: r.shop_name ?? null,
+    total_order_items: r.total_order_items ?? 0,
+    settled_order_items: r.settled_order_items ?? 0,
+    total_gmv: r.total_gmv ?? null,
+    total_commission: r.total_commission ?? null,
+    currency: r.currency ?? null,
+    first_seen_at: r.first_seen_at ?? null,
+    last_seen_at: r.last_seen_at ?? null,
+  }))
 
-  for (const r of rows) {
-    if (!r.product_id) continue
-    const existing = productMap.get(r.product_id)
-    if (!existing) {
-      productMap.set(r.product_id, {
-        product_id: r.product_id,
-        product_name: r.product_name ?? null,
-        shop_code: r.shop_code ?? null,
-        shop_name: r.shop_name ?? null,
-        total_order_items: 1,
-        settled_order_items: r.is_successful ? 1 : 0,
-        total_gmv: r.gmv ?? null,
-        total_earned: r.total_earned_amount ?? null,
-        currency: r.currency ?? null,
-        first_seen_at: r.order_date ?? null,
-        last_seen_at: r.order_date ?? null,
-      })
-    } else {
-      existing.total_order_items += 1
-      if (r.is_successful) existing.settled_order_items += 1
-      if (r.gmv) existing.total_gmv = (existing.total_gmv ?? 0) + r.gmv
-      if (r.total_earned_amount) existing.total_earned = (existing.total_earned ?? 0) + r.total_earned_amount
-      if (r.order_date) {
-        if (!existing.first_seen_at || r.order_date < existing.first_seen_at) existing.first_seen_at = r.order_date
-        if (!existing.last_seen_at || r.order_date > existing.last_seen_at) existing.last_seen_at = r.order_date
-      }
-      if (!existing.product_name && r.product_name) existing.product_name = r.product_name
-      if (!existing.shop_code && r.shop_code) existing.shop_code = r.shop_code
-      if (!existing.shop_name && r.shop_name) existing.shop_name = r.shop_name
-    }
-  }
-
-  const allProducts = [...productMap.values()].sort((a, b) => (b.total_gmv ?? 0) - (a.total_gmv ?? 0))
-  const paged = allProducts.slice(offset, offset + limit)
-
-  return { data: paged, total: allProducts.length, error: null }
+  return { data: rows, total: count ?? 0, error: null }
 }
 
-export async function getShopMaster(): Promise<{ data: ShopSummary[]; error: string | null }> {
+export async function getShopMaster(
+  limit = 500,
+  offset = 0
+): Promise<{ data: ShopSummary[]; error: string | null }> {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { data: [], error: 'Unauthenticated' }
 
+  // Reads from tt_shop_master — the persistent shop registry.
+  // Populated and updated by refresh_tt_product_shop_master(). May be stale
+  // if a new import batch has not yet triggered a refresh.
   const { data, error } = await supabase
-    .from('content_order_facts')
-    .select('shop_code,shop_name,product_id,gmv,total_earned_amount,currency,is_successful')
+    .from('tt_shop_master')
+    .select(
+      'shop_code,shop_name,total_products,total_order_items,settled_order_items,total_gmv,total_commission,currency,first_seen_at,last_seen_at'
+    )
     .eq('created_by', user.id)
-    .not('shop_code', 'in', '("SHOP-001")')
+    .order('total_order_items', { ascending: false })
+    .range(offset, offset + limit - 1)
 
   if (error) return { data: [], error: error.message }
 
-  const rows = data ?? []
-  const shopMap = new Map<string, { shop_name: string | null; products: Set<string>; items: number; settled: number; gmv: number; earned: number; currency: string | null }>()
+  const rows: ShopSummary[] = (data ?? []).map((r) => ({
+    shop_code: r.shop_code,
+    shop_name: r.shop_name ?? null,
+    total_products: r.total_products ?? 0,
+    total_order_items: r.total_order_items ?? 0,
+    settled_order_items: r.settled_order_items ?? 0,
+    total_gmv: r.total_gmv ?? null,
+    total_commission: r.total_commission ?? null,
+    currency: r.currency ?? null,
+    first_seen_at: r.first_seen_at ?? null,
+    last_seen_at: r.last_seen_at ?? null,
+  }))
 
-  for (const r of rows) {
-    if (!r.shop_code) continue
-    const existing = shopMap.get(r.shop_code)
-    if (!existing) {
-      shopMap.set(r.shop_code, { shop_name: r.shop_name ?? null, products: new Set([r.product_id ?? '']), items: 1, settled: r.is_successful ? 1 : 0, gmv: r.gmv ?? 0, earned: r.total_earned_amount ?? 0, currency: r.currency ?? null })
-    } else {
-      if (r.product_id) existing.products.add(r.product_id)
-      existing.items += 1
-      if (r.is_successful) existing.settled += 1
-      existing.gmv += r.gmv ?? 0
-      existing.earned += r.total_earned_amount ?? 0
-      if (!existing.shop_name && r.shop_name) existing.shop_name = r.shop_name
-    }
+  return { data: rows, error: null }
+}
+
+// ─── Master Refresh ──────────────────────────────────────────────────────────
+
+export async function runMasterRefresh(): Promise<{
+  success: boolean
+  result: { products_upserted: number; shops_upserted: number } | null
+  error: string | null
+}> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { success: false, result: null, error: 'Unauthenticated' }
+
+  // Calls the DB function that rebuilds tt_product_master and tt_shop_master
+  // from content_order_facts via idempotent upsert. Safe to call multiple times.
+  const { data, error } = await supabase.rpc('refresh_tt_product_shop_master', {
+    p_created_by: user.id,
+  })
+
+  if (error) return { success: false, result: null, error: error.message }
+
+  const row = Array.isArray(data) ? data[0] : data
+  revalidatePath('/content-ops/products')
+  revalidatePath('/content-ops/shops')
+  revalidatePath('/content-ops/tiktok-affiliate')
+  return {
+    success: true,
+    result: row ? { products_upserted: row.products_upserted, shops_upserted: row.shops_upserted } : null,
+    error: null,
   }
-
-  const allShops: ShopSummary[] = [...shopMap.entries()]
-    .map(([code, v]) => ({
-      shop_code: code,
-      shop_name: v.shop_name,
-      total_products: v.products.size,
-      total_order_items: v.items,
-      settled_order_items: v.settled,
-      total_gmv: v.gmv || null,
-      total_earned: v.earned || null,
-      currency: v.currency,
-    }))
-    .sort((a, b) => (b.total_gmv ?? 0) - (a.total_gmv ?? 0))
-
-  return { data: allShops, error: null }
 }

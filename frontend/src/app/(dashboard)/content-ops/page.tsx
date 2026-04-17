@@ -69,7 +69,7 @@ export default async function ContentOpsOverviewPage({
           { label: 'Order Items', value: total.toLocaleString(), href: `/content-ops/analysis/orders?from=${from}&to=${to}` },
           { label: 'Products', value: stats.uniqueProducts.toLocaleString(), href: `/content-ops/products?from=${from}&to=${to}` },
           { label: 'Shops', value: stats.uniqueShops.toLocaleString(), href: `/content-ops/shops?from=${from}&to=${to}` },
-          { label: 'Content IDs', value: stats.uniqueContentIds.toLocaleString(), href: `/content-ops/analysis/attribution?from=${from}&to=${to}` },
+          { label: 'Content IDs', value: stats.uniqueContentIds.toLocaleString(), href: '/content-ops/content' },
         ].map((kpi) => (
           <Link key={kpi.label} href={kpi.href}>
             <Card className="hover:border-foreground/30 transition-colors cursor-pointer">
@@ -105,7 +105,7 @@ export default async function ContentOpsOverviewPage({
               {statusBreakdown.map((b) => (
                 <Link
                   key={b.key}
-                  href={`/content-ops/analysis/orders?status=${encodeURIComponent(b.label)}&from=${from}&to=${to}`}
+                  href={`/content-ops/analysis/orders?status=${encodeURIComponent(b.key)}&from=${from}&to=${to}`}
                   className="rounded-md px-2 py-1.5 hover:bg-muted/50 transition-colors"
                 >
                   <div className="flex items-center gap-1.5">

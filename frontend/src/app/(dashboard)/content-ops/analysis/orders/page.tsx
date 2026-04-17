@@ -8,16 +8,20 @@ import { Button } from '@/components/ui/button'
 import { DateRangeFilter } from '@/components/content-ops/date-range-filter'
 import { getOrdersExplorer } from '../../actions'
 import { getDefaultDateRange } from '../../date-utils'
+import {
+  CONTENT_OPS_STATUSES,
+  CONTENT_OPS_STATUS_LABELS,
+  getContentOpsStatusLabel,
+  normalizeContentOpsStatus,
+} from '../../status-utils'
 
 export const dynamic = 'force-dynamic'
 
 const STATUS_STYLE: Record<string, string> = {
-  Settled: 'text-emerald-700 bg-emerald-50 border-emerald-200',
-  Completed: 'text-emerald-700 bg-emerald-50 border-emerald-200',
-  Pending: 'text-blue-700 bg-blue-50 border-blue-200',
-  'Awaiting Payment': 'text-amber-700 bg-amber-50 border-amber-200',
-  Ineligible: 'text-red-700 bg-red-50 border-red-200',
-  Cancelled: 'text-red-700 bg-red-50 border-red-200',
+  settled: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+  pending: 'text-blue-700 bg-blue-50 border-blue-200',
+  awaiting_payment: 'text-amber-700 bg-amber-50 border-amber-200',
+  ineligible: 'text-red-700 bg-red-50 border-red-200',
 }
 
 // Sub-navigation for analysis section
@@ -69,13 +73,14 @@ export default async function OrdersExplorerPage({
   const defaults = getDefaultDateRange()
   const from = searchParams.from ?? defaults.from
   const to = searchParams.to ?? defaults.to
+  const selectedStatus = normalizeContentOpsStatus(searchParams.status) ?? undefined
 
   const { data: rows, total, error } = await getOrdersExplorer(
     {
       query: searchParams.q,
       productId: searchParams.product_id,
       shopCode: searchParams.shop_code,
-      status: searchParams.status,
+      status: selectedStatus,
       contentId: searchParams.content_id,
       from,
       to,
@@ -100,7 +105,7 @@ export default async function OrdersExplorerPage({
       q: searchParams.q,
       product_id: searchParams.product_id,
       shop_code: searchParams.shop_code,
-      status: searchParams.status,
+      status: selectedStatus,
       content_id: searchParams.content_id,
       from,
       to,
@@ -150,14 +155,15 @@ export default async function OrdersExplorerPage({
           <label className="text-xs text-muted-foreground">Status</label>
           <select
             name="status"
-            defaultValue={searchParams.status ?? ''}
+            defaultValue={selectedStatus ?? ''}
             className="h-8 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <option value="">All statuses</option>
-            <option>Settled</option>
-            <option>Pending</option>
-            <option>Awaiting Payment</option>
-            <option>Ineligible</option>
+            {CONTENT_OPS_STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {CONTENT_OPS_STATUS_LABELS[status]}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -173,7 +179,7 @@ export default async function OrdersExplorerPage({
 
         {activeFilters.length > 0 && (
           <Button asChild size="sm" variant="ghost" className="h-8">
-            <Link href="/content-ops/analysis/orders">Clear all</Link>
+            <Link href={`?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`}>Clear all</Link>
           </Button>
         )}
       </form>
@@ -201,7 +207,7 @@ export default async function OrdersExplorerPage({
           )}
           {searchParams.status && (
             <span className="px-2 py-0.5 rounded border bg-muted">
-              status: {searchParams.status}
+              status: {getContentOpsStatusLabel(searchParams.status)}
               <Link href={filterHref({ status: undefined, page: '1' })} className="ml-1.5 text-muted-foreground hover:text-foreground">×</Link>
             </span>
           )}
@@ -275,7 +281,7 @@ export default async function OrdersExplorerPage({
                       </TableCell>
                       <TableCell>
                         <span className={`text-xs px-2 py-0.5 rounded border font-medium ${STATUS_STYLE[row.status] ?? 'text-muted-foreground bg-muted border-border'}`}>
-                          {row.status}
+                          {getContentOpsStatusLabel(row.status)}
                         </span>
                       </TableCell>
                       <TableCell>
