@@ -29,7 +29,7 @@ export default async function AttributionPage({
   searchParams: { page?: string; content_id?: string; bucket?: string }
 }) {
   const page = Math.max(1, parseInt(searchParams.page ?? '1', 10))
-  const limit = 50
+  const limit = 25
   const offset = (page - 1) * limit
 
   const {

@@ -1,6 +1,6 @@
 # Content Ops Audit: Next Step
 
-## Real Current State (updated 2026-04-17)
+## Real Current State (updated 2026-04-18)
 
 Five corrective passes have made Content Ops truthful, structurally aligned,
 operationally hardened, and decision-usable:
@@ -14,11 +14,17 @@ operationally hardened, and decision-usable:
 - **Pass 5**: `runMasterRefresh` wired to overview UI, Bangkok date default fixed in cost input,
   profit page truthfulness banner added for no-cost-data state
 
+**Consistency fix applied 2026-04-18**: Overview / Products / Shops were
+silently capped at 1000 rows by Supabase's default PostgREST row limit.
+All aggregation queries now use `.limit(200000)`. Attribution column
+footprint reduced; page limit halved to 25. See `CONSISTENCY_FIX_PASS.md`.
+
 The module is now:
 - Truthful (no fabricated states, clear no-data indicators)
 - Structurally sound (DB schema aligned, dead code removed)
 - Import contract hardened (preview → validate → import)
 - Cost → profit layer activated and decision-usable
+- **Query-consistent** (Overview / Products / Shops / Orders Explorer agree)
 
 The only remaining gaps are operator-level (data entry) and low-priority UX additions.
 

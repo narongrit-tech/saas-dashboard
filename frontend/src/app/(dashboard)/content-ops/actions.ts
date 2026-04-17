@@ -82,7 +82,8 @@ export async function getOverviewData(): Promise<{ data: OverviewData | null; er
     supabase
       .from('content_order_facts')
       .select('product_id,product_name,shop_code,shop_name,content_id,order_settlement_status')
-      .eq('created_by', user.id),
+      .eq('created_by', user.id)
+      .limit(200000),
     supabase
       .from('tt_content_costs')
       .select('id', { count: 'exact', head: true })
@@ -727,7 +728,7 @@ export async function getDataHealth(): Promise<{ data: DataHealthData | null; er
   if (!user) return { data: null, error: 'Unauthenticated' }
 
   const [factsRes, batchesRes, costsRes, profitRes] = await Promise.all([
-    supabase.from('content_order_facts').select('id,product_id,shop_code,content_id', { count: 'exact' }).eq('created_by', user.id),
+    supabase.from('content_order_facts').select('id,product_id,shop_code,content_id', { count: 'exact' }).eq('created_by', user.id).limit(200000),
     supabase.from('tiktok_affiliate_import_batches').select('id', { count: 'exact', head: true }).eq('created_by', user.id),
     supabase.from('tt_content_costs').select('id', { count: 'exact', head: true }).eq('created_by', user.id),
     supabase.from('content_profit_attribution_summary').select('content_id', { count: 'exact', head: true }).eq('created_by', user.id),
@@ -915,6 +916,7 @@ export async function getOverviewDataFiltered(
     .eq('created_by', user.id)
     .gte('order_date', from)
     .lte('order_date', to)
+    .limit(200000)
 
   if (dbError) return { data: null, error: dbError.message }
 
@@ -1022,6 +1024,7 @@ export async function getContentList(): Promise<{
     .from('content_order_facts')
     .select('content_id,product_id,is_successful,total_commission_amount,order_date')
     .eq('created_by', user.id)
+    .limit(200000)
 
   if (error) return { data: [], total: 0, error: error.message }
 
@@ -1276,6 +1279,7 @@ export async function getProductTrends(
     .eq('created_by', user.id)
     .gte('order_date', prevFrom)
     .lte('order_date', to)
+    .limit(200000)
 
   if (dbError) return { top: [], all: [], error: dbError.message }
 
@@ -1382,6 +1386,7 @@ export async function getShopTrends(
     .eq('created_by', user.id)
     .gte('order_date', prevFrom)
     .lte('order_date', to)
+    .limit(200000)
 
   if (dbError) return { top: [], all: [], error: dbError.message }
 

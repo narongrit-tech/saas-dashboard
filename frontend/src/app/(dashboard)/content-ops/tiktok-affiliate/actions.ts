@@ -328,9 +328,11 @@ export async function getAttribution(
   }
 
   const startedAt = Date.now()
+  // Fetch only the columns rendered by the attribution page.
+  // Dropping is_realized, is_open, is_lost, commission reduces view computation cost.
   let query = supabase
     .from('content_order_attribution')
-    .select('created_by,order_id,product_id,content_id,content_type,product_name,currency,order_date,normalized_status,business_bucket,is_realized,is_open,is_lost,gmv,commission,actual_commission_total,source_fact_count,content_candidate_count')
+    .select('order_id,product_id,content_id,content_type,product_name,currency,order_date,normalized_status,business_bucket,gmv,actual_commission_total,source_fact_count,content_candidate_count')
     .eq('created_by', user.id)
 
   if (filters.contentId) query = query.eq('content_id', filters.contentId)
