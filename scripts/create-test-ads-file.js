@@ -3,7 +3,7 @@
  * Run: node create-test-ads-file.js
  */
 
-const XLSX = require('./frontend/node_modules/xlsx')
+const XLSX = require('../frontend/node_modules/xlsx')
 const fs = require('fs')
 
 // Test data with TikTok Thai headers
