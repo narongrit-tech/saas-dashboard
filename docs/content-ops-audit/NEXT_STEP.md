@@ -29,12 +29,19 @@ were still sample-derived (1000 rows). Added third parallel `kpiRes` query using
 PostgREST aggregate `COUNT(DISTINCT col)` syntax — all four KPI cards are now exact,
 no DB migration required. See `OVERVIEW_KPI_FINAL_FIX.md`.
 
+**Top list fix applied 2026-04-18**: Top Products and Top Shops appeared stale because
+they were built from the first 1000 rows in insertion order — popular products dominated
+every sample regardless of date range. Replaced with DB-side `GROUP BY product_id / shop_code`
+aggregate queries. Added `noStore()` to prevent Next.js data-cache staling.
+See `D:\AI_OS\core\brain\reports\CONTENT_OPS_OVERVIEW_TOPLIST_FIX.md`.
+
 The module is now:
 - Truthful (no fabricated states, clear no-data indicators)
 - Structurally sound (DB schema aligned, dead code removed)
 - Import contract hardened (preview → validate → import)
 - Cost → profit layer activated and decision-usable
 - **KPI-exact** (all four Overview KPI cards reflect true date-range totals)
+- **Top-list accurate** (Top Products / Shops reflect actual period rankings, not insertion-order bias)
 
 The only remaining gaps are operator-level (data entry) and low-priority UX additions.
 

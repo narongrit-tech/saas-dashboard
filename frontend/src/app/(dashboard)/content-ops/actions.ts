@@ -1,5 +1,6 @@
 'use server'
 
+import { unstable_noStore as noStore } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import {
   type AttributionDiagnostics,
@@ -906,85 +907,102 @@ export async function getOverviewDataFiltered(
   from: string,
   to: string
 ): Promise<{ data: OverviewDataFiltered | null; error: string | null }> {
+  // Opt out of Next.js data cache unconditionally. force-dynamic on the page
+  // disables the route cache, but not the per-fetch data cache. This ensures
+  // fresh Supabase queries on every router.push() navigation.
+  noStore()
+
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { data: null, error: 'Unauthenticated' }
 
-  // Three parallel queries:
-  //   countRes — exact total via SELECT COUNT(*), returned in Content-Range header.
-  //              NOT subject to PostgREST max-rows; always the real total.
-  //   dataRes  — data rows for status breakdown + top-product/top-shop lists.
-  //              Subject to max-rows (server default = 1000); only used for
-  //              breakdown percentages and the top-10 lists — not for KPI counts.
-  //   kpiRes   — exact distinct counts via PostgREST aggregate COUNT(DISTINCT col).
-  //              Runs as a single-row aggregate on the DB side; not subject to
-  //              max-rows. Gives truthful unique product/shop/content KPI values.
-  const [countRes, dataRes, kpiRes] = await Promise.all([
+  // Five parallel queries — all scoped to (created_by, from, to):
+  //
+  //   countRes        — exact total via SELECT COUNT(*) — not subject to max-rows
+  //   dataRes         — 3 narrow columns for status breakdown only (1000-row sample OK
+  //                     for percentages; no longer used for top-list ranking)
+  //   kpiRes          — exact distinct counts via COUNT(DISTINCT col) aggregates
+  //   topProductsAgg  — true top products: GROUP BY product_id, order by count DESC
+  //   topShopsAgg     — true top shops:    GROUP BY shop_code,  order by count DESC
+  //
+  // Root cause of stale top lists: the old approach built top lists from the
+  // first 1000 rows in insertion order — popular products always dominated any
+  // 1000-row sample regardless of the selected date range, making the lists
+  // appear frozen even as KPI cards changed. The aggregate queries below run
+  // GROUP BY on the DB side, completely bypassing the row-level max-rows cap.
+  const [countRes, dataRes, kpiRes, topProductsAggRes, topShopsAggRes] = await Promise.all([
     supabase
       .from('content_order_facts')
       .select('*', { count: 'exact', head: true })
       .eq('created_by', user.id)
       .gte('order_date', from)
       .lte('order_date', to),
+
+    // Narrow 3-column fetch — only for status breakdown percentages + KPI fallbacks.
     supabase
       .from('content_order_facts')
-      .select('product_id,product_name,shop_code,shop_name,content_id,order_settlement_status')
+      .select('product_id,shop_code,order_settlement_status')
       .eq('created_by', user.id)
       .gte('order_date', from)
       .lte('order_date', to),
+
     supabase
       .from('content_order_facts')
       .select('unique_products:product_id.count(distinct=true), unique_shops:shop_code.count(distinct=true), unique_content_ids:content_id.count(distinct=true)')
       .eq('created_by', user.id)
       .gte('order_date', from)
       .lte('order_date', to),
+
+    // Top products: GROUP BY product_id. Returns one row per distinct product
+    // with order count and distinct-shop count. Not subject to row-level max-rows.
+    // Fetches all groups (typically <500 distinct products); JS sorts + slices top 10.
+    supabase
+      .from('content_order_facts')
+      .select('product_id, product_name:product_name.max(), order_items:product_id.count(), shop_count:shop_code.count(distinct=true)')
+      .eq('created_by', user.id)
+      .gte('order_date', from)
+      .lte('order_date', to)
+      .not('product_id', 'is', null),
+
+    // Top shops: GROUP BY shop_code. Returns one row per distinct shop
+    // with order count and distinct-product count.
+    supabase
+      .from('content_order_facts')
+      .select('shop_code, shop_name:shop_name.max(), order_items:shop_code.count(), product_count:product_id.count(distinct=true)')
+      .eq('created_by', user.id)
+      .gte('order_date', from)
+      .lte('order_date', to)
+      .not('shop_code', 'is', null),
   ])
 
   if (dataRes.error) return { data: null, error: dataRes.error.message }
 
-  // Exact total from COUNT(*) — this is what goes on the KPI card.
-  // Falls back to rows.length only if the count query itself errored.
+  // Exact total from COUNT(*).
   const totalOrderItems = countRes.count ?? (dataRes.data?.length ?? 0)
 
+  // Build status counts from the 1000-row sample (acceptable for breakdown shape).
+  // Also build small Sets for fallback KPI counts in case kpiRes fails.
   const rows = dataRes.data ?? []
+  const productIds = new Set<string>()
+  const shopCodes = new Set<string>()
   const statusCounts = new Map<string, number>()
-  const productMap = new Map<string, { name: string | null; items: number; shops: Set<string> }>()
-  const shopMap = new Map<string, { name: string | null; items: number; products: Set<string> }>()
 
   for (const r of rows) {
+    if (r.product_id) productIds.add(r.product_id)
+    if (r.shop_code) shopCodes.add(r.shop_code)
     const bucket = mapStatusBucket(r.order_settlement_status ?? '')
     statusCounts.set(bucket, (statusCounts.get(bucket) ?? 0) + 1)
-
-    if (r.product_id) {
-      const p = productMap.get(r.product_id) ?? { name: null, items: 0, shops: new Set() }
-      p.items++
-      if (!p.name && r.product_name) p.name = r.product_name
-      if (r.shop_code) p.shops.add(r.shop_code)
-      productMap.set(r.product_id, p)
-    }
-    if (r.shop_code) {
-      const s = shopMap.get(r.shop_code) ?? { name: null, items: 0, products: new Set() }
-      s.items++
-      if (!s.name && r.shop_name) s.name = r.shop_name
-      if (r.product_id) s.products.add(r.product_id)
-      shopMap.set(r.shop_code, s)
-    }
   }
 
-  // Exact distinct counts from the aggregate query.
-  // PostgREST generates COUNT(DISTINCT col) for each alias — a single DB-side
-  // aggregate row, not subject to max-rows. Falls back to sample-derived sizes
-  // (from dataRes, up to 1000 rows) only if the aggregate query itself fails.
+  // Exact KPI distinct counts.
   type KpiAggRow = { unique_products: number; unique_shops: number; unique_content_ids: number }
   const kpiRow = (kpiRes.data as unknown as KpiAggRow[] | null)?.[0]
-  const uniqueProducts = kpiRow?.unique_products ?? productMap.size
-  const uniqueShops = kpiRow?.unique_shops ?? shopMap.size
+  const uniqueProducts = kpiRow?.unique_products ?? productIds.size
+  const uniqueShops = kpiRow?.unique_shops ?? shopCodes.size
   const uniqueContentIds = kpiRow?.unique_content_ids ?? 0
 
-  // Status breakdown percentages are computed against the sample (rows.length)
-  // so they sum to 100% within the visible sample.
+  // Status breakdown — percentages within the 1000-row sample; sums to 100%.
   const sampleTotal = rows.length
-
   const statusBreakdown: StatusBucket[] = (['settled', 'pending', 'awaiting_payment', 'ineligible'] as const).map((key) => ({
     key,
     label: CONTENT_OPS_STATUS_LABELS[key],
@@ -992,39 +1010,46 @@ export async function getOverviewDataFiltered(
     percent: sampleTotal > 0 ? Math.round(((statusCounts.get(key) ?? 0) / sampleTotal) * 1000) / 10 : 0,
   }))
 
-  const topProducts: TopProductRow[] = [...productMap.entries()]
-    .map(([productId, v]) => ({
-      productId,
-      productName: v.name,
-      orderItems: v.items,
-      shopCount: v.shops.size,
-      sharePercent: sampleTotal > 0 ? Math.round((v.items / sampleTotal) * 1000) / 10 : 0,
-    }))
-    .sort((a, b) => b.orderItems - a.orderItems)
+  // Top products — from DB-side GROUP BY, sorted by order count, sliced to 10.
+  // sharePercent is relative to totalOrderItems (exact), not the sample.
+  type TopProductAggRow = { product_id: string; product_name: string | null; order_items: number; shop_count: number }
+  const topProductsAggData = (topProductsAggRes.data as unknown as TopProductAggRow[] | null) ?? []
+  const topProducts: TopProductRow[] = topProductsAggData
+    .sort((a, b) => Number(b.order_items) - Number(a.order_items))
     .slice(0, 10)
+    .map((row) => ({
+      productId: row.product_id,
+      productName: row.product_name ?? null,
+      orderItems: Number(row.order_items),
+      shopCount: Number(row.shop_count),
+      sharePercent: totalOrderItems > 0 ? Math.round((Number(row.order_items) / totalOrderItems) * 1000) / 10 : 0,
+    }))
 
-  const topShops: TopShopRow[] = [...shopMap.entries()]
-    .map(([shopCode, v]) => ({
-      shopCode,
-      shopName: v.name,
-      orderItems: v.items,
-      productCount: v.products.size,
-      sharePercent: sampleTotal > 0 ? Math.round((v.items / sampleTotal) * 1000) / 10 : 0,
-    }))
-    .sort((a, b) => b.orderItems - a.orderItems)
+  // Top shops — same pattern.
+  type TopShopAggRow = { shop_code: string; shop_name: string | null; order_items: number; product_count: number }
+  const topShopsAggData = (topShopsAggRes.data as unknown as TopShopAggRow[] | null) ?? []
+  const topShops: TopShopRow[] = topShopsAggData
+    .sort((a, b) => Number(b.order_items) - Number(a.order_items))
     .slice(0, 10)
+    .map((row) => ({
+      shopCode: row.shop_code,
+      shopName: row.shop_name ?? null,
+      orderItems: Number(row.order_items),
+      productCount: Number(row.product_count),
+      sharePercent: totalOrderItems > 0 ? Math.round((Number(row.order_items) / totalOrderItems) * 1000) / 10 : 0,
+    }))
 
   return {
     data: {
       stats: {
-        totalOrderItems,   // exact — from COUNT(*)
-        uniqueProducts,    // exact — from COUNT(DISTINCT product_id)
-        uniqueShops,       // exact — from COUNT(DISTINCT shop_code)
-        uniqueContentIds,  // exact — from COUNT(DISTINCT content_id)
+        totalOrderItems,   // exact — COUNT(*)
+        uniqueProducts,    // exact — COUNT(DISTINCT product_id)
+        uniqueShops,       // exact — COUNT(DISTINCT shop_code)
+        uniqueContentIds,  // exact — COUNT(DISTINCT content_id)
       },
       statusBreakdown,
-      topProducts,
-      topShops,
+      topProducts,   // exact — DB-side GROUP BY product_id, sorted by count
+      topShops,      // exact — DB-side GROUP BY shop_code,  sorted by count
     },
     error: null,
   }
