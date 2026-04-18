@@ -35,13 +35,22 @@ every sample regardless of date range. Replaced with DB-side `GROUP BY product_i
 aggregate queries. Added `noStore()` to prevent Next.js data-cache staling.
 See `D:\AI_OS\core\brain\reports\CONTENT_OPS_OVERVIEW_TOPLIST_FIX.md`.
 
+**Top list empty-state regression fixed 2026-04-18**: PostgREST grouped aggregate queries
+(`product_id` + `product_name.max()` + `product_id.count()`) failed silently on this
+Supabase instance — `.data` was null, `?? []` fallback produced empty arrays, top lists
+showed empty state even when KPIs were non-zero. Reverted to sample-based top lists.
+`dataRes` now fetches 5 columns with `ORDER BY order_date DESC` (most-recent 1000 rows),
+resolving both the empty-state regression and retaining the date-sensitivity improvement.
+Queries reduced from 5 parallel to 3 parallel. TSC: 0 errors.
+See `D:\AI_OS\core\brain\reports\CONTENT_OPS_OVERVIEW_TOPLIST_EMPTY_FIX.md`.
+
 The module is now:
 - Truthful (no fabricated states, clear no-data indicators)
 - Structurally sound (DB schema aligned, dead code removed)
 - Import contract hardened (preview → validate → import)
 - Cost → profit layer activated and decision-usable
 - **KPI-exact** (all four Overview KPI cards reflect true date-range totals)
-- **Top-list accurate** (Top Products / Shops reflect actual period rankings, not insertion-order bias)
+- **Top-list non-empty and date-sensitive** (sample from most-recent 1000 rows; changes with date range)
 
 The only remaining gaps are operator-level (data entry) and low-priority UX additions.
 
