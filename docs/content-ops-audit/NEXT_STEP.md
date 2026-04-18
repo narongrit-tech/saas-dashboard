@@ -35,6 +35,13 @@ every sample regardless of date range. Replaced with DB-side `GROUP BY product_i
 aggregate queries. Added `noStore()` to prevent Next.js data-cache staling.
 See `D:\AI_OS\core\brain\reports\CONTENT_OPS_OVERVIEW_TOPLIST_FIX.md`.
 
+**Ranking source alignment fixed 2026-04-18**: `getProductTrends` and `getShopTrends`
+had `.limit(200000)` (silently ignored by PostgREST max-rows=1000) and no `.order()`
+clause — returning oldest 1000 insertion-order rows, producing frozen rankings that
+never changed with date range. Added `noStore()` and `.order('order_date', { ascending: false })`
+to both functions. All three ranking pages (Overview / Products / Shops) now use the same
+most-recent-1000-rows strategy. See `D:\AI_OS\core\brain\reports\CONTENT_OPS_RANKING_SOURCE_ALIGNMENT.md`.
+
 **Top list empty-state regression fixed 2026-04-18**: PostgREST grouped aggregate queries
 (`product_id` + `product_name.max()` + `product_id.count()`) failed silently on this
 Supabase instance — `.data` was null, `?? []` fallback produced empty arrays, top lists

@@ -1317,6 +1317,9 @@ export async function getProductTrends(
   to: string,
   topN = 50
 ): Promise<{ top: ProductTrendRow[]; all: ProductTableResult[]; error: string | null }> {
+  // Opt out of Next.js data cache — same reason as getOverviewDataFiltered.
+  noStore()
+
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { top: [], all: [], error: 'Unauthenticated' }
@@ -1326,14 +1329,17 @@ export async function getProductTrends(
   const prevTo = offsetDate(from, -1)
   const prevFrom = offsetDate(prevTo, -(currentDays - 1))
 
-  // Fetch both periods in one query
+  // Fetch both periods in one query.
+  // ORDER BY order_date DESC so the 1000-row PostgREST max-rows cap returns
+  // the most-recent rows instead of oldest insertion-order rows.
+  // (.limit(200000) was silently ignored — PostgREST hard cap = 1000 rows.)
   const { data, error: dbError } = await supabase
     .from('content_order_facts')
     .select('product_id,product_name,shop_code,shop_name,order_date')
     .eq('created_by', user.id)
     .gte('order_date', prevFrom)
     .lte('order_date', to)
-    .limit(200000)
+    .order('order_date', { ascending: false })
 
   if (dbError) return { top: [], all: [], error: dbError.message }
 
@@ -1426,6 +1432,9 @@ export async function getShopTrends(
   to: string,
   topN = 50
 ): Promise<{ top: ShopTrendRow[]; all: ShopTableResult[]; error: string | null }> {
+  // Opt out of Next.js data cache — same reason as getOverviewDataFiltered.
+  noStore()
+
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { top: [], all: [], error: 'Unauthenticated' }
@@ -1434,13 +1443,15 @@ export async function getShopTrends(
   const prevTo = offsetDate(from, -1)
   const prevFrom = offsetDate(prevTo, -(currentDays - 1))
 
+  // ORDER BY order_date DESC so the 1000-row PostgREST max-rows cap returns
+  // the most-recent rows instead of oldest insertion-order rows.
   const { data, error: dbError } = await supabase
     .from('content_order_facts')
     .select('shop_code,shop_name,product_id,product_name,order_date')
     .eq('created_by', user.id)
     .gte('order_date', prevFrom)
     .lte('order_date', to)
-    .limit(200000)
+    .order('order_date', { ascending: false })
 
   if (dbError) return { top: [], all: [], error: dbError.message }
 
