@@ -910,17 +910,36 @@ export async function getOverviewDataFiltered(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { data: null, error: 'Unauthenticated' }
 
-  const { data, error: dbError } = await supabase
-    .from('content_order_facts')
-    .select('product_id,product_name,shop_code,shop_name,content_id,order_settlement_status')
-    .eq('created_by', user.id)
-    .gte('order_date', from)
-    .lte('order_date', to)
-    .limit(200000)
+  // Two parallel queries:
+  //   countRes — exact total via SELECT COUNT(*), returned in Content-Range header.
+  //              NOT subject to PostgREST max-rows; always the real total.
+  //   dataRes  — data rows for breakdown / unique-set aggregation.
+  //              Subject to max-rows (server default = 1000); used for top-product
+  //              / top-shop lists and status breakdown percentages only.
+  //              unique* counts and status percentages are therefore a best-effort
+  //              sample, but totalOrderItems comes from the count query and is exact.
+  const [countRes, dataRes] = await Promise.all([
+    supabase
+      .from('content_order_facts')
+      .select('*', { count: 'exact', head: true })
+      .eq('created_by', user.id)
+      .gte('order_date', from)
+      .lte('order_date', to),
+    supabase
+      .from('content_order_facts')
+      .select('product_id,product_name,shop_code,shop_name,content_id,order_settlement_status')
+      .eq('created_by', user.id)
+      .gte('order_date', from)
+      .lte('order_date', to),
+  ])
 
-  if (dbError) return { data: null, error: dbError.message }
+  if (dataRes.error) return { data: null, error: dataRes.error.message }
 
-  const rows = data ?? []
+  // Exact total from COUNT(*) — this is what goes on the KPI card.
+  // Falls back to rows.length only if the count query itself errored.
+  const totalOrderItems = countRes.count ?? (dataRes.data?.length ?? 0)
+
+  const rows = dataRes.data ?? []
   const productIds = new Set<string>()
   const shopCodes = new Set<string>()
   const contentIds = new Set<string>()
@@ -952,13 +971,15 @@ export async function getOverviewDataFiltered(
     }
   }
 
-  const total = rows.length
+  // Status breakdown percentages are computed against the sample (rows.length),
+  // not against totalOrderItems, so percentages sum to 100% within the sample.
+  const sampleTotal = rows.length
 
   const statusBreakdown: StatusBucket[] = (['settled', 'pending', 'awaiting_payment', 'ineligible'] as const).map((key) => ({
     key,
     label: CONTENT_OPS_STATUS_LABELS[key],
     count: statusCounts.get(key) ?? 0,
-    percent: total > 0 ? Math.round(((statusCounts.get(key) ?? 0) / total) * 1000) / 10 : 0,
+    percent: sampleTotal > 0 ? Math.round(((statusCounts.get(key) ?? 0) / sampleTotal) * 1000) / 10 : 0,
   }))
 
   const topProducts: TopProductRow[] = [...productMap.entries()]
@@ -967,7 +988,7 @@ export async function getOverviewDataFiltered(
       productName: v.name,
       orderItems: v.items,
       shopCount: v.shops.size,
-      sharePercent: total > 0 ? Math.round((v.items / total) * 1000) / 10 : 0,
+      sharePercent: sampleTotal > 0 ? Math.round((v.items / sampleTotal) * 1000) / 10 : 0,
     }))
     .sort((a, b) => b.orderItems - a.orderItems)
     .slice(0, 10)
@@ -978,7 +999,7 @@ export async function getOverviewDataFiltered(
       shopName: v.name,
       orderItems: v.items,
       productCount: v.products.size,
-      sharePercent: total > 0 ? Math.round((v.items / total) * 1000) / 10 : 0,
+      sharePercent: sampleTotal > 0 ? Math.round((v.items / sampleTotal) * 1000) / 10 : 0,
     }))
     .sort((a, b) => b.orderItems - a.orderItems)
     .slice(0, 10)
@@ -986,7 +1007,7 @@ export async function getOverviewDataFiltered(
   return {
     data: {
       stats: {
-        totalOrderItems: total,
+        totalOrderItems,          // exact — from COUNT(*), not rows.length
         uniqueProducts: productIds.size,
         uniqueShops: shopCodes.size,
         uniqueContentIds: contentIds.size,

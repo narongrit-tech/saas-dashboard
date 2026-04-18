@@ -19,12 +19,17 @@ silently capped at 1000 rows by Supabase's default PostgREST row limit.
 All aggregation queries now use `.limit(200000)`. Attribution column
 footprint reduced; page limit halved to 25. See `CONSISTENCY_FIX_PASS.md`.
 
+**Overview KPI hotfix applied 2026-04-18**: `.limit(200000)` does NOT override
+Supabase PostgREST `max-rows` (hard server cap = 1000). `getOverviewDataFiltered`
+now uses a parallel `{ count: 'exact', head: true }` query for ORDER ITEMS — exact
+`SELECT COUNT(*)`, not subject to `max-rows`. See `OVERVIEW_KPI_HOTFIX.md`.
+
 The module is now:
 - Truthful (no fabricated states, clear no-data indicators)
 - Structurally sound (DB schema aligned, dead code removed)
 - Import contract hardened (preview → validate → import)
 - Cost → profit layer activated and decision-usable
-- **Query-consistent** (Overview / Products / Shops / Orders Explorer agree)
+- **Query-consistent** (Overview ORDER ITEMS = exact count; Products / Shops / Orders Explorer agree)
 
 The only remaining gaps are operator-level (data entry) and low-priority UX additions.
 
