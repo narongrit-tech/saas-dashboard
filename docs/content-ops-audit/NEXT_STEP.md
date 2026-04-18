@@ -24,12 +24,17 @@ Supabase PostgREST `max-rows` (hard server cap = 1000). `getOverviewDataFiltered
 now uses a parallel `{ count: 'exact', head: true }` query for ORDER ITEMS — exact
 `SELECT COUNT(*)`, not subject to `max-rows`. See `OVERVIEW_KPI_HOTFIX.md`.
 
+**Overview KPI final fix applied 2026-04-18**: Products / Shops / Content IDs KPIs
+were still sample-derived (1000 rows). Added third parallel `kpiRes` query using
+PostgREST aggregate `COUNT(DISTINCT col)` syntax — all four KPI cards are now exact,
+no DB migration required. See `OVERVIEW_KPI_FINAL_FIX.md`.
+
 The module is now:
 - Truthful (no fabricated states, clear no-data indicators)
 - Structurally sound (DB schema aligned, dead code removed)
 - Import contract hardened (preview → validate → import)
 - Cost → profit layer activated and decision-usable
-- **Query-consistent** (Overview ORDER ITEMS = exact count; Products / Shops / Orders Explorer agree)
+- **KPI-exact** (all four Overview KPI cards reflect true date-range totals)
 
 The only remaining gaps are operator-level (data entry) and low-priority UX additions.
 

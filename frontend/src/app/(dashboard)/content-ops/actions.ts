@@ -910,15 +910,16 @@ export async function getOverviewDataFiltered(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { data: null, error: 'Unauthenticated' }
 
-  // Two parallel queries:
+  // Three parallel queries:
   //   countRes — exact total via SELECT COUNT(*), returned in Content-Range header.
   //              NOT subject to PostgREST max-rows; always the real total.
-  //   dataRes  — data rows for breakdown / unique-set aggregation.
-  //              Subject to max-rows (server default = 1000); used for top-product
-  //              / top-shop lists and status breakdown percentages only.
-  //              unique* counts and status percentages are therefore a best-effort
-  //              sample, but totalOrderItems comes from the count query and is exact.
-  const [countRes, dataRes] = await Promise.all([
+  //   dataRes  — data rows for status breakdown + top-product/top-shop lists.
+  //              Subject to max-rows (server default = 1000); only used for
+  //              breakdown percentages and the top-10 lists — not for KPI counts.
+  //   kpiRes   — exact distinct counts via PostgREST aggregate COUNT(DISTINCT col).
+  //              Runs as a single-row aggregate on the DB side; not subject to
+  //              max-rows. Gives truthful unique product/shop/content KPI values.
+  const [countRes, dataRes, kpiRes] = await Promise.all([
     supabase
       .from('content_order_facts')
       .select('*', { count: 'exact', head: true })
@@ -931,6 +932,12 @@ export async function getOverviewDataFiltered(
       .eq('created_by', user.id)
       .gte('order_date', from)
       .lte('order_date', to),
+    supabase
+      .from('content_order_facts')
+      .select('unique_products:product_id.count(distinct=true), unique_shops:shop_code.count(distinct=true), unique_content_ids:content_id.count(distinct=true)')
+      .eq('created_by', user.id)
+      .gte('order_date', from)
+      .lte('order_date', to),
   ])
 
   if (dataRes.error) return { data: null, error: dataRes.error.message }
@@ -940,18 +947,11 @@ export async function getOverviewDataFiltered(
   const totalOrderItems = countRes.count ?? (dataRes.data?.length ?? 0)
 
   const rows = dataRes.data ?? []
-  const productIds = new Set<string>()
-  const shopCodes = new Set<string>()
-  const contentIds = new Set<string>()
   const statusCounts = new Map<string, number>()
   const productMap = new Map<string, { name: string | null; items: number; shops: Set<string> }>()
   const shopMap = new Map<string, { name: string | null; items: number; products: Set<string> }>()
 
   for (const r of rows) {
-    if (r.product_id) productIds.add(r.product_id)
-    if (r.shop_code) shopCodes.add(r.shop_code)
-    if (r.content_id) contentIds.add(r.content_id)
-
     const bucket = mapStatusBucket(r.order_settlement_status ?? '')
     statusCounts.set(bucket, (statusCounts.get(bucket) ?? 0) + 1)
 
@@ -971,8 +971,18 @@ export async function getOverviewDataFiltered(
     }
   }
 
-  // Status breakdown percentages are computed against the sample (rows.length),
-  // not against totalOrderItems, so percentages sum to 100% within the sample.
+  // Exact distinct counts from the aggregate query.
+  // PostgREST generates COUNT(DISTINCT col) for each alias — a single DB-side
+  // aggregate row, not subject to max-rows. Falls back to sample-derived sizes
+  // (from dataRes, up to 1000 rows) only if the aggregate query itself fails.
+  type KpiAggRow = { unique_products: number; unique_shops: number; unique_content_ids: number }
+  const kpiRow = (kpiRes.data as unknown as KpiAggRow[] | null)?.[0]
+  const uniqueProducts = kpiRow?.unique_products ?? productMap.size
+  const uniqueShops = kpiRow?.unique_shops ?? shopMap.size
+  const uniqueContentIds = kpiRow?.unique_content_ids ?? 0
+
+  // Status breakdown percentages are computed against the sample (rows.length)
+  // so they sum to 100% within the visible sample.
   const sampleTotal = rows.length
 
   const statusBreakdown: StatusBucket[] = (['settled', 'pending', 'awaiting_payment', 'ineligible'] as const).map((key) => ({
@@ -1007,10 +1017,10 @@ export async function getOverviewDataFiltered(
   return {
     data: {
       stats: {
-        totalOrderItems,          // exact — from COUNT(*), not rows.length
-        uniqueProducts: productIds.size,
-        uniqueShops: shopCodes.size,
-        uniqueContentIds: contentIds.size,
+        totalOrderItems,   // exact — from COUNT(*)
+        uniqueProducts,    // exact — from COUNT(DISTINCT product_id)
+        uniqueShops,       // exact — from COUNT(DISTINCT shop_code)
+        uniqueContentIds,  // exact — from COUNT(DISTINCT content_id)
       },
       statusBreakdown,
       topProducts,
