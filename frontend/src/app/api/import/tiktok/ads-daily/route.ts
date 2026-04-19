@@ -96,7 +96,6 @@ export async function POST(request: NextRequest) {
     const { data: existingBatch } = await supabase
       .from('import_batches')
       .select('id, status, created_at, metadata, file_name')
-      .eq('created_by', user.id)
       .eq('file_hash', fileHash)
       .eq('report_type', 'tiktok_ads_daily')
       .not('status', 'in', '("failed","rolled_back","deleted")') // Exclude failed/rolled_back/deleted
@@ -307,7 +306,6 @@ export async function POST(request: NextRequest) {
       const { data: adsWallet, error: walletError } = await supabase
         .from('wallets')
         .select('id')
-        .eq('created_by', user.id)
         .eq('wallet_type', 'ADS')
         .single();
 

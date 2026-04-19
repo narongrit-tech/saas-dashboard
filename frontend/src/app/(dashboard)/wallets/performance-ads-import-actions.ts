@@ -78,7 +78,7 @@ async function upsertPerformanceChunkWithFallback(
 ): Promise<{ ok: boolean; insertedCount: number; mode: 'primary' | 'fallback'; error?: string }> {
   const { error: primaryError } = await supabase
     .from('ad_daily_performance')
-    .upsert(rows, { onConflict: 'created_by,source_row_hash' })
+    .upsert(rows, { onConflict: 'source_row_hash' })
 
   if (!primaryError) {
     return { ok: true, insertedCount: rows.length, mode: 'primary' }
@@ -113,7 +113,6 @@ async function upsertPerformanceChunkWithFallback(
   const { data: existingRows, error: existingError } = await supabase
     .from('ad_daily_performance')
     .select('id, source_row_hash')
-    .eq('created_by', userId)
     .in('source_row_hash', uniqueHashes)
 
   if (existingError) {
@@ -394,7 +393,6 @@ export async function confirmAdsImport(
       .from('ad_import_staging_rows')
       .select('ad_date, campaign_name, spend, gmv, orders, roas')
       .eq('batch_id', batchId)
-      .eq('created_by', user.id)
       .order('row_index')
 
     if (stagingError || !stagingRows?.length) {

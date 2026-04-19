@@ -53,7 +53,6 @@ export async function getCashInTransactions(
     let query = supabase
       .from('bank_transactions')
       .select('*', { count: 'exact' })
-      .eq('created_by', user.id)
       .gt('deposit', 0) // Only inflows (deposit > 0)
 
     // Apply filters
@@ -126,7 +125,6 @@ export async function getCashInSelectionSummary(
     let query = supabase
       .from('bank_transactions')
       .select('id, deposit')
-      .eq('created_by', user.id)
       .gt('deposit', 0)
 
     // Apply filters
@@ -215,7 +213,6 @@ export async function applyCashInType(
     let baseQuery = supabase
       .from('bank_transactions')
       .select('id')
-      .eq('created_by', user.id)
       .gt('deposit', 0)
 
     // Apply filters
@@ -314,7 +311,6 @@ export async function clearCashInType(
     let baseQuery = supabase
       .from('bank_transactions')
       .select('id')
-      .eq('created_by', user.id)
       .gt('deposit', 0)
 
     // Apply filters
@@ -464,7 +460,6 @@ export async function downloadCashInTemplate(): Promise<DownloadCashInTemplateRe
     const { data: accounts } = await supabase
       .from('bank_accounts')
       .select('bank_name, account_number')
-      .eq('created_by', user.id)
       .limit(1)
 
     const sampleBankAccount = accounts?.[0]
@@ -666,7 +661,6 @@ export async function parseAndMatchCashInImport(
     const { data: accounts } = await supabase
       .from('bank_accounts')
       .select('id, bank_name, account_number')
-      .eq('created_by', user.id)
 
     if (!accounts || accounts.length === 0) {
       return { success: false, error: 'ไม่พบบัญชีธนาคารในระบบ' }
@@ -791,7 +785,6 @@ export async function parseAndMatchCashInImport(
         const { data: txnByRef } = await supabase
           .from('bank_transactions')
           .select('*')
-          .eq('created_by', user.id)
           .eq('reference_id', bankTxnId)
           .gt('deposit', 0)
           .single()
@@ -818,7 +811,6 @@ export async function parseAndMatchCashInImport(
         const { data: candidates } = await supabase
           .from('bank_transactions')
           .select('*')
-          .eq('created_by', user.id)
           .eq('bank_account_id', bankAccountId)
           .eq('txn_date', txnDate)
           .eq('deposit', amount)

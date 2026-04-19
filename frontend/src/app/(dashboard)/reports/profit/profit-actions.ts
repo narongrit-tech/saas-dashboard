@@ -52,7 +52,6 @@ export async function getPlatformNetProfit(
     let query = supabase
       .from('platform_net_profit_daily')
       .select('*')
-      .eq('created_by', user.id)
       .gte('date', startDateStr)
       .lte('date', endDateStr)
       .order('date', { ascending: false })
@@ -156,7 +155,6 @@ export async function getProductProfit(
     let query = supabase
       .from('product_profit_daily')
       .select('*')
-      .eq('created_by', user.id)
       .gte('date', startDateStr)
       .lte('date', endDateStr)
       .order('date', { ascending: false })
@@ -266,7 +264,6 @@ export async function getSourceSplit(
     let query = supabase
       .from('source_split_daily')
       .select('*')
-      .eq('created_by', user.id)
       .gte('date', startDateStr)
       .lte('date', endDateStr)
       .order('date', { ascending: false })

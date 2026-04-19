@@ -14,15 +14,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Package, Search, Wrench } from 'lucide-react'
+import { Package, Search, Sliders, Wrench } from 'lucide-react'
 import { formatBangkok } from '@/lib/bangkok-time'
 import { getTodayBangkokString, getFirstDayOfMonthBangkokString } from '@/lib/bangkok-date-range'
-import { getReceiptLayers, getCOGSAllocations, checkIsInventoryAdmin } from '@/app/(dashboard)/inventory/actions'
+import { getReceiptLayers, getCOGSAllocations, checkIsInventoryAdmin, getAdjustments } from '@/app/(dashboard)/inventory/actions'
 import { ApplyCOGSMTDModal } from '@/components/inventory/ApplyCOGSMTDModal'
 import { COGSCoveragePanel } from '@/components/inventory/COGSCoveragePanel'
 import { RunHistorySection } from '@/components/inventory/RunHistorySection'
 import { RunDetailsModal } from '@/components/inventory/RunDetailsModal'
 import { FixMissingSkuDialog } from '@/components/inventory/FixMissingSkuDialog'
+import { AdjustStockDialog } from '@/components/inventory/AdjustStockDialog'
 
 interface ReceiptLayer {
   id: string
@@ -69,6 +70,20 @@ export function MovementsTab() {
   // Refresh trigger for run history
   const [runHistoryRefresh, setRunHistoryRefresh] = useState(0)
 
+  // Adjust Stock dialog
+  const [showAdjustStockDialog, setShowAdjustStockDialog] = useState(false)
+
+  // Adjustments tab data
+  const [adjustments, setAdjustments] = useState<Awaited<ReturnType<typeof getAdjustments>>['data']>([])
+  const [adjustmentsLoading, setAdjustmentsLoading] = useState(false)
+
+  // Inventory items for AdjustStockDialog SKU select
+  const [inventoryItemsForAdj, setInventoryItemsForAdj] = useState<Array<{ sku_internal: string; product_name: string; is_bundle: boolean }>>([])
+
+  // Prefill dates for "Continue failed run" flow
+  const [prefillStartDate, setPrefillStartDate] = useState<string | undefined>(undefined)
+  const [prefillEndDate, setPrefillEndDate] = useState<string | undefined>(undefined)
+
   useEffect(() => {
     loadData()
     checkAdmin()
@@ -76,9 +91,11 @@ export function MovementsTab() {
 
   async function loadData() {
     setLoading(true)
-    const [layersResult, allocationsResult] = await Promise.all([
+    setAdjustmentsLoading(true)
+    const [layersResult, allocationsResult, adjResult] = await Promise.all([
       getReceiptLayers(),
       getCOGSAllocations(),
+      getAdjustments(),
     ])
 
     if (layersResult.success) {
@@ -87,13 +104,32 @@ export function MovementsTab() {
     if (allocationsResult.success) {
       setAllocations(allocationsResult.data)
     }
+    if (adjResult.success) {
+      setAdjustments(adjResult.data)
+    }
     setLoading(false)
+    setAdjustmentsLoading(false)
   }
 
   async function checkAdmin() {
     const result = await checkIsInventoryAdmin()
     if (result.success) {
       setIsAdmin(result.isAdmin)
+      if (result.isAdmin) {
+        // Pre-fetch inventory items for the Adjust Stock dialog SKU dropdown
+        // Import lazily to avoid circular deps
+        const { getInventoryItems } = await import('@/app/(dashboard)/inventory/actions')
+        const itemsResult = await getInventoryItems()
+        if (itemsResult.success) {
+          setInventoryItemsForAdj(
+            (itemsResult.data ?? []).map((i: any) => ({
+              sku_internal: i.sku_internal,
+              product_name: i.product_name,
+              is_bundle: i.is_bundle ?? false,
+            }))
+          )
+        }
+      }
     }
   }
 
@@ -106,6 +142,21 @@ export function MovementsTab() {
   function handleCOGSSuccess() {
     loadData()
     setRunHistoryRefresh(prev => prev + 1)
+  }
+
+  function handleContinueRun(dateFrom: string, dateTo: string) {
+    setPrefillStartDate(dateFrom)
+    setPrefillEndDate(dateTo)
+    setShowCOGSMTDModal(true)
+  }
+
+  function handleCOGSModalClose(open: boolean) {
+    setShowCOGSMTDModal(open)
+    if (!open) {
+      // Clear prefill when modal closes
+      setPrefillStartDate(undefined)
+      setPrefillEndDate(undefined)
+    }
   }
 
   // Filter allocations by Order ID search
@@ -127,6 +178,7 @@ export function MovementsTab() {
           <TabsTrigger value="layers">Receipt Layers</TabsTrigger>
           <TabsTrigger value="allocations">COGS Allocations</TabsTrigger>
           <TabsTrigger value="runhistory">Run History</TabsTrigger>
+          <TabsTrigger value="adjustments">Adjustments</TabsTrigger>
         </TabsList>
 
         <TabsContent value="coverage" className="space-y-4">
@@ -311,12 +363,72 @@ export function MovementsTab() {
         <TabsContent value="runhistory">
           <RunHistorySection
             onViewDetails={handleViewRunDetails}
+            onContinueRun={handleContinueRun}
             refreshTrigger={runHistoryRefresh}
           />
+        </TabsContent>
+
+        <TabsContent value="adjustments">
+          {adjustmentsLoading ? (
+            <p className="text-center py-8 text-muted-foreground">กำลังโหลด...</p>
+          ) : adjustments.length === 0 ? (
+            <p className="text-center py-8 text-muted-foreground">ยังไม่มีการปรับสต็อก</p>
+          ) : (
+            <div className="rounded-md border overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>วันที่</TableHead>
+                    <TableHead>SKU</TableHead>
+                    <TableHead className="text-center">ประเภท</TableHead>
+                    <TableHead className="text-right">ปริมาณ</TableHead>
+                    <TableHead>เหตุผล</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {adjustments.map((adj) => (
+                    <TableRow key={adj.id}>
+                      <TableCell className="text-sm whitespace-nowrap">
+                        {formatBangkok(new Date(adj.adjusted_at), 'dd/MM/yyyy')}
+                      </TableCell>
+                      <TableCell className="font-mono text-sm">{adj.sku_internal}</TableCell>
+                      <TableCell className="text-center">
+                        {adj.adjustment_type === 'ADJUST_IN' ? (
+                          <Badge className="bg-green-100 text-green-800 border-green-200 text-xs">
+                            + IN
+                          </Badge>
+                        ) : (
+                          <Badge className="bg-red-100 text-red-800 border-red-200 text-xs">
+                            − OUT
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold">
+                        {Number(adj.quantity).toFixed(2)}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground max-w-xs truncate">
+                        {adj.reason}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </TabsContent>
       </Tabs>
 
       <div className="flex justify-end gap-2">
+        {isAdmin && (
+          <Button
+            variant="outline"
+            onClick={() => setShowAdjustStockDialog(true)}
+            className="border-purple-300 text-purple-600 hover:bg-purple-50 hover:text-purple-700 dark:border-purple-700 dark:text-purple-400 dark:hover:bg-purple-950"
+          >
+            <Sliders className="mr-2 h-4 w-4" />
+            Adjust Stock
+          </Button>
+        )}
         {isAdmin && (
           <Button
             variant="outline"
@@ -345,9 +457,11 @@ export function MovementsTab() {
       {isAdmin && (
         <ApplyCOGSMTDModal
           open={showCOGSMTDModal}
-          onOpenChange={setShowCOGSMTDModal}
+          onOpenChange={handleCOGSModalClose}
           onSuccess={handleCOGSSuccess}
           onViewRunDetails={handleViewRunDetails}
+          initialStartDate={prefillStartDate}
+          initialEndDate={prefillEndDate}
         />
       )}
 
@@ -367,6 +481,15 @@ export function MovementsTab() {
           endDate={endDate}
           onSuccess={handleCOGSSuccess}
           onViewRunDetails={handleViewRunDetails}
+        />
+      )}
+
+      {isAdmin && (
+        <AdjustStockDialog
+          open={showAdjustStockDialog}
+          onOpenChange={setShowAdjustStockDialog}
+          onSuccess={handleCOGSSuccess}
+          inventoryItems={inventoryItemsForAdj}
         />
       )}
     </div>

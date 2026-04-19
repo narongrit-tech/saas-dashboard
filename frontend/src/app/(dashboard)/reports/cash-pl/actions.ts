@@ -65,7 +65,6 @@ export async function getCashPL(): Promise<{
       supabase
         .from('bank_transactions')
         .select('txn_date, deposit, withdrawal')
-        .eq('created_by', user.id)
         .gte('txn_date', startDateStr)
         .lte('txn_date', endDateStr),
 

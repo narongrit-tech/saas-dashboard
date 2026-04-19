@@ -61,7 +61,6 @@ export async function getAffiliatePerformanceReport(
     const { data: internalAffiliates } = await supabase
       .from('internal_affiliates')
       .select('channel_id, display_name')
-      .eq('created_by', user.id)
       .eq('is_active', true)
 
     const internalChannelIds = new Set(
@@ -72,7 +71,6 @@ export async function getAffiliatePerformanceReport(
     let attrQuery = supabase
       .from('order_attribution')
       .select('order_id, affiliate_channel_id, commission_amt, commission_amt_organic, commission_amt_shop_ad')
-      .eq('created_by', user.id)
       .not('affiliate_channel_id', 'is', null)
 
     const { data: attributions, error: attrError } = await attrQuery
@@ -102,7 +100,6 @@ export async function getAffiliatePerformanceReport(
       let orderQuery1 = supabase
         .from('sales_orders')
         .select('order_id, external_order_id, total_amount, order_date')
-        .eq('created_by', user.id)
         .in('order_id', batch)
 
       // Apply date filters
@@ -117,7 +114,6 @@ export async function getAffiliatePerformanceReport(
       let orderQuery2 = supabase
         .from('sales_orders')
         .select('order_id, external_order_id, total_amount, order_date')
-        .eq('created_by', user.id)
         .in('external_order_id', batch)
 
       // Apply date filters

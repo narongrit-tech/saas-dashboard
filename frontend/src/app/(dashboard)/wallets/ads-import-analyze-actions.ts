@@ -77,7 +77,6 @@ export async function analyzeAdsImportFile(
     .select('id, file_name, date_min, date_max, import_scope_key, status, created_at, metadata')
     .eq('file_hash', fileHash)
     .eq('report_type', reportType)
-    .eq('created_by', user.id)
     .eq('status', 'success')
     .maybeSingle()
 
@@ -106,7 +105,6 @@ export async function analyzeAdsImportFile(
     .from('import_batches')
     .select('id, file_name, date_min, date_max, import_scope_key, status, created_at, metadata')
     .eq('import_scope_key', scopeKey)
-    .eq('created_by', user.id)
     .eq('status', 'success')
 
   if (scopeMatches && scopeMatches.length > 0) {
@@ -132,7 +130,6 @@ export async function analyzeAdsImportFile(
     .from('import_batches')
     .select('id, file_name, date_min, date_max, import_scope_key, status, created_at, metadata')
     .eq('report_type', reportType)
-    .eq('created_by', user.id)
     .eq('status', 'success')
     .lte('date_min', dateEnd)
     .gte('date_max', dateStart)

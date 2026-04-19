@@ -550,7 +550,6 @@ export async function importBankStatement(
         .from('bank_transactions')
         .select('id, txn_hash')
         .eq('bank_account_id', bankAccountId)
-        .eq('created_by', user.id)
         .in('txn_hash', hashesToRestore);
 
       if (newTxnsForRestore && newTxnsForRestore.length > 0) {
@@ -719,7 +718,6 @@ export async function checkImportOverlap(
       .from('bank_transactions')
       .select('*', { count: 'exact', head: true })
       .eq('bank_account_id', bankAccountId)
-      .eq('created_by', user.id)
       .gte('txn_date', startDate)
       .lte('txn_date', endDate);
 
@@ -845,8 +843,7 @@ export async function repairPendingBatches(
       const { count: actualCount, error: countError } = await supabase
         .from('bank_transactions')
         .select('*', { count: 'exact', head: true })
-        .eq('import_batch_id', batch.id)
-        .eq('created_by', user.id);
+        .eq('import_batch_id', batch.id);
 
       if (countError) {
         console.error(`Error counting transactions for batch ${batch.id}:`, countError);

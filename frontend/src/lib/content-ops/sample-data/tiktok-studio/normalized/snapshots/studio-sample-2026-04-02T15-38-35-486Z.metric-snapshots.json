@@ -1,0 +1,80 @@
+[
+  {
+    "snapshot_id": "studio-sample-2026-04-02T15-38-35-486Z",
+    "snapshot_row_index": 0,
+    "post_url": "https://www.tiktok.com/@kibnalisa.bohktoh/video/7619367256706829576",
+    "platform": "tiktok",
+    "scraped_at": "2026-04-02T15:38:35.486Z",
+    "privacy": "Everyone",
+    "views_total": 888000,
+    "likes_total": 8367,
+    "comments_total": 326,
+    "is_pinned": true,
+    "duration": "01:04"
+  },
+  {
+    "snapshot_id": "studio-sample-2026-04-02T15-38-35-486Z",
+    "snapshot_row_index": 1,
+    "post_url": "https://www.tiktok.com/@kibnalisa.bohktoh/video/7620122874107464968",
+    "platform": "tiktok",
+    "scraped_at": "2026-04-02T15:38:35.486Z",
+    "privacy": "Everyone",
+    "views_total": 2700000,
+    "likes_total": 41000,
+    "comments_total": 923,
+    "is_pinned": true,
+    "duration": "02:18"
+  },
+  {
+    "snapshot_id": "studio-sample-2026-04-02T15-38-35-486Z",
+    "snapshot_row_index": 2,
+    "post_url": "https://www.tiktok.com/@kibnalisa.bohktoh/video/7616414429202107668",
+    "platform": "tiktok",
+    "scraped_at": "2026-04-02T15:38:35.486Z",
+    "privacy": "Everyone",
+    "views_total": 5100000,
+    "likes_total": 92000,
+    "comments_total": 471,
+    "is_pinned": true,
+    "duration": "01:49"
+  },
+  {
+    "snapshot_id": "studio-sample-2026-04-02T15-38-35-486Z",
+    "snapshot_row_index": 3,
+    "post_url": "https://www.tiktok.com/@kibnalisa.bohktoh/video/7624044038580161813",
+    "platform": "tiktok",
+    "scraped_at": "2026-04-02T15:38:35.486Z",
+    "privacy": "Everyone",
+    "views_total": 809,
+    "likes_total": 26,
+    "comments_total": 5,
+    "is_pinned": false,
+    "duration": "00:34"
+  },
+  {
+    "snapshot_id": "studio-sample-2026-04-02T15-38-35-486Z",
+    "snapshot_row_index": 4,
+    "post_url": "https://www.tiktok.com/@kibnalisa.bohktoh/video/7623811062952922389",
+    "platform": "tiktok",
+    "scraped_at": "2026-04-02T15:38:35.486Z",
+    "privacy": "Everyone",
+    "views_total": 1198,
+    "likes_total": 31,
+    "comments_total": 3,
+    "is_pinned": false,
+    "duration": "02:04"
+  },
+  {
+    "snapshot_id": "studio-sample-2026-04-02T15-38-35-486Z",
+    "snapshot_row_index": 5,
+    "post_url": "https://www.tiktok.com/@kibnalisa.bohktoh/video/7623776334434651412",
+    "platform": "tiktok",
+    "scraped_at": "2026-04-02T15:38:35.486Z",
+    "privacy": "Everyone",
+    "views_total": 3667,
+    "likes_total": 75,
+    "comments_total": 5,
+    "is_pinned": false,
+    "duration": "01:01"
+  }
+]

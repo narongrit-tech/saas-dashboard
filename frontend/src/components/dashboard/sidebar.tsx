@@ -32,7 +32,16 @@ import {
   Zap,
   GitFork,
   UserCircle,
+  Package2,
+  Store,
+  Search,
+  GitBranch,
+  HeartPulse,
+  Upload,
+  BarChart2,
   Video,
+  GitMerge,
+  Film,
 } from 'lucide-react'
 
 interface MenuItem {
@@ -102,7 +111,47 @@ const menuGroups: MenuGroup[] = [
       {
         title: 'Content Library',
         href: '/content-ops/library',
+        icon: Film,
+      },
+      {
+        title: 'Video Overview',
+        href: '/content-ops/video-master',
         icon: Video,
+      },
+      {
+        title: 'Products',
+        href: '/content-ops/products',
+        icon: Package2,
+      },
+      {
+        title: 'Shops',
+        href: '/content-ops/shops',
+        icon: Store,
+      },
+      {
+        title: 'Orders Explorer',
+        href: '/content-ops/analysis/orders',
+        icon: Search,
+      },
+      {
+        title: 'Attribution',
+        href: '/content-ops/analysis/attribution',
+        icon: GitBranch,
+      },
+      {
+        title: 'Data Health',
+        href: '/content-ops/data-health',
+        icon: HeartPulse,
+      },
+      {
+        title: 'Mapping Review',
+        href: '/content-ops/video-mapping-review',
+        icon: GitMerge,
+      },
+      {
+        title: 'Upload Data',
+        href: '/content-ops/tiktok-affiliate/upload',
+        icon: Upload,
       },
     ],
   },
@@ -204,8 +253,10 @@ export function SidebarContent({ onNavigate }: SidebarContentProps) {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
 
   const isItemActive = useCallback((href: string): boolean => {
-    // Settings sub-pages use startsWith so /settings/general is active on that path
-    if (href.startsWith('/settings/')) return pathname === href || pathname.startsWith(href + '/')
+    // Prefix-match for settings and content-ops sub-sections
+    if (href.startsWith('/settings/') || href.startsWith('/content-ops/')) {
+      return pathname === href || pathname.startsWith(href + '/')
+    }
     return pathname === href
   }, [pathname])
 

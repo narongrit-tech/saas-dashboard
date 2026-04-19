@@ -95,7 +95,6 @@ export async function getStaleImportBatchCount(): Promise<{
       .from('import_batches')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'processing')
-      .eq('created_by', user.id)
       .lt('created_at', oneHourAgo)
 
     if (error) {

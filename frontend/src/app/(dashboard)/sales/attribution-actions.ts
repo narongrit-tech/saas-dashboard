@@ -27,7 +27,6 @@ export async function batchFetchAttributions(
   const { data: attributions, error } = await supabase
     .from('order_attribution')
     .select('*')
-    .eq('created_by', user.id)
     .in('order_id', orderIds)
 
   if (error) {
@@ -58,7 +57,6 @@ export async function getOrderAttribution(orderId: string): Promise<OrderAttribu
   const { data, error } = await supabase
     .from('order_attribution')
     .select('*')
-    .eq('created_by', user.id)
     .eq('order_id', orderId)
     .single()
 

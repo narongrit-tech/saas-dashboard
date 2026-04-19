@@ -138,6 +138,7 @@ export function ShopeeOrdersImportDialog({
   } | null>(null)
   const [cogsApplying, setCogsApplying] = useState(false)
   const [cogsApplied, setCogsApplied] = useState(false)
+  const [cogsError, setCogsError] = useState<string | null>(null)
 
   // Reset on open
   useEffect(() => {
@@ -153,6 +154,9 @@ export function ShopeeOrdersImportDialog({
       setMissingColumns([])
       setPreviewSummary(null)
       setDuplicateInfo(null)
+      setCogsApplying(false)
+      setCogsApplied(false)
+      setCogsError(null)
     }
   }, [open])
 
@@ -621,40 +625,67 @@ export function ShopeeOrdersImportDialog({
             )}
 
             {/* Apply COGS button */}
-            {result.success && result.batchId && (
-              <Button
-                variant="secondary"
-                className="w-full"
-                disabled={cogsApplying || cogsApplied}
-                onClick={async () => {
-                  setCogsApplying(true)
-                  try {
-                    applyCOGSForBatch(result.batchId!).then(() => {
-                      setCogsApplied(true)
-                    })
-                    toast({
-                      title: 'เริ่มประมวลผล COGS แล้ว',
-                      description: 'ดูผลที่กระดิ่งมุมขวาบนเมื่อเสร็จ',
-                    })
-                    setCogsApplied(true)
-                  } catch {
-                    toast({
-                      variant: 'destructive',
-                      title: 'Apply COGS ล้มเหลว',
-                      description: 'กรุณาลองใหม่จากหน้า Inventory',
-                    })
-                  } finally {
-                    setCogsApplying(false)
-                  }
-                }}
-              >
-                {cogsApplying ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Package className="mr-2 h-4 w-4" />
+            {result.success && result.batchId && !cogsApplied && (
+              <div className="space-y-2">
+                <Button
+                  variant="secondary"
+                  className="w-full"
+                  disabled={cogsApplying}
+                  onClick={async () => {
+                    const batchId = result.batchId!
+                    console.log(`[ShopeeImportDialog] Calling applyCOGSForBatch batchId=${batchId}`)
+                    setCogsApplying(true)
+                    setCogsError(null)
+                    try {
+                      const cogsResult = await applyCOGSForBatch(batchId)
+                      console.log(`[ShopeeImportDialog] applyCOGSForBatch result:`, JSON.stringify({
+                        success: cogsResult.success,
+                        error: cogsResult.error,
+                        cogs_run_id: cogsResult.data?.cogs_run_id,
+                        eligible: cogsResult.data?.eligible,
+                        successful: cogsResult.data?.successful,
+                      }))
+                      if (cogsResult.success) {
+                        const d = cogsResult.data
+                        toast({
+                          title: 'Apply COGS เสร็จสิ้น',
+                          description: `${d?.successful ?? 0} สำเร็จ, ${d?.skipped ?? 0} ข้าม, ${d?.failed ?? 0} ล้มเหลว — ดูรายละเอียดที่กระดิ่งมุมขวาบน`,
+                        })
+                        setCogsApplied(true)
+                      } else {
+                        const errMsg = cogsResult.error || 'Apply COGS ล้มเหลว'
+                        console.error(`[ShopeeImportDialog] applyCOGSForBatch returned error: ${errMsg}`)
+                        setCogsError(errMsg)
+                      }
+                    } catch (err) {
+                      const msg = err instanceof Error ? err.message : 'Apply COGS ล้มเหลว'
+                      console.error(`[ShopeeImportDialog] applyCOGSForBatch threw:`, err)
+                      setCogsError(msg)
+                    } finally {
+                      setCogsApplying(false)
+                    }
+                  }}
+                >
+                  {cogsApplying ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Package className="mr-2 h-4 w-4" />
+                  )}
+                  {cogsApplying ? 'กำลังประมวลผล COGS...' : 'Apply COGS สำหรับ batch นี้'}
+                </Button>
+                {cogsError && (
+                  <Alert variant="destructive">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription className="text-xs">{cogsError}</AlertDescription>
+                  </Alert>
                 )}
-                {cogsApplied ? 'COGS กำลังประมวลผล...' : 'Apply COGS สำหรับ batch นี้'}
-              </Button>
+              </div>
+            )}
+            {result.success && cogsApplied && (
+              <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-md px-3 py-2">
+                <CheckCircle2 className="h-4 w-4 shrink-0" />
+                <span>COGS เสร็จสิ้น — ดูรายละเอียดที่กระดิ่งมุมขวาบน</span>
+              </div>
             )}
 
             <div className="flex gap-2">

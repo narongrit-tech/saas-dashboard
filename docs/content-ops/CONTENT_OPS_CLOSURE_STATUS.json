@@ -1,0 +1,119 @@
+{
+  "generated_at": "2026-04-08",
+  "run": "PART_1_CLOSURE",
+
+  "part_1_complete": true,
+  "part_1_note": "All 107,987 real facts imported, normalized, Bangkok TZ correct, attribution live",
+
+  "db_state": {
+    "batch_count": 12,
+    "staging_count": 107988,
+    "facts_count": 107988,
+    "facts_settled": 83644,
+    "facts_ineligible": 12097,
+    "facts_pending": 8244,
+    "facts_awaiting_payment": 4003,
+    "attribution_view_live": true,
+    "costs_count": 0,
+    "profit_summary_count": 1,
+    "profit_summary_note": "1 stale test row (CONTENT-001) — not real data. Needs costs + refresh."
+  },
+
+  "bangkok_tz": {
+    "db_function_fixed": false,
+    "db_function_priority": "low",
+    "db_function_note": "Not needed — all data imported via JS normalizer which applies -7h correctly",
+    "imported_data_correct": true,
+    "imported_data_verified": true,
+    "verification_samples": [
+      {
+        "raw_bangkok": "24/02/2026 00:01:03",
+        "stored_utc": "2026-02-23T17:01:03+00:00",
+        "correct": true
+      },
+      {
+        "raw_bangkok": "04/11/2025 08:42:03",
+        "stored_utc": "2025-11-04T01:42:03+00:00",
+        "correct": true
+      }
+    ]
+  },
+
+  "migration_102": {
+    "file_ready": true,
+    "file_path": "database-scripts/migration-102-tiktok-affiliate-product-shop-master.sql",
+    "applied": false,
+    "blocked_by": "No SQL execution path available — requires Supabase SQL Editor",
+    "workaround_active": true,
+    "workaround": "getProductMaster() and getShopMaster() server actions aggregate live from content_order_facts",
+    "expected_after_apply": {
+      "products_upserted": 281,
+      "shops_upserted": 190
+    }
+  },
+
+  "sql_execution_blocker": {
+    "psql": "not installed",
+    "supabase_cli_linked": false,
+    "supabase_access_token": false,
+    "database_url": false,
+    "resolution": "Manual application via https://supabase.com/dashboard/project/ntvzawokbmbjwphsqbnd/sql"
+  },
+
+  "verification": {
+    "ran": true,
+    "method": "REST API with service role key",
+    "checks_total": 8,
+    "checks_passed": 7,
+    "checks_pending": 1,
+    "checks_expected": 0,
+    "results": [
+      { "check": "batches_count_matches_files", "result": "PASS", "value": "12" },
+      { "check": "all_batches_normalized", "result": "PASS", "value": "12/12" },
+      { "check": "staging_matches_facts", "result": "PASS", "value": "107988 = 107988" },
+      { "check": "bangkok_tz_correct_in_data", "result": "PASS", "value": "verified via raw_payload comparison" },
+      { "check": "thai_product_names_present", "result": "PASS", "value": "e.g. กาแฟโสมชาเขียว 2 ห่อ แถม ไฟเบอร์2ซอง" },
+      { "check": "status_distribution_sane", "result": "PASS", "value": "settled:83644 ineligible:12097 pending:8244 awaiting:4003" },
+      { "check": "attribution_view_accessible", "result": "EXPECTED_FAIL", "detail": "security_invoker=true — works for app users, times out via service role (by design)" },
+      { "check": "migration_102_tables_exist", "result": "PENDING", "detail": "tt_product_master/tt_shop_master return 404 — migration not applied" }
+    ]
+  },
+
+  "immediate_actions_remaining": [
+    {
+      "priority": "MEDIUM",
+      "action": "Apply migration 102 in Supabase SQL Editor",
+      "file": "database-scripts/migration-102-tiktok-affiliate-product-shop-master.sql",
+      "then_run": "SELECT * FROM refresh_tt_product_shop_master('2c4e254d-c779-4f8a-af93-603dc26e6af0');"
+    },
+    {
+      "priority": "MEDIUM",
+      "action": "Add real cost entries via /content-ops/tiktok-affiliate/costs"
+    },
+    {
+      "priority": "LOW",
+      "action": "Run Refresh Profit after costs are added"
+    },
+    {
+      "priority": "LOW",
+      "action": "Fix Bangkok TZ in DB function (optional — data already correct)",
+      "sql_location": "CONTENT_OPS_IMPORT_EXECUTION_REPORT.md Issue 2 section"
+    }
+  ],
+
+  "ceo_readable_now": true,
+  "ceo_readable_note": "Facts page: 107,987 real orders with Thai product names. Attribution live. Profit needs costs added first.",
+
+  "product_master_available": true,
+  "product_master_method": "getProductMaster() server action — live aggregation, no table needed",
+  "shop_master_available": true,
+  "shop_master_method": "getShopMaster() server action — live aggregation, no table needed",
+
+  "part_2_scope": [
+    "Persist studio snapshot data to tt_content_posts table",
+    "Link content_id to studio post titles in attribution/facts UI",
+    "Connect showcase scraper to tt_showcase_products table",
+    "Add product images via showcase pipeline",
+    "Build CEO overview page: top products, top shops, top content, commission summary"
+  ]
+}

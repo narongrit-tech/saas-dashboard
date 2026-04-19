@@ -605,7 +605,6 @@ export async function getSalesAggregates(filters: ExportFilters & { dateBasis?: 
 
     // 2. Prepare parameters for RPC call
     const params = {
-      p_user_id: user.id,
       p_start_date: filters.startDate || '1970-01-01',
       p_end_date: filters.endDate || '2099-12-31',
       p_date_basis: dateBasis,
@@ -727,7 +726,6 @@ export async function getSalesAggregatesTikTokLike(filters: ExportFilters): Prom
 
     // 2. Prepare parameters for RPC call
     const params = {
-      p_user_id: user.id,
       p_start_date: filters.startDate || '1970-01-01',
       p_end_date: filters.endDate || '2099-12-31',
       p_source_platform: filters.sourcePlatform && filters.sourcePlatform !== 'all'
@@ -813,7 +811,6 @@ export async function getSalesStoryAggregates(filters: ExportFilters): Promise<{
 
     // 2. Prepare parameters for RPC call
     const params = {
-      p_user_id: user.id,
       p_start_date: filters.startDate || '1970-01-01',
       p_end_date: filters.endDate || '2099-12-31',
       p_source_platform: filters.sourcePlatform && filters.sourcePlatform !== 'all'
@@ -2034,7 +2031,6 @@ export async function getSalesGMVSummary(
     let baseQuery: any = supabase
       .from('sales_orders')
       .select('external_order_id, order_id, order_amount, total_amount, shipped_at, status_group, created_time, order_date, paid_time')
-      .eq('created_by', user.id)
 
     // Non-date filters
     if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
@@ -2276,7 +2272,6 @@ export async function getSalesPlatformBreakdown(
     let baseQuery: any = supabase
       .from('sales_orders')
       .select('external_order_id, order_id, order_amount, total_amount, shipped_at, status_group, created_time, order_date, paid_time, source_platform')
-      .eq('created_by', user.id)
 
     if (filters.sourcePlatform && filters.sourcePlatform !== 'all') {
       baseQuery = baseQuery.eq('source_platform', filters.sourcePlatform)

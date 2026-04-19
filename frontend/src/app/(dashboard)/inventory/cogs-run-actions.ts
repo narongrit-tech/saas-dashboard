@@ -4,9 +4,15 @@
  * COGS Run Actions
  * Server actions for cogs_allocation_runs and notifications tables.
  * All operations are scoped to the authenticated user via Supabase RLS.
+ *
+ * NOTE: completeCogsRunSuccess, completeCogsRunFailed, and updateCogsRunProgress
+ * intentionally use the SERVICE-ROLE client so that finalization cannot be silently
+ * skipped due to a user-session expiry or cookie error during a long-running job.
+ * The runId is validated upstream by the caller who already holds admin auth.
  */
 
 import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/service'
 
 // ─────────────────────────────────────────────
 // Types
@@ -39,17 +45,25 @@ export interface Notification {
 }
 
 export interface CogsSummaryJson {
-  total: number
+  // Final summary fields (written on success)
+  total?: number
   eligible?: number
-  successful: number
-  skipped: number
-  failed: number
+  successful?: number
+  skipped?: number
+  failed?: number
   partial?: number
   skip_reasons?: object[]
   date_from?: string
   date_to?: string
   import_batch_id?: string
   method?: string
+  // In-progress / resume fields (written by updateCogsRunProgress)
+  total_so_far?: number
+  successful_so_far?: number
+  skipped_so_far?: number
+  failed_so_far?: number
+  offset_completed?: number
+  _phase?: string
 }
 
 // ─────────────────────────────────────────────
@@ -109,20 +123,14 @@ export async function createCogsRun(params: {
 
 /**
  * Mark a cogs_allocation_runs row as success and store summary.
+ * Uses service-role client so this cannot silently fail due to session expiry.
  */
 export async function completeCogsRunSuccess(
   runId: string,
   summaryJson: object
 ): Promise<void> {
   try {
-    const supabase = createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) return
+    const supabase = createServiceClient()
 
     const { error } = await supabase
       .from('cogs_allocation_runs')
@@ -132,7 +140,6 @@ export async function completeCogsRunSuccess(
         updated_at: new Date().toISOString(),
       })
       .eq('id', runId)
-      .eq('created_by', user.id)
 
     if (error) {
       console.error('completeCogsRunSuccess error:', error)
@@ -148,20 +155,14 @@ export async function completeCogsRunSuccess(
 
 /**
  * Mark a cogs_allocation_runs row as failed with an error message.
+ * Uses service-role client so this cannot silently fail due to session expiry.
  */
 export async function completeCogsRunFailed(
   runId: string,
   errorMessage: string
 ): Promise<void> {
   try {
-    const supabase = createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) return
+    const supabase = createServiceClient()
 
     const { error } = await supabase
       .from('cogs_allocation_runs')
@@ -171,13 +172,46 @@ export async function completeCogsRunFailed(
         updated_at: new Date().toISOString(),
       })
       .eq('id', runId)
-      .eq('created_by', user.id)
 
     if (error) {
       console.error('completeCogsRunFailed error:', error)
     }
   } catch (err) {
     console.error('Unexpected error in completeCogsRunFailed:', err)
+  }
+}
+
+// ─────────────────────────────────────────────
+// 2b) updateCogsRunProgress
+// ─────────────────────────────────────────────
+
+/**
+ * Persist incremental progress into summary_json for a still-running job.
+ * Used by chunked Allocate MTD between requests so the run row reflects
+ * partial progress instead of staying null while the job continues.
+ * Uses service-role so it cannot be blocked by session state.
+ */
+export async function updateCogsRunProgress(
+  runId: string,
+  progressJson: object
+): Promise<void> {
+  try {
+    const supabase = createServiceClient()
+
+    const { error } = await supabase
+      .from('cogs_allocation_runs')
+      .update({
+        summary_json: progressJson,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', runId)
+      .eq('status', 'running') // safety: only touch rows still in-flight
+
+    if (error) {
+      console.error('updateCogsRunProgress error:', error)
+    }
+  } catch (err) {
+    console.error('Unexpected error in updateCogsRunProgress:', err)
   }
 }
 
@@ -350,7 +384,6 @@ export async function getCogsRun(id: string): Promise<CogsRun | null> {
       .from('cogs_allocation_runs')
       .select('*')
       .eq('id', id)
-      .eq('created_by', user.id)
       .single()
 
     if (error || !data) {
@@ -364,5 +397,122 @@ export async function getCogsRun(id: string): Promise<CogsRun | null> {
   } catch (err) {
     console.error('Unexpected error in getCogsRun:', err)
     return null
+  }
+}
+
+// ─────────────────────────────────────────────
+// 9) getActiveCogsRun
+// ─────────────────────────────────────────────
+
+/**
+ * Return the most recent cogs_allocation_runs row with status='running', or null.
+ * Read-only — used for observability UI only. Does not affect any running job.
+ */
+export async function getActiveCogsRun(): Promise<CogsRun | null> {
+  try {
+    const supabase = createClient()
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) return null
+
+    const { data, error } = await supabase
+      .from('cogs_allocation_runs')
+      .select('*')
+      .eq('status', 'running')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (error) {
+      console.error('getActiveCogsRun error:', error)
+      return null
+    }
+
+    return data as CogsRun | null
+  } catch (err) {
+    console.error('Unexpected error in getActiveCogsRun:', err)
+    return null
+  }
+}
+
+// ─────────────────────────────────────────────
+// 10) getRecentCogsRunsFromRunsTable
+// ─────────────────────────────────────────────
+
+/**
+ * Fetch recent rows from cogs_allocation_runs (with status, summary_json, etc.).
+ * Read-only — used for observability UI only.
+ */
+export async function getRecentCogsRunsFromRunsTable(limit = 20): Promise<CogsRun[]> {
+  try {
+    const supabase = createClient()
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) return []
+
+    const { data, error } = await supabase
+      .from('cogs_allocation_runs')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit)
+
+    if (error) {
+      console.error('getRecentCogsRunsFromRunsTable error:', error)
+      return []
+    }
+
+    return (data ?? []) as CogsRun[]
+  } catch (err) {
+    console.error('Unexpected error in getRecentCogsRunsFromRunsTable:', err)
+    return []
+  }
+}
+
+// ─────────────────────────────────────────────
+// 11) getRunStatusForDateRange
+// ─────────────────────────────────────────────
+
+/**
+ * Check whether a successful or failed run already exists for the given date range.
+ * Used by ApplyCOGSMTDModal to warn about duplicate reruns and show resume info.
+ */
+export async function getRunStatusForDateRange(
+  dateFrom: string,
+  dateTo: string
+): Promise<{ successRun: CogsRun | null; failedRun: CogsRun | null }> {
+  try {
+    const supabase = createClient()
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+    if (authError || !user) return { successRun: null, failedRun: null }
+
+    const { data, error } = await supabase
+      .from('cogs_allocation_runs')
+      .select('*')
+      .in('status', ['success', 'failed'])
+      .eq('trigger_source', 'DATE_RANGE')
+      .eq('date_from', dateFrom)
+      .eq('date_to', dateTo)
+      .order('created_at', { ascending: false })
+      .limit(10)
+
+    if (error || !data) return { successRun: null, failedRun: null }
+
+    const rows = data as CogsRun[]
+    const successRun = rows.find((r) => r.status === 'success') ?? null
+    const failedRun = rows.find((r) => r.status === 'failed') ?? null
+    return { successRun, failedRun }
+  } catch {
+    return { successRun: null, failedRun: null }
   }
 }

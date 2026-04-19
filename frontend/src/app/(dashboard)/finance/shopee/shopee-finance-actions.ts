@@ -74,7 +74,6 @@ export async function createShopeeBalanceBatch(formData: FormData): Promise<Shop
         .eq('file_hash', fileHash)
         .eq('marketplace', 'shopee')
         .eq('report_type', 'shopee_balance_transactions')
-        .eq('created_by', user.id)
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle()
@@ -108,7 +107,6 @@ export async function createShopeeBalanceBatch(formData: FormData): Promise<Shop
       .eq('file_hash', fileHash)
       .eq('marketplace', 'shopee')
       .eq('report_type', 'shopee_balance_transactions')
-      .eq('created_by', user.id)
       .eq('status', 'processing')
       .gte('created_at', thirtyMinAgo)
       .limit(1)
@@ -266,7 +264,6 @@ export async function createShopeeSettlementBatch(formData: FormData): Promise<S
         .eq('file_hash', fileHash)
         .eq('marketplace', 'shopee')
         .eq('report_type', 'shopee_order_settlements')
-        .eq('created_by', user.id)
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle()
@@ -299,7 +296,6 @@ export async function createShopeeSettlementBatch(formData: FormData): Promise<S
       .eq('file_hash', fileHash)
       .eq('marketplace', 'shopee')
       .eq('report_type', 'shopee_order_settlements')
-      .eq('created_by', user.id)
       .eq('status', 'processing')
       .gte('created_at', thirtyMinAgo)
       .limit(1)
@@ -504,12 +500,10 @@ export async function getShopeeFinanceSummary(params?: {
   let settleAggQ = supabase
     .from('shopee_order_settlements')
     .select('net_payout')
-    .eq('created_by', user.id)
 
   let walletAggQ = supabase
     .from('shopee_wallet_transactions')
     .select('amount, transaction_type, status')
-    .eq('created_by', user.id)
 
   if (startDate) {
     settleAggQ = settleAggQ.gte('paid_out_date', startDate)
@@ -524,14 +518,12 @@ export async function getShopeeFinanceSummary(params?: {
   let settleDispQ = supabase
     .from('shopee_order_settlements')
     .select('id, external_order_id, paid_out_date, order_date, net_payout, commission, service_fee, payment_processing_fee, platform_infra_fee, shipping_buyer_paid, refunds')
-    .eq('created_by', user.id)
     .order('paid_out_date', { ascending: false })
     .limit(200)
 
   let walletDispQ = supabase
     .from('shopee_wallet_transactions')
     .select('id, occurred_at, transaction_type, transaction_mode, ref_no, status, amount, balance')
-    .eq('created_by', user.id)
     .order('occurred_at', { ascending: false })
     .limit(200)
 

@@ -3,7 +3,7 @@
  * Run: node create-invalid-test-file.js
  */
 
-const XLSX = require('./frontend/node_modules/xlsx')
+const XLSX = require('../frontend/node_modules/xlsx')
 
 // Invalid data with wrong headers
 const data = [

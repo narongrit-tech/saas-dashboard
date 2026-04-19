@@ -719,11 +719,10 @@ export async function getCandidateBankTransactions(
       return { success: false, error: 'ไม่พบข้อมูล User กรุณา Login ใหม่' }
     }
 
-    // Get user's selected commission source accounts
+    // Get team's configured commission source accounts (team-shared config)
     const { data: sources, error: sourcesError } = await supabase
       .from('ceo_commission_sources')
       .select('bank_account_id')
-      .eq('created_by', user.id)
 
     if (sourcesError) {
       return { success: false, error: `โหลดแหล่งเงินไม่สำเร็จ: ${sourcesError.message}` }
@@ -779,7 +778,6 @@ export async function getCandidateBankTransactions(
     const { data: declared, error: declaredError } = await supabase
       .from('ceo_commission_receipts')
       .select('bank_transaction_id')
-      .eq('created_by', user.id)
       .not('bank_transaction_id', 'is', null)
 
     if (declaredError) {
@@ -842,23 +840,21 @@ export async function createCommissionFromBankTransaction(
       return { success: false, error: 'ไม่พบข้อมูล User กรุณา Login ใหม่' }
     }
 
-    // Verify bank transaction exists and belongs to user
+    // Verify bank transaction exists and is accessible (team RLS enforced)
     const { data: bankTxn, error: bankTxnError } = await supabase
       .from('bank_transactions')
       .select('*')
       .eq('id', input.bank_transaction_id)
-      .eq('created_by', user.id)
       .single()
 
     if (bankTxnError || !bankTxn) {
       return { success: false, error: 'ไม่พบรายการธนาคารนี้หรือคุณไม่มีสิทธิ์เข้าถึง' }
     }
 
-    // Verify bank account is in user's commission sources
+    // Verify bank account is in team's commission sources (team-shared config)
     const { data: sourceCheck, error: sourceCheckError } = await supabase
       .from('ceo_commission_sources')
       .select('id')
-      .eq('created_by', user.id)
       .eq('bank_account_id', bankTxn.bank_account_id)
       .single()
 

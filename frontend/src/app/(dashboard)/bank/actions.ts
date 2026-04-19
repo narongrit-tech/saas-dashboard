@@ -43,7 +43,6 @@ export async function getBankAccounts(): Promise<GetBankAccountsResponse> {
     const { data, error } = await supabase
       .from('bank_accounts')
       .select('*')
-      .eq('created_by', user.id)
       .eq('is_active', true)
       .order('bank_name', { ascending: true });
 
@@ -140,7 +139,6 @@ export async function getBankDailySummary(
         .from('bank_transactions')
         .select('txn_date, deposit, withdrawal')
         .eq('bank_account_id', bankAccountId)
-        .eq('created_by', user.id)
         .gte('txn_date', startStr)
         .lte('txn_date', endStr)
         .order('txn_date', { ascending: true })
@@ -259,8 +257,7 @@ export async function getBankTransactions(
     let query = supabase
       .from('bank_transactions')
       .select('*', { count: 'exact' })
-      .eq('bank_account_id', bankAccountId)
-      .eq('created_by', user.id);
+      .eq('bank_account_id', bankAccountId);
 
     // Date range filter
     if (filters.startDate) {
@@ -331,7 +328,6 @@ export async function exportBankTransactions(
       .from('bank_accounts')
       .select('bank_name, account_number')
       .eq('id', bankAccountId)
-      .eq('created_by', user.id)
       .single();
 
     const accountName = account
@@ -349,7 +345,6 @@ export async function exportBankTransactions(
         .from('bank_transactions')
         .select('*')
         .eq('bank_account_id', bankAccountId)
-        .eq('created_by', user.id)
         .gte('txn_date', startStr)
         .lte('txn_date', endStr)
         .order('txn_date', { ascending: true })
@@ -498,12 +493,11 @@ export async function upsertOpeningBalance(
       return { success: false, error: 'Unauthorized' };
     }
 
-    // Verify bank account ownership
+    // Verify bank account exists and is accessible (team RLS enforced)
     const { data: account, error: accountError } = await supabase
       .from('bank_accounts')
       .select('id')
       .eq('id', bankAccountId)
-      .eq('created_by', user.id)
       .single();
 
     if (accountError || !account) {
@@ -644,12 +638,11 @@ export async function saveReportedBalance(
       return { success: false, error: 'Unauthorized' };
     }
 
-    // Verify bank account ownership
+    // Verify bank account exists and is accessible (team RLS enforced)
     const { data: account, error: accountError } = await supabase
       .from('bank_accounts')
       .select('id')
       .eq('id', bankAccountId)
-      .eq('created_by', user.id)
       .single();
 
     if (accountError || !account) {
@@ -732,7 +725,6 @@ export async function getBankBalanceSummary(
         .from('bank_transactions')
         .select('deposit, withdrawal')
         .eq('bank_account_id', bankAccountId)
-        .eq('created_by', user.id)
         .gte('txn_date', startDate)
         .lte('txn_date', endDate)
         .range(from, from + pageSize - 1);
