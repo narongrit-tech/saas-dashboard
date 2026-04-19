@@ -5,6 +5,7 @@ import path from 'node:path'
 import * as XLSX from 'xlsx'
 
 import { createServiceClient } from '../supabase/service'
+import { syncAffiliateBatch } from './video-master-sync'
 
 const OBSERVED_HEADERS = [
   'Order ID',
@@ -508,6 +509,8 @@ export async function importTikTokAffiliateFile(
     if (batchSummaryError || !batchSummary) {
       throw new Error(batchSummaryError?.message || 'Failed to read batch summary after normalization.')
     }
+
+    syncAffiliateBatch(supabase, options.createdBy, batch.id).catch(() => {})
 
     return {
       batchId: batch.id,

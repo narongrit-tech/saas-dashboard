@@ -5,10 +5,12 @@ import {
   AlertCircle,
   Info,
   ArrowRight,
+  Video,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { getDataHealth } from '../actions'
+import { getVideoMasterHealth } from '../video-master/actions'
 
 export const dynamic = 'force-dynamic'
 
@@ -37,7 +39,10 @@ const PRIORITY_BADGE: Record<string, string> = {
 }
 
 export default async function DataHealthPage() {
-  const { data, error } = await getDataHealth()
+  const [{ data, error }, vmHealth] = await Promise.all([
+    getDataHealth(),
+    getVideoMasterHealth(),
+  ])
 
   if (error || !data) {
     return (
@@ -193,6 +198,54 @@ export default async function DataHealthPage() {
           ))}
         </CardContent>
       </Card>
+
+      {/* Video Master Coverage */}
+      {vmHealth.totalVideos > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base font-medium flex items-center gap-2">
+              <Video className="h-4 w-4" />
+              Video Master Coverage
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+              {[
+                { label: 'Total Videos', value: vmHealth.totalVideos, suffix: '' },
+                { label: 'Studio', value: vmHealth.studioCount, suffix: `/ ${vmHealth.totalVideos}` },
+                { label: 'Perf Stats', value: vmHealth.perfCount, suffix: `/ ${vmHealth.totalVideos}` },
+                { label: 'Sales Data', value: vmHealth.salesCount, suffix: `/ ${vmHealth.totalVideos}` },
+                { label: 'Unmatched', value: vmHealth.unmatchedCount, suffix: 'mappings' },
+                { label: 'Needs Review', value: vmHealth.needsReviewCount + vmHealth.conflictCount, suffix: 'items' },
+              ].map((item) => (
+                <div key={item.label}>
+                  <p className="text-xs text-muted-foreground">{item.label}</p>
+                  <p className="text-xl font-semibold tabular-nums mt-0.5">
+                    {item.value.toLocaleString()}
+                    {item.suffix && <span className="text-xs text-muted-foreground ml-1">{item.suffix}</span>}
+                  </p>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <Button asChild size="sm" variant="outline">
+                <Link href="/content-ops/video-master">
+                  Video Overview
+                  <ArrowRight className="h-3.5 w-3.5 ml-1.5" />
+                </Link>
+              </Button>
+              {(vmHealth.needsReviewCount + vmHealth.conflictCount) > 0 && (
+                <Button asChild size="sm" variant="outline">
+                  <Link href="/content-ops/video-mapping-review?status=needs_review">
+                    Review {vmHealth.needsReviewCount + vmHealth.conflictCount} items
+                    <ArrowRight className="h-3.5 w-3.5 ml-1.5" />
+                  </Link>
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Quick links to operational pages */}
       <div className="border-t pt-4">

@@ -18,6 +18,7 @@
 import crypto from 'node:crypto'
 
 import { createServiceClient } from '../supabase/service'
+import { syncStudioAnalyticsBatch } from './video-master-sync'
 
 // ─── Raw row shape (from JSON file) ──────────────────────────────────────────
 
@@ -452,6 +453,8 @@ export async function importStudioAnalyticsFile(
       .from('tiktok_studio_analytics_batches')
       .update({ status: 'staged', staged_row_count: parsed.rows.length })
       .eq('id', batchId)
+
+    syncStudioAnalyticsBatch(supabase, createdBy, batchId).catch(() => {})
 
     return {
       ok: true,

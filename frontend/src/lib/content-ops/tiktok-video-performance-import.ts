@@ -19,6 +19,7 @@
 import crypto from 'node:crypto'
 
 import { createServiceClient } from '../supabase/service'
+import { syncPerfStatsBatch } from './video-master-sync'
 import {
   parseTikTokVideoPerformanceExport,
   type NormalizedTikTokVideoStatRow,
@@ -403,6 +404,8 @@ export async function importTikTokVideoPerformanceFile(
         staged_row_count: validRows.length,
       })
       .eq('id', batchId)
+
+    syncPerfStatsBatch(supabase, createdBy, batchId).catch(() => {})
 
     return {
       ok: true,
