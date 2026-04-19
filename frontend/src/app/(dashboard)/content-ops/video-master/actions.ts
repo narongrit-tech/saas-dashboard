@@ -140,11 +140,12 @@ export async function getVideoOverview(
   pageSize: number
   error: string | null
 }> {
+  console.log('[getVideoOverview] called sortBy=', sortBy, 'page=', page)
   const empty = { data: null, coverage: null, total: 0, page, pageSize: PAGE_SIZE, error: null }
   try {
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return { ...empty, error: 'Unauthenticated' }
+    if (!user) { console.log('[getVideoOverview] no user'); return { ...empty, error: 'Unauthenticated' } }
 
     const sortCol =
       sortBy === 'gmv' ? 'gmv_total' :
@@ -153,11 +154,25 @@ export async function getVideoOverview(
 
     const offset = (page - 1) * PAGE_SIZE
 
+    // Explicit select ensures new columns (thumbnail_url, thumbnail_source) are returned
+    // even when PostgREST schema cache has not refreshed after migration
+    const SELECT_COLS = [
+      'id', 'canonical_id', 'tiktok_video_id', 'video_title', 'posted_at', 'duration_sec',
+      'post_url', 'thumbnail_url', 'thumbnail_source', 'content_type', 'created_at',
+      'last_scraped_at', 'headline_video_views', 'headline_likes_total', 'headline_comments_total',
+      'headline_shares_total', 'watched_full_video_rate', 'average_watch_time_seconds',
+      'analytics_new_followers', 'traffic_sources',
+      'last_perf_imported_at', 'perf_views', 'gmv_total', 'gmv_direct', 'units_sold', 'ctr',
+      'perf_watch_full_rate',
+      'total_realized_gmv', 'total_commission', 'settled_order_count', 'total_order_count',
+      'sales_product_count', 'has_studio_data', 'has_perf_data', 'has_sales_data',
+    ].join(',')
+
     // Paginated data + coverage stats in parallel
     const [dataRes, coverageRes] = await Promise.all([
       supabase
         .from('video_overview_cache')
-        .select('*', { count: 'exact' })
+        .select(SELECT_COLS, { count: 'exact' })
         .eq('created_by', user.id)
         .order(sortCol, { ascending: false, nullsFirst: false })
         .range(offset, offset + PAGE_SIZE - 1),
@@ -167,13 +182,14 @@ export async function getVideoOverview(
         .eq('created_by', user.id),
     ])
 
+    console.log('[getVideoOverview] dataRes.error=', dataRes.error?.message ?? 'none', 'count=', dataRes.count)
     if (dataRes.error) return { ...empty, error: dataRes.error.message }
 
     const total = dataRes.count ?? 0
-    const raw0 = dataRes.data?.[0] as Record<string, unknown> | undefined
-    console.log('[video-overview debug] first row keys:', raw0 ? Object.keys(raw0) : 'no data')
-    console.log('[video-overview debug] thumbnail_url:', raw0?.thumbnail_url, '| post_url:', raw0?.post_url ? 'SET' : 'null')
-    const rows = (dataRes.data ?? []) as VideoOverviewRow[]
+    const raw0 = (dataRes.data?.[0] as unknown) as Record<string, unknown> | undefined
+    console.log('[getVideoOverview] row0 keys=', raw0 ? Object.keys(raw0).join(',') : 'empty')
+    console.log('[getVideoOverview] row0 thumbnail_url=', raw0?.thumbnail_url ?? 'NULL')
+    const rows = ((dataRes.data ?? []) as unknown) as VideoOverviewRow[]
 
     // Coverage computed from all rows (lightweight — 6 cols only)
     const allRows = (coverageRes.data ?? []) as Array<{
