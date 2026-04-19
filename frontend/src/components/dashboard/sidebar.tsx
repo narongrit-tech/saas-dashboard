@@ -38,6 +38,7 @@ import {
   GitBranch,
   HeartPulse,
   Upload,
+  BarChart2,
 } from 'lucide-react'
 
 interface MenuItem {
@@ -133,6 +134,11 @@ const menuGroups: MenuGroup[] = [
         title: 'Data Health',
         href: '/content-ops/data-health',
         icon: HeartPulse,
+      },
+      {
+        title: 'Studio Analytics',
+        href: '/content-ops/tiktok-studio-analytics',
+        icon: BarChart2,
       },
       {
         title: 'Upload Data',
