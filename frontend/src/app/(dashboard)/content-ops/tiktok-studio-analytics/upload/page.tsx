@@ -39,7 +39,7 @@ async function previewFile(file: File): Promise<PreviewSummary> {
   const res = await fetch('/api/content-ops/tiktok-studio-analytics/preview', { method: 'POST', body: formData })
   const json = await res.json()
   if (!res.ok || json.ok === false) throw new Error(json.error?.message ?? 'Preview failed')
-  const p = json.result
+  const p = json.preview
   return {
     rowCount: p.rowCount ?? 0,
     invalidRowCount: p.invalidRowCount ?? 0,
