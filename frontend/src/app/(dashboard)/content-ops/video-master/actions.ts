@@ -125,39 +125,63 @@ export type MappingReviewRow = {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
+const PAGE_SIZE = 50
+
 export async function getVideoOverview(
   sortBy: 'views' | 'gmv' | 'posted_at' = 'views',
-  limit = 2000,
-  offset = 0
-): Promise<{ data: VideoOverviewRow[] | null; coverage: CoverageSummary | null; error: string | null }> {
+  page = 1
+): Promise<{
+  data: VideoOverviewRow[] | null
+  coverage: CoverageSummary | null
+  total: number
+  page: number
+  pageSize: number
+  error: string | null
+}> {
+  const empty = { data: null, coverage: null, total: 0, page, pageSize: PAGE_SIZE, error: null }
   try {
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return { data: null, coverage: null, error: 'Unauthenticated' }
+    if (!user) return { ...empty, error: 'Unauthenticated' }
 
     const sortCol =
       sortBy === 'gmv' ? 'gmv_total' :
       sortBy === 'posted_at' ? 'posted_at' :
       'headline_video_views'
 
-    const { data, error } = await supabase
-      .from('video_overview_view' as never)
-      .select('*')
-      .eq('created_by', user.id)
-      .order(sortCol, { ascending: false, nullsFirst: false })
-      .range(offset, offset + limit - 1)
+    const offset = (page - 1) * PAGE_SIZE
 
-    if (error) return { data: null, coverage: null, error: error.message }
+    // Paginated data + coverage stats in parallel
+    const [dataRes, coverageRes] = await Promise.all([
+      supabase
+        .from('video_overview_cache')
+        .select('*', { count: 'exact' })
+        .eq('created_by', user.id)
+        .order(sortCol, { ascending: false, nullsFirst: false })
+        .range(offset, offset + PAGE_SIZE - 1),
+      supabase
+        .from('video_overview_cache')
+        .select('has_studio_data, has_perf_data, has_sales_data, headline_video_views, watched_full_video_rate, gmv_total')
+        .eq('created_by', user.id),
+    ])
 
-    const rows = (data ?? []) as VideoOverviewRow[]
+    if (dataRes.error) return { ...empty, error: dataRes.error.message }
 
-    const totalVideos = rows.length
-    const studioCount = rows.filter(r => r.has_studio_data).length
-    const perfCount = rows.filter(r => r.has_perf_data).length
-    const salesCount = rows.filter(r => r.has_sales_data).length
-    const totalViews = rows.reduce((s, r) => s + (r.headline_video_views ?? 0), 0)
-    const totalGmv = rows.reduce((s, r) => s + (r.gmv_total ?? 0), 0)
-    const watchRates = rows.filter(r => r.watched_full_video_rate !== null).map(r => r.watched_full_video_rate as number)
+    const total = dataRes.count ?? 0
+    const rows = (dataRes.data ?? []) as VideoOverviewRow[]
+
+    // Coverage computed from all rows (lightweight — 6 cols only)
+    const allRows = (coverageRes.data ?? []) as Array<{
+      has_studio_data: boolean; has_perf_data: boolean; has_sales_data: boolean
+      headline_video_views: number | null; watched_full_video_rate: number | null; gmv_total: number | null
+    }>
+    const totalVideos = allRows.length
+    const studioCount = allRows.filter(r => r.has_studio_data).length
+    const perfCount = allRows.filter(r => r.has_perf_data).length
+    const salesCount = allRows.filter(r => r.has_sales_data).length
+    const totalViews = allRows.reduce((s, r) => s + (r.headline_video_views ?? 0), 0)
+    const totalGmv = allRows.reduce((s, r) => s + (r.gmv_total ?? 0), 0)
+    const watchRates = allRows.filter(r => r.watched_full_video_rate !== null).map(r => r.watched_full_video_rate as number)
     const avgWatchRate = watchRates.length > 0 ? watchRates.reduce((a, b) => a + b) / watchRates.length : null
 
     const coverage: CoverageSummary = {
@@ -173,9 +197,9 @@ export async function getVideoOverview(
       avgWatchRate,
     }
 
-    return { data: rows, coverage, error: null }
+    return { data: rows, coverage, total, page, pageSize: PAGE_SIZE, error: null }
   } catch (e) {
-    return { data: null, coverage: null, error: e instanceof Error ? e.message : String(e) }
+    return { ...empty, error: e instanceof Error ? e.message : String(e) }
   }
 }
 
@@ -405,7 +429,7 @@ export async function getVideoMasterHealth(): Promise<{
 
     const [vmRes, mapRes] = await Promise.all([
       supabase
-        .from('video_overview_view' as never)
+        .from('video_overview_cache')
         .select('has_studio_data, has_perf_data, has_sales_data')
         .eq('created_by', user.id),
       supabase

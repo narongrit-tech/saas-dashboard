@@ -1,9 +1,9 @@
 import Link from 'next/link'
-import { Upload, Eye, TrendingUp, Users, AlertCircle, Play, ShoppingBag, BarChart2, RefreshCw } from 'lucide-react'
+import { Upload, Eye, TrendingUp, Users, AlertCircle, Play, ShoppingBag, BarChart2, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { getVideoOverview, triggerFullSync } from './actions'
+import { getVideoOverview } from './actions'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,14 +35,20 @@ function topSource(sources: TrafficSource[] | null): string {
 export default async function VideoMasterPage({
   searchParams,
 }: {
-  searchParams: { view?: string }
+  searchParams: { view?: string; page?: string }
 }) {
   const activeView = searchParams?.view === 'perf' ? 'perf' : searchParams?.view === 'sales' ? 'sales' : 'studio'
-  const sortBy = activeView === 'perf' ? 'gmv' : activeView === 'sales' ? 'gmv' : 'views'
+  const sortBy = activeView === 'perf' || activeView === 'sales' ? 'gmv' : 'views'
+  const page = Math.max(1, parseInt(searchParams?.page ?? '1', 10) || 1)
 
-  const { data: videos, coverage, error } = await getVideoOverview(sortBy, 2000, 0)
+  const { data: videos, coverage, total, pageSize, error } = await getVideoOverview(sortBy, page)
 
   const hasAnyData = (coverage?.totalVideos ?? 0) > 0
+  const totalPages = Math.ceil(total / pageSize)
+
+  function pageUrl(p: number) {
+    return `?view=${activeView}&page=${p}`
+  }
 
   return (
     <div className="space-y-6 max-w-7xl">
@@ -145,7 +151,7 @@ export default async function VideoMasterPage({
             {(['studio', 'perf', 'sales'] as const).map((v) => (
               <Link
                 key={v}
-                href={`?view=${v}`}
+                href={`?view=${v}&page=1`}
                 className={cn(
                   'px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
                   activeView === v
@@ -158,130 +164,166 @@ export default async function VideoMasterPage({
             ))}
           </div>
 
-          {/* Video table */}
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-3">
-              {(videos ?? []).length.toLocaleString()} VDO
+          {/* Row count + pagination header */}
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {total.toLocaleString()} VDO
               {activeView === 'studio' ? ' — เรียงตาม Views' : activeView === 'perf' ? ' — เรียงตาม GMV' : ' — เรียงตาม GMV Sales'}
+              {totalPages > 1 && ` · หน้า ${page} / ${totalPages}`}
             </p>
-            <div className="rounded-lg border overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b bg-muted/40">
-                      <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-8">#</th>
-                      <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground min-w-48">VDO</th>
-                      {activeView === 'studio' ? (
-                        <>
-                          <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Views</th>
-                          <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Likes</th>
-                          <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Comments</th>
-                          <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Watch%</th>
-                          <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Avg Watch</th>
-                          <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Followers+</th>
-                          <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Top Source</th>
-                        </>
-                      ) : activeView === 'perf' ? (
-                        <>
-                          <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">GMV</th>
-                          <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Units</th>
-                          <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">CTR</th>
-                          <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Watch%</th>
-                          <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Views</th>
-                          <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Duration</th>
-                        </>
-                      ) : (
-                        <>
-                          <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">GMV (Sales)</th>
-                          <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Commission</th>
-                          <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Orders</th>
-                          <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Products</th>
-                        </>
-                      )}
-                      <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Posted</th>
-                      <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Data</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {(videos ?? []).map((v, i) => {
-                      const sourceBadge =
-                        v.has_studio_data && v.has_perf_data && v.has_sales_data ? 'All'
-                          : v.has_studio_data && v.has_perf_data ? 'Studio+Perf'
-                          : v.has_studio_data && v.has_sales_data ? 'Studio+Sales'
-                          : v.has_perf_data && v.has_sales_data ? 'Perf+Sales'
-                          : v.has_studio_data ? 'Studio'
-                          : v.has_perf_data ? 'Perf'
-                          : v.has_sales_data ? 'Sales'
-                          : 'Master'
-                      const badgeColor =
-                        v.has_studio_data && v.has_perf_data ? 'bg-emerald-100 text-emerald-700'
-                          : v.has_studio_data || v.has_perf_data ? 'bg-sky-100 text-sky-700'
-                          : 'bg-amber-100 text-amber-700'
-                      return (
-                        <tr key={v.tiktok_video_id} className="hover:bg-muted/30 transition-colors">
-                          <td className="px-3 py-2 text-xs text-muted-foreground tabular-nums">{i + 1}</td>
-                          <td className="px-3 py-2 max-w-xs">
-                            <Link
-                              href={`/content-ops/video-master/${v.tiktok_video_id}`}
-                              className="text-sm font-medium line-clamp-1 hover:underline"
-                              title={v.video_title ?? v.tiktok_video_id}
-                            >
-                              {v.video_title ?? v.tiktok_video_id}
-                            </Link>
-                          </td>
-                          {activeView === 'studio' ? (
-                            <>
-                              <td className="px-3 py-2 text-right tabular-nums font-semibold">{fmtViews(v.headline_video_views)}</td>
-                              <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{fmtViews(v.headline_likes_total)}</td>
-                              <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{v.headline_comments_total?.toLocaleString() ?? '—'}</td>
-                              <td className="px-3 py-2 text-right tabular-nums">
-                                {v.watched_full_video_rate !== null ? (
-                                  <span className={v.watched_full_video_rate >= 0.2 ? 'text-emerald-600 font-medium' : v.watched_full_video_rate >= 0.1 ? 'text-amber-600' : 'text-muted-foreground'}>
-                                    {(v.watched_full_video_rate * 100).toFixed(1)}%
-                                  </span>
-                                ) : '—'}
-                              </td>
-                              <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{fmtSec(v.average_watch_time_seconds)}</td>
-                              <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
-                                {v.analytics_new_followers !== null ? `+${v.analytics_new_followers.toLocaleString()}` : '—'}
-                              </td>
-                              <td className="px-3 py-2 text-xs text-muted-foreground">{topSource(v.traffic_sources as TrafficSource[] | null)}</td>
-                            </>
-                          ) : activeView === 'perf' ? (
-                            <>
-                              <td className="px-3 py-2 text-right tabular-nums font-semibold">{fmtTHB(v.gmv_total)}</td>
-                              <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{v.units_sold?.toLocaleString() ?? '—'}</td>
-                              <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{v.ctr !== null ? `${(v.ctr * 100).toFixed(2)}%` : '—'}</td>
-                              <td className="px-3 py-2 text-right tabular-nums">
-                                {v.perf_watch_full_rate !== null ? (
-                                  <span className={v.perf_watch_full_rate >= 0.2 ? 'text-emerald-600 font-medium' : v.perf_watch_full_rate >= 0.1 ? 'text-amber-600' : 'text-muted-foreground'}>
-                                    {(v.perf_watch_full_rate * 100).toFixed(1)}%
-                                  </span>
-                                ) : '—'}
-                              </td>
-                              <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{fmtViews(v.perf_views)}</td>
-                              <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{fmtSec(v.duration_sec)}</td>
-                            </>
-                          ) : (
-                            <>
-                              <td className="px-3 py-2 text-right tabular-nums font-semibold">{fmtTHB(v.total_realized_gmv)}</td>
-                              <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{fmtTHB(v.total_commission)}</td>
-                              <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{v.settled_order_count?.toLocaleString() ?? '—'}</td>
-                              <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{v.sales_product_count?.toLocaleString() ?? '—'}</td>
-                            </>
-                          )}
-                          <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{v.posted_at ?? '—'}</td>
-                          <td className="px-3 py-2">
-                            <span className={cn('text-xs px-1.5 py-0.5 rounded-full', badgeColor)}>{sourceBadge}</span>
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+            {totalPages > 1 && (
+              <div className="flex items-center gap-1">
+                <Button asChild size="sm" variant="outline" disabled={page <= 1} className="h-7 w-7 p-0">
+                  <Link href={page > 1 ? pageUrl(page - 1) : '#'}>
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                  </Link>
+                </Button>
+                <span className="text-xs tabular-nums px-2">{page}/{totalPages}</span>
+                <Button asChild size="sm" variant="outline" disabled={page >= totalPages} className="h-7 w-7 p-0">
+                  <Link href={page < totalPages ? pageUrl(page + 1) : '#'}>
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </Link>
+                </Button>
               </div>
+            )}
+          </div>
+
+          {/* Video table */}
+          <div className="rounded-lg border overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/40">
+                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-8">#</th>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground min-w-48">VDO</th>
+                    {activeView === 'studio' ? (
+                      <>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Views</th>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Likes</th>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Comments</th>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Watch%</th>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Avg Watch</th>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Followers+</th>
+                        <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Top Source</th>
+                      </>
+                    ) : activeView === 'perf' ? (
+                      <>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">GMV</th>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Units</th>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">CTR</th>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Watch%</th>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Views</th>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Duration</th>
+                      </>
+                    ) : (
+                      <>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">GMV (Sales)</th>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Commission</th>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Orders</th>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Products</th>
+                      </>
+                    )}
+                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Posted</th>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Data</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {(videos ?? []).map((v, i) => {
+                    const rowNum = (page - 1) * pageSize + i + 1
+                    const sourceBadge =
+                      v.has_studio_data && v.has_perf_data && v.has_sales_data ? 'All'
+                        : v.has_studio_data && v.has_perf_data ? 'Studio+Perf'
+                        : v.has_studio_data && v.has_sales_data ? 'Studio+Sales'
+                        : v.has_perf_data && v.has_sales_data ? 'Perf+Sales'
+                        : v.has_studio_data ? 'Studio'
+                        : v.has_perf_data ? 'Perf'
+                        : v.has_sales_data ? 'Sales'
+                        : 'Master'
+                    const badgeColor =
+                      v.has_studio_data && v.has_perf_data ? 'bg-emerald-100 text-emerald-700'
+                        : v.has_studio_data || v.has_perf_data ? 'bg-sky-100 text-sky-700'
+                        : 'bg-amber-100 text-amber-700'
+                    return (
+                      <tr key={v.tiktok_video_id} className="hover:bg-muted/30 transition-colors">
+                        <td className="px-3 py-2 text-xs text-muted-foreground tabular-nums">{rowNum}</td>
+                        <td className="px-3 py-2 max-w-xs">
+                          <Link
+                            href={`/content-ops/video-master/${v.tiktok_video_id}`}
+                            className="text-sm font-medium line-clamp-1 hover:underline"
+                            title={v.video_title ?? v.tiktok_video_id}
+                          >
+                            {v.video_title ?? v.tiktok_video_id}
+                          </Link>
+                        </td>
+                        {activeView === 'studio' ? (
+                          <>
+                            <td className="px-3 py-2 text-right tabular-nums font-semibold">{fmtViews(v.headline_video_views)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{fmtViews(v.headline_likes_total)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{v.headline_comments_total?.toLocaleString() ?? '—'}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">
+                              {v.watched_full_video_rate !== null ? (
+                                <span className={v.watched_full_video_rate >= 0.2 ? 'text-emerald-600 font-medium' : v.watched_full_video_rate >= 0.1 ? 'text-amber-600' : 'text-muted-foreground'}>
+                                  {(v.watched_full_video_rate * 100).toFixed(1)}%
+                                </span>
+                              ) : '—'}
+                            </td>
+                            <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{fmtSec(v.average_watch_time_seconds)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+                              {v.analytics_new_followers !== null ? `+${v.analytics_new_followers.toLocaleString()}` : '—'}
+                            </td>
+                            <td className="px-3 py-2 text-xs text-muted-foreground">{topSource(v.traffic_sources as TrafficSource[] | null)}</td>
+                          </>
+                        ) : activeView === 'perf' ? (
+                          <>
+                            <td className="px-3 py-2 text-right tabular-nums font-semibold">{fmtTHB(v.gmv_total)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{v.units_sold?.toLocaleString() ?? '—'}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{v.ctr !== null ? `${(v.ctr * 100).toFixed(2)}%` : '—'}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">
+                              {v.perf_watch_full_rate !== null ? (
+                                <span className={v.perf_watch_full_rate >= 0.2 ? 'text-emerald-600 font-medium' : v.perf_watch_full_rate >= 0.1 ? 'text-amber-600' : 'text-muted-foreground'}>
+                                  {(v.perf_watch_full_rate * 100).toFixed(1)}%
+                                </span>
+                              ) : '—'}
+                            </td>
+                            <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{fmtViews(v.perf_views)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{fmtSec(v.duration_sec)}</td>
+                          </>
+                        ) : (
+                          <>
+                            <td className="px-3 py-2 text-right tabular-nums font-semibold">{fmtTHB(v.total_realized_gmv)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{fmtTHB(v.total_commission)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{v.settled_order_count?.toLocaleString() ?? '—'}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{v.sales_product_count?.toLocaleString() ?? '—'}</td>
+                          </>
+                        )}
+                        <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{v.posted_at ?? '—'}</td>
+                        <td className="px-3 py-2">
+                          <span className={cn('text-xs px-1.5 py-0.5 rounded-full', badgeColor)}>{sourceBadge}</span>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
+
+          {/* Bottom pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 pt-2">
+              <Button asChild size="sm" variant="outline" disabled={page <= 1}>
+                <Link href={page > 1 ? pageUrl(page - 1) : '#'}>
+                  <ChevronLeft className="h-3.5 w-3.5 mr-1" />ก่อนหน้า
+                </Link>
+              </Button>
+              <span className="text-xs text-muted-foreground tabular-nums">หน้า {page} / {totalPages}</span>
+              <Button asChild size="sm" variant="outline" disabled={page >= totalPages}>
+                <Link href={page < totalPages ? pageUrl(page + 1) : '#'}>
+                  ถัดไป<ChevronRight className="h-3.5 w-3.5 ml-1" />
+                </Link>
+              </Button>
+            </div>
+          )}
         </>
       )}
     </div>
