@@ -245,7 +245,7 @@ export async function rebuildVideoOverviewCache(
   // 1. Fetch affected video_master rows
   let vmQuery = supabase
     .from('video_master')
-    .select('id, tiktok_video_id, video_title, posted_at, duration_sec, post_url, content_type')
+    .select('id, tiktok_video_id, video_title, posted_at, duration_sec, post_url, content_type, thumbnail_url, thumbnail_source')
     .eq('created_by', createdBy)
   if (canonicalIds && canonicalIds.length > 0) {
     vmQuery = vmQuery.in('id', canonicalIds)
@@ -357,6 +357,8 @@ export async function rebuildVideoOverviewCache(
         duration_sec: vm.duration_sec ?? null,
         post_url: vm.post_url ?? null,
         content_type: vm.content_type ?? 'video',
+        thumbnail_url: (vm as { thumbnail_url?: string | null }).thumbnail_url ?? null,
+        thumbnail_source: (vm as { thumbnail_source?: string | null }).thumbnail_source ?? null,
         // Studio
         last_scraped_at: eng?.scraped_at ?? null,
         headline_video_views: eng?.headline_video_views ?? null,

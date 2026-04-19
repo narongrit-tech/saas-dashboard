@@ -13,6 +13,8 @@ export type VideoOverviewRow = {
   posted_at: string | null
   duration_sec: number | null
   post_url: string | null
+  thumbnail_url: string | null
+  thumbnail_source: string | null
   content_type: string
   created_at: string
   // Studio engagement (latest snapshot)

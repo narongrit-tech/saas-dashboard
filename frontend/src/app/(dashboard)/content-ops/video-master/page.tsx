@@ -195,7 +195,7 @@ export default async function VideoMasterPage({
                 <thead>
                   <tr className="border-b bg-muted/40">
                     <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground w-8">#</th>
-                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground min-w-48">VDO</th>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground min-w-72">VDO</th>
                     {activeView === 'studio' ? (
                       <>
                         <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Views</th>
@@ -223,7 +223,6 @@ export default async function VideoMasterPage({
                         <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Products</th>
                       </>
                     )}
-                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap">Posted</th>
                     <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Data</th>
                   </tr>
                 </thead>
@@ -246,14 +245,42 @@ export default async function VideoMasterPage({
                     return (
                       <tr key={v.tiktok_video_id} className="hover:bg-muted/30 transition-colors">
                         <td className="px-3 py-2 text-xs text-muted-foreground tabular-nums">{rowNum}</td>
-                        <td className="px-3 py-2 max-w-xs">
-                          <Link
-                            href={`/content-ops/video-master/${v.tiktok_video_id}`}
-                            className="text-sm font-medium line-clamp-1 hover:underline"
-                            title={v.video_title ?? v.tiktok_video_id}
-                          >
-                            {v.video_title ?? v.tiktok_video_id}
-                          </Link>
+                        <td className="px-3 py-2">
+                          <div className="flex items-start gap-2.5">
+                            {/* Thumbnail — links to original TikTok post */}
+                            {v.thumbnail_url && v.post_url ? (
+                              <a
+                                href={v.post_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="shrink-0 block w-10 h-[54px] rounded overflow-hidden border border-muted bg-muted"
+                                tabIndex={-1}
+                              >
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={v.thumbnail_url}
+                                  alt=""
+                                  loading="lazy"
+                                  className="w-full h-full object-cover"
+                                />
+                              </a>
+                            ) : (
+                              <div className="shrink-0 flex items-center justify-center w-10 h-[54px] rounded border border-muted bg-muted/60">
+                                <Play className="h-3 w-3 text-muted-foreground" />
+                              </div>
+                            )}
+                            {/* Title → detail page, date below */}
+                            <div className="min-w-0 flex-1 py-0.5">
+                              <Link
+                                href={`/content-ops/video-master/${v.tiktok_video_id}`}
+                                className="text-sm font-medium line-clamp-2 hover:underline leading-snug"
+                                title={v.video_title ?? v.tiktok_video_id}
+                              >
+                                {v.video_title ?? v.tiktok_video_id}
+                              </Link>
+                              <p className="text-xs text-muted-foreground mt-0.5">{v.posted_at ?? '—'}</p>
+                            </div>
+                          </div>
                         </td>
                         {activeView === 'studio' ? (
                           <>
@@ -296,7 +323,6 @@ export default async function VideoMasterPage({
                             <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{v.sales_product_count?.toLocaleString() ?? '—'}</td>
                           </>
                         )}
-                        <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{v.posted_at ?? '—'}</td>
                         <td className="px-3 py-2">
                           <span className={cn('text-xs px-1.5 py-0.5 rounded-full', badgeColor)}>{sourceBadge}</span>
                         </td>
