@@ -170,6 +170,9 @@ export async function getVideoOverview(
     if (dataRes.error) return { ...empty, error: dataRes.error.message }
 
     const total = dataRes.count ?? 0
+    const raw0 = dataRes.data?.[0] as Record<string, unknown> | undefined
+    console.log('[video-overview debug] first row keys:', raw0 ? Object.keys(raw0) : 'no data')
+    console.log('[video-overview debug] thumbnail_url:', raw0?.thumbnail_url, '| post_url:', raw0?.post_url ? 'SET' : 'null')
     const rows = (dataRes.data ?? []) as VideoOverviewRow[]
 
     // Coverage computed from all rows (lightweight — 6 cols only)
