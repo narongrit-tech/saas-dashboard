@@ -258,4 +258,8 @@ COMMENT ON VIEW public.tiktok_video_combined_stats IS
   'Latest analytics snapshot per video joined with latest perf stats per video. '
   'video_id links tiktok_studio_analytics_rows.post_id to tiktok_video_perf_stats.video_id_raw.';
 
+-- Views do not have RLS — explicit GRANTs are required for PostgREST access.
+GRANT SELECT ON public.tiktok_video_combined_stats TO authenticated;
+GRANT SELECT ON public.tiktok_video_combined_stats TO service_role;
+
 COMMIT;
