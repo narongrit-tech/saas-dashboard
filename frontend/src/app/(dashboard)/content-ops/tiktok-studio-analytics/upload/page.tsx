@@ -56,8 +56,12 @@ async function importFile(file: File): Promise<ImportResult> {
   formData.append('file', file)
   const res = await fetch('/api/content-ops/tiktok-studio-analytics/import', { method: 'POST', body: formData })
   const json = await res.json()
-  if (!res.ok || json.ok === false) throw new Error(json.error?.message ?? 'Import failed')
+  if (!res.ok || json.ok === false) {
+    const msg = json.error?.message ?? json.result?.errors?.[0]?.message ?? `Import failed (HTTP ${res.status})`
+    throw new Error(msg)
+  }
   const r = json.result
+  if (!r) throw new Error('Import response missing result object')
   return {
     batchId: r.batchId ?? '',
     fileName: r.fileName ?? file.name,
