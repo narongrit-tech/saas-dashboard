@@ -247,23 +247,35 @@ export default async function VideoMasterPage({
                         <td className="px-3 py-2 text-xs text-muted-foreground tabular-nums">{rowNum}</td>
                         <td className="px-3 py-2">
                           <div className="flex items-start gap-2.5">
-                            {/* Thumbnail — links to original TikTok post */}
-                            {v.thumbnail_url && v.post_url ? (
-                              <a
-                                href={v.post_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="shrink-0 block w-10 h-[54px] rounded overflow-hidden border border-muted bg-muted"
-                                tabIndex={-1}
-                              >
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img
-                                  src={v.thumbnail_url}
-                                  alt=""
-                                  loading="lazy"
-                                  className="w-full h-full object-cover"
-                                />
-                              </a>
+                            {/* Thumbnail — links to original TikTok post if post_url available */}
+                            {v.thumbnail_url ? (
+                              v.post_url ? (
+                                <a
+                                  href={v.post_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="shrink-0 block w-10 h-[54px] rounded overflow-hidden border border-muted bg-muted"
+                                  tabIndex={-1}
+                                >
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={v.thumbnail_url}
+                                    alt=""
+                                    loading="lazy"
+                                    className="w-full h-full object-cover"
+                                  />
+                                </a>
+                              ) : (
+                                <div className="shrink-0 block w-10 h-[54px] rounded overflow-hidden border border-muted bg-muted">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={v.thumbnail_url}
+                                    alt=""
+                                    loading="lazy"
+                                    className="w-full h-full object-cover"
+                                  />
+                                </div>
+                              )
                             ) : (
                               <div className="shrink-0 flex items-center justify-center w-10 h-[54px] rounded border border-muted bg-muted/60">
                                 <Play className="h-3 w-3 text-muted-foreground" />
