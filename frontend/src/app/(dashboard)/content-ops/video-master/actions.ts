@@ -2,7 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { runFullVideoMasterSync, type SyncResult } from '@/lib/content-ops/video-master-sync'
+import { runFullVideoMasterSync, rebuildVideoOverviewCache, type SyncResult } from '@/lib/content-ops/video-master-sync'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -140,12 +140,11 @@ export async function getVideoOverview(
   pageSize: number
   error: string | null
 }> {
-  console.log('[getVideoOverview] called sortBy=', sortBy, 'page=', page)
   const empty = { data: null, coverage: null, total: 0, page, pageSize: PAGE_SIZE, error: null }
   try {
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { console.log('[getVideoOverview] no user'); return { ...empty, error: 'Unauthenticated' } }
+    if (!user) return { ...empty, error: 'Unauthenticated' }
 
     const sortCol =
       sortBy === 'gmv' ? 'gmv_total' :
@@ -182,13 +181,9 @@ export async function getVideoOverview(
         .eq('created_by', user.id),
     ])
 
-    console.log('[getVideoOverview] dataRes.error=', dataRes.error?.message ?? 'none', 'count=', dataRes.count)
     if (dataRes.error) return { ...empty, error: dataRes.error.message }
 
     const total = dataRes.count ?? 0
-    const raw0 = (dataRes.data?.[0] as unknown) as Record<string, unknown> | undefined
-    console.log('[getVideoOverview] row0 keys=', raw0 ? Object.keys(raw0).join(',') : 'empty')
-    console.log('[getVideoOverview] row0 thumbnail_url=', raw0?.thumbnail_url ?? 'NULL')
     const rows = ((dataRes.data ?? []) as unknown) as VideoOverviewRow[]
 
     // Coverage computed from all rows (lightweight — 6 cols only)
@@ -427,6 +422,29 @@ export async function rejectMapping(
     return { ok: !error, error: error?.message ?? null }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+// ─── Cache rebuild ────────────────────────────────────────────────────────────
+
+export async function rebuildOverviewCache(): Promise<{ ok: boolean; rebuilt: number; error: string | null }> {
+  try {
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return { ok: false, rebuilt: 0, error: 'Unauthenticated' }
+
+    const serviceClient = createServiceClient()
+
+    // Count videos before rebuild so we can report how many were processed
+    const { count } = await serviceClient
+      .from('video_master')
+      .select('id', { count: 'exact', head: true })
+      .eq('created_by', user.id)
+
+    await rebuildVideoOverviewCache(serviceClient, user.id)
+    return { ok: true, rebuilt: count ?? 0, error: null }
+  } catch (e) {
+    return { ok: false, rebuilt: 0, error: e instanceof Error ? e.message : String(e) }
   }
 }
 

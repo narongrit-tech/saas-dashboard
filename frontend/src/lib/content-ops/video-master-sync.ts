@@ -254,7 +254,6 @@ export async function rebuildVideoOverviewCache(
   if (!videos || videos.length === 0) return
 
   const allCanonicalIds = videos.map((v) => v.id as string)
-  const videoIdToCanonical = new Map(videos.map((v) => [v.tiktok_video_id as string, v.id as string]))
   const canonicalToMeta = new Map(videos.map((v) => [v.id as string, v]))
 
   // Process in chunks to avoid giant IN clauses
@@ -390,9 +389,12 @@ export async function rebuildVideoOverviewCache(
       }
     })
 
-    await supabase
+    const { error: cacheErr } = await supabase
       .from('video_overview_cache')
       .upsert(cacheRows, { onConflict: 'created_by,canonical_id', ignoreDuplicates: false })
+    if (cacheErr) {
+      console.error('[rebuildVideoOverviewCache] upsert chunk failed:', cacheErr.message, 'code:', cacheErr.code)
+    }
   }
 }
 

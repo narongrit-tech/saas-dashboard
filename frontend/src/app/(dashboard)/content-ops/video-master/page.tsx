@@ -4,6 +4,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { getVideoOverview } from './actions'
+import { RebuildCacheButton } from './RebuildCacheButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -41,11 +42,7 @@ export default async function VideoMasterPage({
   const sortBy = activeView === 'perf' || activeView === 'sales' ? 'gmv' : 'views'
   const page = Math.max(1, parseInt(searchParams?.page ?? '1', 10) || 1)
 
-  console.log('[VideoMasterPage] rendering view=', activeView, 'page=', page)
   const { data: videos, coverage, total, pageSize, error } = await getVideoOverview(sortBy, page)
-  console.log('[VideoMasterPage] got', videos?.length ?? 0, 'rows, error=', error ?? 'none')
-  const v0 = videos?.[0] as Record<string, unknown> | undefined
-  console.log('[VideoMasterPage] row0 thumbnail_url=', v0?.thumbnail_url ?? 'NULL', 'post_url=', v0?.post_url ? 'SET' : 'NULL')
 
   const hasAnyData = (coverage?.totalVideos ?? 0) > 0
   const totalPages = Math.ceil(total / pageSize)
@@ -79,10 +76,10 @@ export default async function VideoMasterPage({
           </Button>
           <Button asChild size="sm">
             <Link href="/content-ops/video-mapping-review">
-              <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
               Mapping Review
             </Link>
           </Button>
+          <RebuildCacheButton />
         </div>
       </div>
 
