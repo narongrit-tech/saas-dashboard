@@ -52,8 +52,9 @@ function parseArgs(argv: string[]) {
     createdBy?: string
     dryRun: boolean
     insertMissing: boolean
+    verify: boolean
     help: boolean
-  } = { dryRun: false, insertMissing: false, help: false }
+  } = { dryRun: false, insertMissing: false, verify: false, help: false }
 
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
@@ -62,6 +63,7 @@ function parseArgs(argv: string[]) {
       case '--created-by':     result.createdBy     = argv[++i]; break
       case '--dry-run':        result.dryRun        = true; break
       case '--insert-missing': result.insertMissing = true; break
+      case '--verify':         result.verify        = true; break
     }
   }
   return result
@@ -254,30 +256,100 @@ async function main() {
     console.log(`  ℹ Re-run with --insert-missing to add these to video_master`)
   }
 
+  // ─── Before counts ───────────────────────────────────────────────────────
+
+  const { count: vmBefore } = await supabase
+    .from('video_master')
+    .select('id', { count: 'exact', head: true })
+    .eq('created_by', args.createdBy)
+    .not('thumbnail_url', 'is', null)
+
+  const { count: cacheBefore } = await supabase
+    .from('video_overview_cache')
+    .select('id', { count: 'exact', head: true })
+    .eq('created_by', args.createdBy)
+    .not('thumbnail_url', 'is', null)
+
   // ─── Summary ─────────────────────────────────────────────────────────────
 
   const totalAffected = updatedCount + insertedCount
-  console.log(`\n━━ Results ━━`)
+  console.log(`\n━━ Write Results ━━`)
   console.log(`  Updated (existing rows):  ${updatedCount}`)
   console.log(`  Inserted (new rows):      ${insertedCount}`)
   console.log(`  Unmatched (not handled):  ${unmatchedEntries.length - insertedCount}`)
   console.log(`  Errors:                   ${errorCount}`)
   console.log(`  Coverage: ${totalAffected}/${enriched.length} registry entries now have thumbnails in video_master`)
+  console.log(`\n━━ Before Counts ━━`)
+  console.log(`  video_master WITH thumbnail_url:       ${vmBefore ?? 0}`)
+  console.log(`  video_overview_cache WITH thumbnail_url: ${cacheBefore ?? 0}`)
 
   // ─── Cache rebuild ────────────────────────────────────────────────────────
+
+  let rebuildProcessed = 0
+  let rebuildWithThumb = 0
+  const rebuildErrors: string[] = []
 
   if (affectedCanonicalIds.length > 0) {
     console.log(`\nRebuilding video_overview_cache for ${affectedCanonicalIds.length} affected rows...`)
     const deduped = [...new Set(affectedCanonicalIds)]
-    const REBUILD_CHUNK = 500
+    const REBUILD_CHUNK = 100
     for (let i = 0; i < deduped.length; i += REBUILD_CHUNK) {
       const chunk = deduped.slice(i, i + REBUILD_CHUNK)
-      await rebuildVideoOverviewCache(supabase, args.createdBy!, chunk)
+      const s = await rebuildVideoOverviewCache(supabase, args.createdBy!, chunk)
+      rebuildProcessed += s.processed
+      rebuildWithThumb += s.withThumbnail
+      rebuildErrors.push(...s.cacheErrors)
       process.stdout.write(`\r  rebuilt ${Math.min(i + REBUILD_CHUNK, deduped.length)} / ${deduped.length}`)
     }
-    console.log('\n  ✓ Cache rebuild complete')
+    if (rebuildErrors.length > 0) {
+      console.log(`\n  ✗ Cache errors (${rebuildErrors.length}):`)
+      for (const e of rebuildErrors.slice(0, 5)) console.log(`    ${e}`)
+    } else {
+      console.log(`\n  ✓ Cache rebuild complete: ${rebuildProcessed} rows written, ${rebuildWithThumb} with thumbnail`)
+    }
   } else {
     console.log('\n  ! No rows affected — cache not rebuilt')
+  }
+
+  // ─── After counts ─────────────────────────────────────────────────────────
+
+  const { count: vmAfter } = await supabase
+    .from('video_master')
+    .select('id', { count: 'exact', head: true })
+    .eq('created_by', args.createdBy)
+    .not('thumbnail_url', 'is', null)
+
+  const { count: cacheAfter } = await supabase
+    .from('video_overview_cache')
+    .select('id', { count: 'exact', head: true })
+    .eq('created_by', args.createdBy)
+    .not('thumbnail_url', 'is', null)
+
+  console.log(`\n━━ After Counts ━━`)
+  console.log(`  video_master WITH thumbnail_url:         ${vmBefore ?? 0} → ${vmAfter ?? 0}`)
+  console.log(`  video_overview_cache WITH thumbnail_url: ${cacheBefore ?? 0} → ${cacheAfter ?? 0}`)
+
+  // ─── Verify top rows ──────────────────────────────────────────────────────
+
+  if (args.verify) {
+    console.log(`\n━━ Top 5 rows by views (verify thumbnails in cache) ━━`)
+    const { data: topRows, error: topErr } = await supabase
+      .from('video_overview_cache')
+      .select('tiktok_video_id, video_title, thumbnail_url, post_url, headline_video_views')
+      .eq('created_by', args.createdBy)
+      .order('headline_video_views', { ascending: false, nullsFirst: false })
+      .limit(5)
+    if (topErr) {
+      console.log(`  Error querying cache: ${topErr.message}`)
+    } else {
+      for (const r of topRows ?? []) {
+        const thumb = (r as { thumbnail_url?: string | null }).thumbnail_url
+        const views = (r as { headline_video_views?: number | null }).headline_video_views
+        const title = ((r as { video_title?: string | null }).video_title ?? '').slice(0, 40)
+        const id = (r as { tiktok_video_id: string }).tiktok_video_id
+        console.log(`  ${id} | views: ${views ?? '—'} | thumb: ${thumb ? '✓' : 'NULL'} | ${title}`)
+      }
+    }
   }
 }
 

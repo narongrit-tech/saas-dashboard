@@ -235,13 +235,21 @@ async function stage3bMatch(
 
 // ─── Overview cache rebuild ───────────────────────────────────────────────────
 
-const CHUNK = 200
+const CHUNK = 100
+
+export type RebuildStats = {
+  processed: number
+  withThumbnail: number
+  cacheErrors: string[]
+}
 
 export async function rebuildVideoOverviewCache(
   supabase: SupabaseClient,
   createdBy: string,
   canonicalIds?: string[]
-): Promise<void> {
+): Promise<RebuildStats> {
+  const stats: RebuildStats = { processed: 0, withThumbnail: 0, cacheErrors: [] }
+
   // 1. Fetch affected video_master rows
   let vmQuery = supabase
     .from('video_master')
@@ -250,8 +258,26 @@ export async function rebuildVideoOverviewCache(
   if (canonicalIds && canonicalIds.length > 0) {
     vmQuery = vmQuery.in('id', canonicalIds)
   }
-  const { data: videos } = await vmQuery
-  if (!videos || videos.length === 0) return
+  // Retry up to 3 times — large IN clauses can trigger transient network failures
+  type VmRow = { id: string; tiktok_video_id: string; video_title: string | null; posted_at: string | null; duration_sec: number | null; post_url: string | null; content_type: string; thumbnail_url?: string | null; thumbnail_source?: string | null }
+  let videos: VmRow[] | null = null
+  let vmErrMsg: string | null = null
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const res = await vmQuery as { data: VmRow[] | null; error: { message: string; code: string } | null }
+    if (!res.error) { videos = res.data; break }
+    vmErrMsg = `${res.error.message} (code: ${res.error.code})`
+    if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 500))
+  }
+  if (vmErrMsg && !videos) {
+    const msg = `video_master query failed after retries: ${vmErrMsg}`
+    console.error('[rebuildVideoOverviewCache]', msg)
+    stats.cacheErrors.push(msg)
+    return stats
+  }
+  if (!videos || videos.length === 0) return stats
+
+  const withThumbInMaster = videos.filter((v) => (v as { thumbnail_url?: string | null }).thumbnail_url).length
+  console.log(`[rebuildVideoOverviewCache] video_master: ${videos.length} rows, ${withThumbInMaster} with thumbnail_url`)
 
   const allCanonicalIds = videos.map((v) => v.id as string)
   const canonicalToMeta = new Map(videos.map((v) => [v.id as string, v]))
@@ -346,6 +372,10 @@ export async function rebuildVideoOverviewCache(
       const eng = latestStudio.get(videoId) ?? null
       const perf = latestPerf.get(videoId) ?? null
       const sales = salesByCanonical.get(canonId) ?? null
+      const thumbUrl = (vm as { thumbnail_url?: string | null }).thumbnail_url ?? null
+
+      stats.processed++
+      if (thumbUrl) stats.withThumbnail++
 
       return {
         created_by: createdBy,
@@ -356,7 +386,7 @@ export async function rebuildVideoOverviewCache(
         duration_sec: vm.duration_sec ?? null,
         post_url: vm.post_url ?? null,
         content_type: vm.content_type ?? 'video',
-        thumbnail_url: (vm as { thumbnail_url?: string | null }).thumbnail_url ?? null,
+        thumbnail_url: thumbUrl,
         thumbnail_source: (vm as { thumbnail_source?: string | null }).thumbnail_source ?? null,
         // Studio
         last_scraped_at: eng?.scraped_at ?? null,
@@ -393,9 +423,14 @@ export async function rebuildVideoOverviewCache(
       .from('video_overview_cache')
       .upsert(cacheRows, { onConflict: 'created_by,canonical_id', ignoreDuplicates: false })
     if (cacheErr) {
-      console.error('[rebuildVideoOverviewCache] upsert chunk failed:', cacheErr.message, 'code:', cacheErr.code)
+      const msg = `cache upsert chunk ${Math.floor(i / CHUNK) + 1} failed: ${cacheErr.message} (code: ${cacheErr.code})`
+      console.error('[rebuildVideoOverviewCache]', msg)
+      stats.cacheErrors.push(msg)
     }
   }
+
+  console.log(`[rebuildVideoOverviewCache] done: ${stats.processed} rows, ${stats.withThumbnail} with thumbnail, ${stats.cacheErrors.length} cache errors`)
+  return stats
 }
 
 // ─── Per-source sync functions ────────────────────────────────────────────────
@@ -443,7 +478,7 @@ export async function syncStudioAnalyticsBatch(
   }
 
   if (affectedCanonicalIds.length > 0) {
-    await rebuildVideoOverviewCache(supabase, createdBy, [...new Set(affectedCanonicalIds)]).catch(() => {})
+    await rebuildVideoOverviewCache(supabase, createdBy, [...new Set(affectedCanonicalIds)]).catch((e: unknown) => { console.error('[rebuild] unexpected throw:', e) })
   }
 
   return result
@@ -492,7 +527,7 @@ export async function syncPerfStatsBatch(
   }
 
   if (affectedCanonicalIds.length > 0) {
-    await rebuildVideoOverviewCache(supabase, createdBy, [...new Set(affectedCanonicalIds)]).catch(() => {})
+    await rebuildVideoOverviewCache(supabase, createdBy, [...new Set(affectedCanonicalIds)]).catch((e: unknown) => { console.error('[rebuild] unexpected throw:', e) })
   }
 
   return result
@@ -541,7 +576,7 @@ export async function syncAffiliateBatch(
   }
 
   if (affectedCanonicalIds.length > 0) {
-    await rebuildVideoOverviewCache(supabase, createdBy, [...new Set(affectedCanonicalIds)]).catch(() => {})
+    await rebuildVideoOverviewCache(supabase, createdBy, [...new Set(affectedCanonicalIds)]).catch((e: unknown) => { console.error('[rebuild] unexpected throw:', e) })
   }
 
   return result
@@ -637,9 +672,13 @@ export async function runFullVideoMasterSync(
   }
 
   // Final full cache rebuild to catch any gaps
-  await rebuildVideoOverviewCache(supabase, createdBy).catch((e) => {
+  const rebuildStats = await rebuildVideoOverviewCache(supabase, createdBy).catch((e: unknown) => {
     result.errors.push(`cache rebuild: ${e instanceof Error ? e.message : String(e)}`)
+    return null
   })
+  if (rebuildStats?.cacheErrors.length) {
+    result.errors.push(...rebuildStats.cacheErrors)
+  }
 
   return result
 }

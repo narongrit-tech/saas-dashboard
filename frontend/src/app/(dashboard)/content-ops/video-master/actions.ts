@@ -427,24 +427,30 @@ export async function rejectMapping(
 
 // ─── Cache rebuild ────────────────────────────────────────────────────────────
 
-export async function rebuildOverviewCache(): Promise<{ ok: boolean; rebuilt: number; error: string | null }> {
+export async function rebuildOverviewCache(): Promise<{
+  ok: boolean
+  processed: number
+  withThumbnail: number
+  cacheErrors: string[]
+  error: string | null
+}> {
+  const empty = { ok: false, processed: 0, withThumbnail: 0, cacheErrors: [], error: null }
   try {
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return { ok: false, rebuilt: 0, error: 'Unauthenticated' }
+    if (!user) return { ...empty, error: 'Unauthenticated' }
 
     const serviceClient = createServiceClient()
-
-    // Count videos before rebuild so we can report how many were processed
-    const { count } = await serviceClient
-      .from('video_master')
-      .select('id', { count: 'exact', head: true })
-      .eq('created_by', user.id)
-
-    await rebuildVideoOverviewCache(serviceClient, user.id)
-    return { ok: true, rebuilt: count ?? 0, error: null }
+    const stats = await rebuildVideoOverviewCache(serviceClient, user.id)
+    return {
+      ok: stats.cacheErrors.length === 0,
+      processed: stats.processed,
+      withThumbnail: stats.withThumbnail,
+      cacheErrors: stats.cacheErrors,
+      error: stats.cacheErrors.length > 0 ? stats.cacheErrors[0] : null,
+    }
   } catch (e) {
-    return { ok: false, rebuilt: 0, error: e instanceof Error ? e.message : String(e) }
+    return { ...empty, ok: false, error: e instanceof Error ? e.message : String(e) }
   }
 }
 

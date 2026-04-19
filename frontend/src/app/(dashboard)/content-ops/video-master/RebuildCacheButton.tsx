@@ -8,17 +8,23 @@ import { rebuildOverviewCache } from './actions'
 export function RebuildCacheButton() {
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
+  const [isError, setIsError] = useState(false)
 
   async function handleRebuild() {
     setLoading(true)
     setMsg(null)
+    setIsError(false)
     const res = await rebuildOverviewCache()
     setLoading(false)
-    if (res.ok) {
-      setMsg(`✓ Rebuilt ${res.rebuilt} rows`)
-      setTimeout(() => window.location.reload(), 800)
-    } else {
+    if (res.cacheErrors.length > 0) {
+      setIsError(true)
+      setMsg(`Cache error: ${res.cacheErrors[0]}`)
+    } else if (res.error) {
+      setIsError(true)
       setMsg(`Error: ${res.error}`)
+    } else {
+      setMsg(`✓ ${res.processed} rows, ${res.withThumbnail} thumbnails`)
+      setTimeout(() => window.location.reload(), 800)
     }
   }
 
@@ -28,7 +34,11 @@ export function RebuildCacheButton() {
         <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
         {loading ? 'Rebuilding...' : 'Rebuild Cache'}
       </Button>
-      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
+      {msg && (
+        <span className={`text-xs ${isError ? 'text-destructive' : 'text-muted-foreground'}`}>
+          {msg}
+        </span>
+      )}
     </div>
   )
 }
