@@ -108,7 +108,7 @@ export default async function ProductsPage({
                   </span>
 
                   {/* Avatar */}
-                  <EntityAvatar name={p.productName ?? p.productId} size="sm" />
+                  <EntityAvatar name={p.productName ?? p.productId} imageUrl={p.imageUrl ?? undefined} size="sm" />
 
                   {/* Name + top shop */}
                   <div className="min-w-0">

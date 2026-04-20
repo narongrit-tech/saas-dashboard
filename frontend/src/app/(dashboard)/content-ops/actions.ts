@@ -1280,6 +1280,7 @@ export interface ProductTrendRow {
   shopCount: number
   topShopName: string | null
   dailyCounts: number[]    // per-day counts, current period only, index 0 = oldest day
+  imageUrl?: string | null
 }
 
 export interface ShopTrendRow {
@@ -1302,6 +1303,7 @@ export interface ProductTableResult {
   shopCount: number
   orderItems: number
   topShopName: string | null
+  imageUrl?: string | null
 }
 
 export interface ShopTableResult {
@@ -1413,6 +1415,21 @@ export async function getProductTrends(
 
   const top = allProducts.slice(0, topN)
 
+  // Enrich all products with product_image_url from tt_product_master
+  if (allProducts.length > 0) {
+    const { data: masterRows } = await supabase
+      .from('tt_product_master')
+      .select('product_id,product_image_url')
+      .eq('created_by', user.id)
+      .in('product_id', allProducts.map((p) => p.productId))
+    const imageMap = new Map(
+      (masterRows ?? []).map((r) => [r.product_id, r.product_image_url as string | null])
+    )
+    for (const p of allProducts) {
+      p.imageUrl = imageMap.get(p.productId) ?? null
+    }
+  }
+
   // Full list for the client table
   const all: ProductTableResult[] = allProducts.map((p) => ({
     productId: p.productId,
@@ -1420,6 +1437,7 @@ export async function getProductTrends(
     shopCount: p.shopCount,
     orderItems: p.orderItems,
     topShopName: p.topShopName,
+    imageUrl: p.imageUrl,
   }))
 
   return { top, all, error: null }

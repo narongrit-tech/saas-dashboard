@@ -71,7 +71,7 @@ export function ProductFullTable({ rows }: { rows: ProductTableResult[] }) {
                         href={`/content-ops/products/${encodeURIComponent(row.productId)}`}
                         className="flex items-center gap-2.5 group"
                       >
-                        <EntityAvatar name={row.productName ?? row.productId} size="sm" />
+                        <EntityAvatar name={row.productName ?? row.productId} imageUrl={row.imageUrl ?? undefined} size="sm" />
                         <div className="min-w-0">
                           <p className="font-medium truncate group-hover:underline">
                             {row.productName ?? row.productId}
