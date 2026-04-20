@@ -1,8 +1,8 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
 import Link from 'next/link'
-import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ArrowLeft, X, Loader2, Eye, AlertTriangle } from 'lucide-react'
+import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ArrowLeft, X, Loader2, Eye, AlertTriangle, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -100,11 +100,23 @@ function fileKey(f: File): string {
   return `${f.name}|${f.size}|${f.lastModified}`
 }
 
+type RefreshStatus = 'idle' | 'running' | 'done' | 'error'
+
+interface RefreshResult {
+  factsRead: number
+  productsUpserted: number
+  shopsUpserted: number
+  cacheUpdated: number
+}
+
 export default function UploadPage() {
   const inputRef = useRef<HTMLInputElement>(null)
   const [queue, setQueue] = useState<QueueItem[]>([])
   const [dragging, setDragging] = useState(false)
   const [running, setRunning] = useState(false)
+  const [refreshStatus, setRefreshStatus] = useState<RefreshStatus>('idle')
+  const [refreshResult, setRefreshResult] = useState<RefreshResult | null>(null)
+  const [refreshError, setRefreshError] = useState<string | null>(null)
 
   function addFiles(files: FileList | null) {
     if (!files || files.length === 0) return
@@ -182,11 +194,37 @@ export default function UploadPage() {
     setRunning(false)
   }
 
+  const runRefresh = useCallback(async () => {
+    setRefreshStatus('running')
+    setRefreshError(null)
+    try {
+      const res = await fetch('/api/content-ops/refresh-master', { method: 'POST' })
+      const json = await res.json()
+      if (!res.ok || json.ok === false) {
+        setRefreshStatus('error')
+        setRefreshError(json.error ?? 'Refresh failed')
+      } else {
+        setRefreshStatus('done')
+        setRefreshResult(json.result as RefreshResult)
+      }
+    } catch (err) {
+      setRefreshStatus('error')
+      setRefreshError(err instanceof Error ? err.message : 'Network error')
+    }
+  }, [])
+
   const queuedCount = queue.filter((i) => i.status === 'queued').length
   const previewedCount = queue.filter((i) => i.status === 'previewed').length
   const doneCount = queue.filter((i) => i.status === 'done').length
   const errorCount = queue.filter((i) => i.status === 'error').length
   const allFinished = queue.length > 0 && queuedCount === 0 && previewedCount === 0 && !running && (doneCount + errorCount === queue.length)
+
+  // Auto-trigger refresh once all imports complete (only when there are successes)
+  useEffect(() => {
+    if (allFinished && doneCount > 0 && refreshStatus === 'idle') {
+      runRefresh()
+    }
+  }, [allFinished, doneCount, refreshStatus, runRefresh])
 
   return (
     <div className="max-w-2xl space-y-6">
@@ -433,6 +471,44 @@ export default function UploadPage() {
           {doneCount > 0 && `${doneCount} file${doneCount !== 1 ? 's' : ''} imported successfully`}
           {doneCount > 0 && errorCount > 0 && ' · '}
           {errorCount > 0 && `${errorCount} file${errorCount !== 1 ? 's' : ''} failed`}
+        </div>
+      )}
+
+      {/* Master refresh status — auto-triggered after import, or manual retry */}
+      {allFinished && (
+        <div className="rounded-lg border bg-card p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium">Rebuilding product & shop index</p>
+            {refreshStatus === 'error' && (
+              <Button size="sm" variant="outline" onClick={runRefresh}>
+                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                Retry
+              </Button>
+            )}
+          </div>
+          {refreshStatus === 'idle' && (
+            <p className="text-xs text-muted-foreground">Waiting…</p>
+          )}
+          {refreshStatus === 'running' && (
+            <div className="flex items-center gap-2 text-xs text-blue-600">
+              <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+              Rebuilding product master, shop master, and product cache… (may take up to 60s)
+            </div>
+          )}
+          {refreshStatus === 'done' && refreshResult && (
+            <div className="flex items-center gap-2 text-xs text-emerald-700">
+              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+              <span>
+                Index rebuilt — {refreshResult.productsUpserted.toLocaleString()} products · {refreshResult.shopsUpserted.toLocaleString()} shops · {refreshResult.factsRead.toLocaleString()} facts scanned
+              </span>
+            </div>
+          )}
+          {refreshStatus === 'error' && (
+            <div className="flex items-center gap-2 text-xs text-destructive">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+              Rebuild failed: {refreshError}
+            </div>
+          )}
         </div>
       )}
 

@@ -1,14 +1,74 @@
 import Link from 'next/link'
-import { ArrowLeft, AlertCircle } from 'lucide-react'
+import Image from 'next/image'
+import { ArrowLeft, AlertCircle, Video } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
+import { EntityAvatar } from '@/components/content-ops/entity-avatar'
 import { getProductDetail } from '../../actions'
+import type { ContentCard } from '../../actions'
 import { notFound } from 'next/navigation'
 
 export const dynamic = 'force-dynamic'
+
+function fmtMoney(v: number): string {
+  if (v >= 1_000_000) return `฿${(v / 1_000_000).toFixed(1)}M`
+  if (v >= 1_000) return `฿${(v / 1_000).toFixed(1)}K`
+  return `฿${v.toLocaleString()}`
+}
+
+function fmtViews(v: number): string {
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
+  if (v >= 1_000) return `${(v / 1_000).toFixed(0)}K`
+  return v.toLocaleString()
+}
+
+function ContentCardItem({ card, rank, productId }: { card: ContentCard; rank: number; productId: string }) {
+  return (
+    <a
+      href={card.postUrl ?? `/content-ops/analysis/orders?product_id=${encodeURIComponent(productId)}&content_id=${encodeURIComponent(card.contentId)}`}
+      target={card.postUrl ? '_blank' : undefined}
+      rel={card.postUrl ? 'noopener noreferrer' : undefined}
+      className="group rounded-lg border overflow-hidden hover:border-foreground/30 transition-colors block"
+    >
+      {/* Thumbnail — 9:16 TikTok aspect ratio */}
+      <div className="relative bg-muted" style={{ aspectRatio: '9/16' }}>
+        {card.thumbnailUrl ? (
+          <Image
+            src={card.thumbnailUrl}
+            alt=""
+            fill
+            className="object-cover"
+            sizes="(max-width: 640px) 50vw, (max-width: 768px) 33vw, (max-width: 1024px) 25vw, 17vw"
+            unoptimized
+          />
+        ) : (
+          <div className="flex items-center justify-center h-full text-muted-foreground">
+            <Video className="h-7 w-7" />
+          </div>
+        )}
+        <div className="absolute top-1 left-1 bg-black/60 rounded px-1.5 py-0.5 text-xs text-white font-mono leading-none">
+          #{rank}
+        </div>
+        {card.latestViews != null && (
+          <div className="absolute bottom-1 right-1 bg-black/60 rounded px-1.5 py-0.5 text-xs text-white leading-none">
+            {fmtViews(card.latestViews)}
+          </div>
+        )}
+      </div>
+      {/* Info */}
+      <div className="p-2 space-y-0.5">
+        <p className="text-xs font-medium leading-tight line-clamp-2 group-hover:underline">
+          {card.videoTitle ?? card.contentId}
+        </p>
+        <p className="text-xs font-semibold tabular-nums">{fmtMoney(card.gmv)}</p>
+        <p className="text-xs text-muted-foreground tabular-nums">{card.orders.toLocaleString()} orders</p>
+      </div>
+    </a>
+  )
+}
 
 const STATUS_STYLE: Record<string, string> = {
   settled: 'text-emerald-700 bg-emerald-50 border-emerald-200',
@@ -43,7 +103,7 @@ export default async function ProductDetailPage({
     )
   }
 
-  const { stats, statusBreakdown, topShops, topContentIds, relatedOrders } = data
+  const { stats, statusBreakdown, topShops, contentCards, relatedOrders } = data
   const total = stats.totalOrderItems
 
   return (
@@ -57,82 +117,89 @@ export default async function ProductDetailPage({
       </Button>
 
       {/* Entity header */}
-      <div>
-        <h1 className="text-xl font-semibold">{stats.productName ?? stats.productId}</h1>
-        <div className="flex items-center gap-3 mt-1 flex-wrap">
-          <span className="text-xs font-mono text-muted-foreground">{stats.productId}</span>
-          <span className="text-xs text-muted-foreground">{stats.shopCount} shops</span>
+      <div className="flex items-center gap-3">
+        <EntityAvatar name={stats.productName ?? stats.productId} size="lg" />
+        <div>
+          <h1 className="text-xl font-semibold">{stats.productName ?? stats.productId}</h1>
+          <div className="flex items-center gap-3 mt-0.5 flex-wrap">
+            <span className="text-xs font-mono text-muted-foreground">{stats.productId}</span>
+            <span className="text-xs text-muted-foreground">{stats.shopCount} shops</span>
+          </div>
         </div>
       </div>
 
       {/* KPI row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {[
-          { label: 'Order Items', value: total.toLocaleString() },
-          { label: 'Shops', value: stats.shopCount.toLocaleString() },
-          { label: 'Settled', value: `${stats.settledPercent}%` },
-          { label: 'Top Shop', value: stats.topShopName ?? '—' },
-        ].map((kpi) => (
-          <Card key={kpi.label}>
-            <CardContent className="pt-4 pb-3">
-              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{kpi.label}</p>
-              <p className="text-xl font-semibold tabular-nums mt-1 truncate">{kpi.value}</p>
-            </CardContent>
-          </Card>
-        ))}
+        <Card>
+          <CardContent className="pt-4 pb-3">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">GMV</p>
+            <p className="text-xl font-semibold tabular-nums mt-1">{fmtMoney(stats.totalGmv)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 pb-3">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Order Items</p>
+            <p className="text-xl font-semibold tabular-nums mt-1">{total.toLocaleString()}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 pb-3">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Commission</p>
+            <p className="text-xl font-semibold tabular-nums mt-1">{fmtMoney(stats.totalCommission)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 pb-3">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Cancel Rate</p>
+            <p className={`text-xl font-semibold tabular-nums mt-1 ${stats.cancelRate > 10 ? 'text-red-600' : ''}`}>
+              {stats.cancelRate.toFixed(1)}%
+            </p>
+          </CardContent>
+        </Card>
       </div>
 
-      {/* Top shops + top content IDs */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Top Shops</CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            {topShops.length === 0 ? (
-              <p className="text-sm text-muted-foreground px-4 pb-3">No shop data</p>
-            ) : (
-              <div className="divide-y">
-                {topShops.map((s, i) => (
-                  <Link
-                    key={i}
-                    href={s.href ?? '#'}
-                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/40 transition-colors"
-                  >
-                    <span className="text-xs text-muted-foreground w-4 shrink-0">{i + 1}</span>
-                    <p className="flex-1 text-sm truncate">{s.label}</p>
-                    <p className="text-sm font-semibold tabular-nums shrink-0">{s.value.toLocaleString()}</p>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      {/* Top shops */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Top Shops</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {topShops.length === 0 ? (
+            <p className="text-sm text-muted-foreground px-4 pb-3">No shop data</p>
+          ) : (
+            <div className="divide-y">
+              {topShops.map((s, i) => (
+                <Link
+                  key={i}
+                  href={s.href ?? '#'}
+                  className="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/40 transition-colors"
+                >
+                  <span className="text-xs text-muted-foreground w-4 shrink-0">{i + 1}</span>
+                  <EntityAvatar name={s.label} size="sm" />
+                  <p className="flex-1 text-sm truncate">{s.label}</p>
+                  <p className="text-sm font-semibold tabular-nums shrink-0">{s.value.toLocaleString()}</p>
+                </Link>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Top Content IDs</CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            {topContentIds.length === 0 ? (
-              <p className="text-sm text-muted-foreground px-4 pb-3">No content data</p>
-            ) : (
-              <div className="divide-y">
-                {topContentIds.map((c, i) => (
-                  <Link
-                    key={i}
-                    href={`/content-ops/content/${encodeURIComponent(c.label)}`}
-                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/40 transition-colors"
-                  >
-                    <span className="text-xs text-muted-foreground w-4 shrink-0">{i + 1}</span>
-                    <p className="flex-1 text-xs font-mono text-primary hover:underline truncate">{c.label}</p>
-                    <p className="text-sm font-semibold tabular-nums shrink-0">{c.value.toLocaleString()}</p>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      {/* Top content cards */}
+      <div>
+        <div className="flex items-baseline gap-2 mb-3">
+          <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Top Content</h2>
+          <span className="text-xs text-muted-foreground">{contentCards.length} videos · by order volume</span>
+        </div>
+        {contentCards.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No content data</p>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+            {contentCards.map((card, i) => (
+              <ContentCardItem key={card.contentId} card={card} rank={i + 1} productId={productId} />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Status breakdown */}

@@ -205,10 +205,23 @@ export interface ProductDetailStats {
   productId: string
   productName: string | null
   totalOrderItems: number
+  totalGmv: number
+  totalCommission: number
+  cancelRate: number
   shopCount: number
   settledCount: number
   settledPercent: number
   topShopName: string | null
+}
+
+export interface ContentCard {
+  contentId: string
+  orders: number
+  gmv: number
+  thumbnailUrl: string | null
+  videoTitle: string | null
+  postUrl: string | null
+  latestViews: number | null
 }
 
 export interface RelatedOrderRow {
@@ -224,6 +237,7 @@ export interface ProductDetail {
   statusBreakdown: StatusBucket[]
   topShops: Array<{ label: string; value: number; href?: string }>
   topContentIds: Array<{ label: string; value: number }>
+  contentCards: ContentCard[]
   relatedOrders: RelatedOrderRow[]
 }
 
@@ -252,7 +266,7 @@ export async function getProductDetail(
       .maybeSingle(),
     supabase
       .from('content_order_facts')
-      .select('order_id,sku_id,product_name,shop_code,shop_name,content_id,order_settlement_status,is_successful')
+      .select('order_id,sku_id,product_name,shop_code,shop_name,content_id,order_settlement_status,is_successful,is_cancelled,gmv,total_earned_amount')
       .eq('created_by', user.id)
       .eq('product_id', productId),
   ])
@@ -265,25 +279,35 @@ export async function getProductDetail(
   if (!master && rows.length === 0) return { data: null, error: 'Product not found' }
 
   // Aggregate facts for all derived metrics
-  const shopMap = new Map<string, { name: string | null; count: number }>()
-  const contentMap = new Map<string, number>()
+  const shopMap = new Map<string, { name: string | null; count: number; gmv: number }>()
+  const contentMap = new Map<string, { orders: number; gmv: number }>()
   const statusCounts = new Map<string, number>()
   let productNameFromFacts: string | null = null
   let settledCount = 0
+  let cancelCount = 0
+  let totalGmv = 0
+  let totalCommission = 0
 
   for (const r of rows) {
     if (!productNameFromFacts && r.product_name) productNameFromFacts = r.product_name
     if (r.is_successful) settledCount++
+    if (r.is_cancelled) cancelCount++
+    totalGmv += Number(r.gmv) || 0
+    totalCommission += Number(r.total_earned_amount) || 0
     const bucket = mapStatusBucket(r.order_settlement_status ?? '')
     statusCounts.set(bucket, (statusCounts.get(bucket) ?? 0) + 1)
     if (r.shop_code) {
-      const s = shopMap.get(r.shop_code) ?? { name: null, count: 0 }
+      const s = shopMap.get(r.shop_code) ?? { name: null, count: 0, gmv: 0 }
       s.count++
+      s.gmv += Number(r.gmv) || 0
       if (!s.name && r.shop_name) s.name = r.shop_name
       shopMap.set(r.shop_code, s)
     }
     if (r.content_id) {
-      contentMap.set(r.content_id, (contentMap.get(r.content_id) ?? 0) + 1)
+      const cv = contentMap.get(r.content_id) ?? { orders: 0, gmv: 0 }
+      cv.orders++
+      cv.gmv += Number(r.gmv) || 0
+      contentMap.set(r.content_id, cv)
     }
   }
 
@@ -297,6 +321,9 @@ export async function getProductDetail(
     productId,
     productName,
     totalOrderItems: total,
+    totalGmv: parseFloat(totalGmv.toFixed(2)),
+    totalCommission: parseFloat(totalCommission.toFixed(2)),
+    cancelRate: total > 0 ? Math.round((cancelCount / total) * 1000) / 10 : 0,
     shopCount: shopMap.size,
     settledCount,
     settledPercent: total > 0 ? Math.round((settledCount / total) * 1000) / 10 : 0,
@@ -319,10 +346,47 @@ export async function getProductDetail(
       href: `/content-ops/shops/${encodeURIComponent(code)}`,
     }))
 
-  const topContentIds = [...contentMap.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([id, count]) => ({ label: id, value: count }))
+  // Top 12 content IDs by order count
+  const topContentEntries = [...contentMap.entries()]
+    .sort((a, b) => b[1].orders - a[1].orders)
+    .slice(0, 12)
+
+  const topContentIds = topContentEntries.map(([id, v]) => ({ label: id, value: v.orders }))
+
+  // Enrich top content with video_master_v2 data (thumbnails, titles, views)
+  let contentCards: ContentCard[] = topContentEntries.map(([id, v]) => ({
+    contentId: id,
+    orders: v.orders,
+    gmv: parseFloat(v.gmv.toFixed(2)),
+    thumbnailUrl: null,
+    videoTitle: null,
+    postUrl: null,
+    latestViews: null,
+  }))
+
+  if (topContentEntries.length > 0) {
+    const videoIds = topContentEntries.map(([id]) => id)
+    const { data: videos } = await supabase
+      .from('video_master_v2')
+      .select('tiktok_video_id,thumbnail_url,video_title,post_url,latest_views')
+      .eq('created_by', user.id)
+      .in('tiktok_video_id', videoIds)
+
+    if (videos && videos.length > 0) {
+      const videoMap = new Map(videos.map((v) => [v.tiktok_video_id as string, v]))
+      contentCards = contentCards.map((card) => {
+        const v = videoMap.get(card.contentId)
+        if (!v) return card
+        return {
+          ...card,
+          thumbnailUrl: (v.thumbnail_url as string | null) ?? null,
+          videoTitle: (v.video_title as string | null) ?? null,
+          postUrl: (v.post_url as string | null) ?? null,
+          latestViews: (v.latest_views as number | null) ?? null,
+        }
+      })
+    }
+  }
 
   const relatedOrders: RelatedOrderRow[] = rows.slice(0, 10).map((r) => ({
     orderId: r.order_id,
@@ -332,7 +396,7 @@ export async function getProductDetail(
     contentId: r.content_id,
   }))
 
-  return { data: { stats, statusBreakdown, topShops, topContentIds, relatedOrders }, error: null }
+  return { data: { stats, statusBreakdown, topShops, topContentIds, contentCards, relatedOrders }, error: null }
 }
 
 
