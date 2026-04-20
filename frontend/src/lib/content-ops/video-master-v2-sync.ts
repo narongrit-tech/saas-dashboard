@@ -120,7 +120,7 @@ export async function rebuildVideoOverviewCacheV2(
   // 1. Fetch V2 canonical rows (with retry for large IN clauses)
   let vmQuery = supabase
     .from('video_master_v2')
-    .select('id, tiktok_video_id, video_title, posted_at, duration_sec, post_url, content_type, thumbnail_url, thumbnail_source, latest_views, latest_likes, latest_comments, latest_shares, latest_watch_full_rate, latest_avg_watch_time_seconds, latest_new_followers, last_studio_scraped_at')
+    .select('id, tiktok_video_id, video_title, posted_at, duration_sec, post_url, content_type, thumbnail_url, thumbnail_source, latest_views, latest_likes, latest_comments, latest_shares, latest_watch_full_rate, latest_avg_watch_time_seconds, latest_new_followers, last_studio_scraped_at, is_excluded')
     .eq('created_by', createdBy)
   if (canonicalIds && canonicalIds.length > 0) {
     vmQuery = vmQuery.in('id', canonicalIds)
@@ -144,6 +144,7 @@ export async function rebuildVideoOverviewCacheV2(
     latest_avg_watch_time_seconds?: number | null
     latest_new_followers?: number | null
     last_studio_scraped_at?: string | null
+    is_excluded?: boolean
   }
 
   let videos: VmRow[] | null = null
@@ -292,6 +293,7 @@ export async function rebuildVideoOverviewCacheV2(
         has_studio_data: hasStudio,
         has_perf_data: perf !== null,
         has_sales_data: sales !== null && (sales?.allOrders?.size ?? 0) > 0,
+        is_excluded: vm.is_excluded ?? false,
       }
     })
 

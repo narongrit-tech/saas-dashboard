@@ -119,11 +119,6 @@ const menuGroups: MenuGroup[] = [
         icon: Video,
       },
       {
-        title: 'Video Overview V2',
-        href: '/content-ops/video-master-v2',
-        icon: Video,
-      },
-      {
         title: 'Products',
         href: '/content-ops/products',
         icon: Package2,

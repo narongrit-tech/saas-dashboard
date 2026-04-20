@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { runFullVideoMasterSync, rebuildVideoOverviewCache, type SyncResult } from '@/lib/content-ops/video-master-sync'
+import { rebuildVideoOverviewCacheV2 } from '@/lib/content-ops/video-master-v2-sync'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -500,6 +501,237 @@ export async function getVideoMasterHealth(): Promise<{
     }
   } catch (e) {
     return { ...empty, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+// ─── V2 Master ────────────────────────────────────────────────────────────────
+
+export type VideoOverviewV2MasterRow = {
+  id: string
+  canonical_id: string
+  tiktok_video_id: string
+  video_title: string | null
+  posted_at: string | null
+  duration_sec: number | null
+  post_url: string | null
+  thumbnail_url: string | null
+  thumbnail_source: string | null
+  content_type: string
+  last_scraped_at: string | null
+  headline_video_views: number | null
+  headline_likes_total: number | null
+  headline_comments_total: number | null
+  headline_shares_total: number | null
+  watched_full_video_rate: number | null
+  average_watch_time_seconds: number | null
+  analytics_new_followers: number | null
+  has_studio_data: boolean
+  has_perf_data: boolean
+  has_sales_data: boolean
+  is_excluded: boolean
+}
+
+export type CoverageV2Master = {
+  totalVideos: number
+  studioCount: number
+  studioPct: number
+  totalViews: number
+  avgWatchRate: number | null
+}
+
+export type VideoOverviewV2MasterFilters = {
+  q?: string
+  from?: string
+  to?: string
+  studioOnly?: boolean
+  thumbOnly?: boolean
+  showExcluded?: boolean
+}
+
+const V2_PAGE_SIZE = 50
+
+const V2_SELECT_COLS = [
+  'id', 'canonical_id', 'tiktok_video_id', 'video_title', 'posted_at', 'duration_sec',
+  'post_url', 'thumbnail_url', 'thumbnail_source', 'content_type',
+  'last_scraped_at', 'headline_video_views', 'headline_likes_total', 'headline_comments_total',
+  'headline_shares_total', 'watched_full_video_rate', 'average_watch_time_seconds',
+  'analytics_new_followers', 'has_studio_data', 'has_perf_data', 'has_sales_data', 'is_excluded',
+].join(',')
+
+export async function getVideoOverviewV2Master(
+  filters: VideoOverviewV2MasterFilters = {},
+  page = 1
+): Promise<{
+  data: VideoOverviewV2MasterRow[] | null
+  coverage: CoverageV2Master | null
+  total: number
+  pageSize: number
+  error: string | null
+}> {
+  const empty = { data: null, coverage: null, total: 0, pageSize: V2_PAGE_SIZE, error: null }
+  try {
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return { ...empty, error: 'Unauthenticated' }
+
+    const offset = (page - 1) * V2_PAGE_SIZE
+
+    let dataQ = supabase
+      .from('video_overview_cache_v2')
+      .select(V2_SELECT_COLS, { count: 'exact' })
+      .eq('created_by', user.id)
+
+    let covQ = supabase
+      .from('video_overview_cache_v2')
+      .select('has_studio_data, headline_video_views, watched_full_video_rate')
+      .eq('created_by', user.id)
+
+    if (!filters.showExcluded) {
+      dataQ = dataQ.eq('is_excluded', false)
+      covQ = covQ.eq('is_excluded', false)
+    }
+    if (filters.q) {
+      dataQ = dataQ.ilike('video_title', `%${filters.q}%`)
+      covQ = covQ.ilike('video_title', `%${filters.q}%`)
+    }
+    if (filters.from) {
+      dataQ = dataQ.gte('posted_at', filters.from)
+      covQ = covQ.gte('posted_at', filters.from)
+    }
+    if (filters.to) {
+      dataQ = dataQ.lte('posted_at', filters.to)
+      covQ = covQ.lte('posted_at', filters.to)
+    }
+    if (filters.studioOnly) {
+      dataQ = dataQ.eq('has_studio_data', true)
+      covQ = covQ.eq('has_studio_data', true)
+    }
+    if (filters.thumbOnly) {
+      dataQ = dataQ.not('thumbnail_url', 'is', null)
+      covQ = covQ.not('thumbnail_url', 'is', null)
+    }
+
+    const [dataRes, coverageRes] = await Promise.all([
+      dataQ
+        .order('headline_video_views', { ascending: false, nullsFirst: false })
+        .range(offset, offset + V2_PAGE_SIZE - 1),
+      covQ,
+    ])
+
+    if (dataRes.error) return { ...empty, error: dataRes.error.message }
+
+    const allRows = (coverageRes.data ?? []) as Array<{
+      has_studio_data: boolean
+      headline_video_views: number | null
+      watched_full_video_rate: number | null
+    }>
+    const totalVideos = allRows.length
+    const studioCount = allRows.filter(r => r.has_studio_data).length
+    const totalViews = allRows.reduce((s, r) => s + (r.headline_video_views ?? 0), 0)
+    const watchRates = allRows.filter(r => r.watched_full_video_rate !== null).map(r => r.watched_full_video_rate as number)
+    const avgWatchRate = watchRates.length > 0 ? watchRates.reduce((a, b) => a + b) / watchRates.length : null
+
+    return {
+      data: (dataRes.data ?? []) as unknown as VideoOverviewV2MasterRow[],
+      coverage: {
+        totalVideos,
+        studioCount,
+        studioPct: totalVideos > 0 ? Math.round((studioCount / totalVideos) * 100) : 0,
+        totalViews,
+        avgWatchRate,
+      },
+      total: dataRes.count ?? 0,
+      pageSize: V2_PAGE_SIZE,
+      error: null,
+    }
+  } catch (e) {
+    return { ...empty, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+export async function bulkExcludeVideos(
+  canonicalIds: string[]
+): Promise<{ ok: boolean; count: number; error: string | null }> {
+  if (canonicalIds.length === 0) return { ok: true, count: 0, error: null }
+  try {
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return { ok: false, count: 0, error: 'Unauthenticated' }
+
+    const now = new Date().toISOString()
+    const [vmRes, cacheRes] = await Promise.all([
+      supabase
+        .from('video_master_v2')
+        .update({ is_excluded: true, excluded_at: now, excluded_by: user.id })
+        .eq('created_by', user.id)
+        .in('id', canonicalIds),
+      supabase
+        .from('video_overview_cache_v2')
+        .update({ is_excluded: true })
+        .eq('created_by', user.id)
+        .in('canonical_id', canonicalIds),
+    ])
+
+    const err = vmRes.error?.message ?? cacheRes.error?.message ?? null
+    return { ok: !err, count: canonicalIds.length, error: err }
+  } catch (e) {
+    return { ok: false, count: 0, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+export async function bulkUnexcludeVideos(
+  canonicalIds: string[]
+): Promise<{ ok: boolean; count: number; error: string | null }> {
+  if (canonicalIds.length === 0) return { ok: true, count: 0, error: null }
+  try {
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return { ok: false, count: 0, error: 'Unauthenticated' }
+
+    const [vmRes, cacheRes] = await Promise.all([
+      supabase
+        .from('video_master_v2')
+        .update({ is_excluded: false, excluded_at: null, excluded_by: null })
+        .eq('created_by', user.id)
+        .in('id', canonicalIds),
+      supabase
+        .from('video_overview_cache_v2')
+        .update({ is_excluded: false })
+        .eq('created_by', user.id)
+        .in('canonical_id', canonicalIds),
+    ])
+
+    const err = vmRes.error?.message ?? cacheRes.error?.message ?? null
+    return { ok: !err, count: canonicalIds.length, error: err }
+  } catch (e) {
+    return { ok: false, count: 0, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+export async function rebuildCacheV2Master(): Promise<{
+  ok: boolean
+  processed: number
+  withThumbnail: number
+  withStudioData: number
+  error: string | null
+}> {
+  const empty = { ok: false, processed: 0, withThumbnail: 0, withStudioData: 0, error: null }
+  try {
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return { ...empty, error: 'Unauthenticated' }
+
+    const serviceClient = createServiceClient()
+    const stats = await rebuildVideoOverviewCacheV2(serviceClient, user.id)
+    return {
+      ok: stats.cacheErrors.length === 0,
+      processed: stats.processed,
+      withThumbnail: stats.withThumbnail,
+      withStudioData: stats.withStudioData,
+      error: stats.cacheErrors.length > 0 ? stats.cacheErrors[0] : null,
+    }
+  } catch (e) {
+    return { ...empty, ok: false, error: e instanceof Error ? e.message : String(e) }
   }
 }
 
