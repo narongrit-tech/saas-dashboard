@@ -168,7 +168,9 @@ async function main() {
   duplicate IDs   : ${summary.dups}
 ─────────────────────────────────────`)
 
-  if (summary.fail > 0) process.exit(1)
+  // Force exit so fire-and-forget syncPerfStatsBatch doesn't hold the process open
+  // and cause the calling execSync to time out.
+  process.exit(summary.fail > 0 ? 1 : 0)
 }
 
 main().catch((err) => {
