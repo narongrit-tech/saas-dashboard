@@ -2,10 +2,10 @@
  * Video Master V2 Sync — Isolated rebuild path alongside V1
  *
  * Targets V2 tables only: video_master_v2, video_source_mapping_v2, video_overview_cache_v2
- * V1 tables (video_master, video_source_mapping, video_overview_cache) are NEVER touched.
+ * V1 tables are NEVER read or written.
  *
- * Engagement/perf data is joined from V1 staging tables (tiktok_studio_analytics_rows,
- * tiktok_video_perf_stats) — no need for V2-specific staging tables.
+ * Studio analytics metrics are stored directly in video_master_v2 (latest_views, etc.)
+ * and read back during cache rebuild — no V1 staging table join needed.
  *
  * Usage:
  *   - import-studio-analytics-v2.ts → calls upsertVideoMasterV2 + upsertSourceMappingV2
@@ -120,7 +120,7 @@ export async function rebuildVideoOverviewCacheV2(
   // 1. Fetch V2 canonical rows (with retry for large IN clauses)
   let vmQuery = supabase
     .from('video_master_v2')
-    .select('id, tiktok_video_id, video_title, posted_at, duration_sec, post_url, content_type, thumbnail_url, thumbnail_source')
+    .select('id, tiktok_video_id, video_title, posted_at, duration_sec, post_url, content_type, thumbnail_url, thumbnail_source, latest_views, latest_likes, latest_comments, latest_shares, latest_watch_full_rate, latest_avg_watch_time_seconds, latest_new_followers, last_studio_scraped_at')
     .eq('created_by', createdBy)
   if (canonicalIds && canonicalIds.length > 0) {
     vmQuery = vmQuery.in('id', canonicalIds)
@@ -136,6 +136,14 @@ export async function rebuildVideoOverviewCacheV2(
     content_type: string
     thumbnail_url?: string | null
     thumbnail_source?: string | null
+    latest_views?: number | null
+    latest_likes?: number | null
+    latest_comments?: number | null
+    latest_shares?: number | null
+    latest_watch_full_rate?: number | null
+    latest_avg_watch_time_seconds?: number | null
+    latest_new_followers?: number | null
+    last_studio_scraped_at?: string | null
   }
 
   let videos: VmRow[] | null = null
@@ -164,19 +172,6 @@ export async function rebuildVideoOverviewCacheV2(
   for (let i = 0; i < allCanonicalIds.length; i += CHUNK) {
     const chunkCanonical = allCanonicalIds.slice(i, i + CHUNK)
     const chunkVideoIds = videos.slice(i, i + CHUNK).map((v) => v.tiktok_video_id)
-
-    // Studio analytics — reuse V1 staging table
-    const { data: studioRows } = await supabase
-      .from('tiktok_studio_analytics_rows')
-      .select('post_id, scraped_at, headline_video_views, headline_likes_total, headline_comments_total, headline_shares_total, watched_full_video_rate, average_watch_time_seconds, analytics_new_followers, traffic_sources')
-      .eq('created_by', createdBy)
-      .in('post_id', chunkVideoIds)
-      .order('scraped_at', { ascending: false })
-
-    const latestStudio = new Map<string, typeof studioRows extends (infer T)[] | null ? T : never>()
-    for (const r of studioRows ?? []) {
-      if (!latestStudio.has(r.post_id)) latestStudio.set(r.post_id, r)
-    }
 
     // Perf stats — reuse V1 staging table
     const { data: perfRows } = await supabase
@@ -249,14 +244,14 @@ export async function rebuildVideoOverviewCacheV2(
     const cacheRows = chunkCanonical.map((canonId) => {
       const vm = canonicalToMeta.get(canonId)!
       const videoId = vm.tiktok_video_id
-      const eng = latestStudio.get(videoId) ?? null
+      const hasStudio = vm.last_studio_scraped_at != null
       const perf = latestPerf.get(videoId) ?? null
       const sales = salesByCanonical.get(canonId) ?? null
       const thumbUrl = (vm as VmRow).thumbnail_url ?? null
 
       stats.processed++
       if (thumbUrl) stats.withThumbnail++
-      if (eng) stats.withStudioData++
+      if (hasStudio) stats.withStudioData++
 
       return {
         created_by: createdBy,
@@ -269,16 +264,16 @@ export async function rebuildVideoOverviewCacheV2(
         content_type: vm.content_type ?? 'video',
         thumbnail_url: thumbUrl,
         thumbnail_source: (vm as VmRow).thumbnail_source ?? null,
-        // Studio (V1 staging)
-        last_scraped_at: eng?.scraped_at ?? null,
-        headline_video_views: eng?.headline_video_views ?? null,
-        headline_likes_total: eng?.headline_likes_total ?? null,
-        headline_comments_total: eng?.headline_comments_total ?? null,
-        headline_shares_total: eng?.headline_shares_total ?? null,
-        watched_full_video_rate: eng?.watched_full_video_rate ?? null,
-        average_watch_time_seconds: eng?.average_watch_time_seconds ?? null,
-        analytics_new_followers: (eng as { analytics_new_followers?: number } | null)?.analytics_new_followers ?? null,
-        traffic_sources: eng?.traffic_sources ?? null,
+        // Studio (V2 — read directly from video_master_v2)
+        last_scraped_at: vm.last_studio_scraped_at ?? null,
+        headline_video_views: vm.latest_views ?? null,
+        headline_likes_total: vm.latest_likes ?? null,
+        headline_comments_total: vm.latest_comments ?? null,
+        headline_shares_total: vm.latest_shares ?? null,
+        watched_full_video_rate: vm.latest_watch_full_rate ?? null,
+        average_watch_time_seconds: vm.latest_avg_watch_time_seconds ?? null,
+        analytics_new_followers: vm.latest_new_followers ?? null,
+        traffic_sources: null,
         // Perf (V1 staging)
         last_perf_imported_at: perf?.created_at ?? null,
         perf_views: perf?.views ?? null,
@@ -294,7 +289,7 @@ export async function rebuildVideoOverviewCacheV2(
         total_order_count: sales ? sales.allOrders.size : null,
         sales_product_count: sales ? sales.products.size : null,
         // Coverage
-        has_studio_data: eng !== null,
+        has_studio_data: hasStudio,
         has_perf_data: perf !== null,
         has_sales_data: sales !== null && (sales?.allOrders?.size ?? 0) > 0,
       }

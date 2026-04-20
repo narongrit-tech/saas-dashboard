@@ -133,6 +133,8 @@ async function main() {
   let totalErrors = 0
   const affectedCanonicalIds: string[] = []
 
+  const BATCH = 200
+
   // ─── Per-file import ────────────────────────────────────────────────────────
   for (let fi = 0; fi < files.length; fi++) {
     const filePath = files[fi]
@@ -146,50 +148,88 @@ async function main() {
       continue
     }
 
-    // Batch upsert to video_master_v2
-    const BATCH = 100
+    const validRows = parsed.rows.filter(r => !!r.postId)
+    totalErrors += parsed.rows.length - validRows.length
+
     let fileUpserted = 0
     let fileErrors = 0
 
-    for (let bi = 0; bi < parsed.rows.length; bi += BATCH) {
-      const chunk = parsed.rows.slice(bi, bi + BATCH)
+    // ── Pass 1: batch upsert video_master_v2 → get canonical IDs back ──────
+    const videoIdToCanon = new Map<string, string>()
 
-      for (const row of chunk) {
-        if (!row.postId) { fileErrors++; continue }
+    for (let bi = 0; bi < validRows.length; bi += BATCH) {
+      const chunk = validRows.slice(bi, bi + BATCH)
+      const vmRows = chunk.map(row => ({
+        created_by: args.createdBy!,
+        tiktok_video_id: row.postId,
+        content_type: 'video',
+        video_title: row.videoTitle ?? null,
+        posted_at: row.postedAt ?? null,
+        post_url: row.postUrl ?? null,
+        title_source: 'studio_analytics',
+        latest_views: row.headlineVideoViews ?? null,
+        latest_likes: row.headlineLikesTotal ?? null,
+        latest_comments: row.headlineCommentsTotal ?? null,
+        latest_shares: row.headlineSharesTotal ?? null,
+        latest_watch_full_rate: row.watchedFullVideoRate ?? null,
+        latest_avg_watch_time_seconds: row.averageWatchTimeSeconds ?? null,
+        latest_new_followers: row.newFollowers ?? null,
+        last_studio_scraped_at: row.scrapedAt,
+      }))
 
-        const canonId = await upsertVideoMasterV2(supabase, args.createdBy!, row.postId, {
-          videoTitle: row.videoTitle,
-          postedAt: row.postedAt,
-          postUrl: row.postUrl,
-          titleSource: 'studio_analytics',
-          contentType: 'video',
-        })
+      const { data, error } = await supabase
+        .from('video_master_v2')
+        .upsert(vmRows, { onConflict: 'created_by,tiktok_video_id', ignoreDuplicates: false })
+        .select('id, tiktok_video_id')
 
-        if (!canonId) {
-          fileErrors++
-          continue
-        }
-
-        affectedCanonicalIds.push(canonId)
-        fileUpserted++
-
-        await upsertSourceMappingV2(
-          supabase,
-          args.createdBy!,
-          'studio_analytics',
-          row.postId,
-          canonId,
-          1,
-          1.0,
-          'matched',
-          'v2:stage1:post_id=tiktok_video_id'
-        )
+      if (error || !data) {
+        console.error(`  ✗ video_master_v2 batch error: ${error?.message}`)
+        fileErrors += chunk.length
+        continue
       }
+
+      for (const row of data) videoIdToCanon.set(row.tiktok_video_id, row.id)
+      fileUpserted += data.length
+      process.stdout.write(`\r  video_master_v2: ${Math.min(bi + BATCH, validRows.length)} / ${validRows.length}`)
     }
 
+    // ── Pass 2: batch upsert video_source_mapping_v2 ───────────────────────
+    const now = new Date().toISOString()
+    const mappingRows = validRows
+      .map(row => {
+        const canonId = videoIdToCanon.get(row.postId)
+        if (!canonId) return null
+        return {
+          created_by: args.createdBy!,
+          source_type: 'studio_analytics' as const,
+          external_id: row.postId,
+          canonical_id: canonId,
+          match_stage: 1,
+          confidence_score: 1.0,
+          match_status: 'matched' as const,
+          match_reason: 'v2:stage1:post_id=tiktok_video_id',
+          latest_source_table: 'tiktok_studio_analytics_rows',
+          last_seen_at: now,
+        }
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null)
+
+    for (let bi = 0; bi < mappingRows.length; bi += BATCH) {
+      const chunk = mappingRows.slice(bi, bi + BATCH)
+      const { error } = await supabase
+        .from('video_source_mapping_v2')
+        .upsert(chunk, { onConflict: 'created_by,source_type,external_id', ignoreDuplicates: false })
+      if (error) {
+        console.error(`  ✗ source_mapping batch error: ${error.message}`)
+        fileErrors += chunk.length
+      }
+      process.stdout.write(`\r  source_mapping: ${Math.min(bi + BATCH, mappingRows.length)} / ${mappingRows.length}`)
+    }
+
+    affectedCanonicalIds.push(...videoIdToCanon.values())
     totalUpserted += fileUpserted
     totalErrors += fileErrors
-    console.log(`  ✓ upserted=${fileUpserted} errors=${fileErrors} invalid=${parsed.invalidRowCount}  ${label}`)
+    console.log(`\n  ✓ upserted=${fileUpserted} errors=${fileErrors} invalid=${parsed.invalidRowCount}  ${label}`)
   }
 
   // ─── Summary ────────────────────────────────────────────────────────────────
