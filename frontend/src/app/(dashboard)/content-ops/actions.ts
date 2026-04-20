@@ -343,15 +343,21 @@ export interface ShopDetailStats {
   shopName: string | null
   totalOrderItems: number
   productCount: number
+  contentCount: number
   settledCount: number
   settledPercent: number
   topProductName: string | null
+  totalGmv: number
+  totalQty: number
+  totalCommission: number
+  cancelCount: number
+  cancelRate: number
 }
 
 export interface ShopDetail {
   stats: ShopDetailStats
   statusBreakdown: StatusBucket[]
-  topProducts: Array<{ label: string; value: number; href?: string }>
+  topProducts: Array<{ productId: string; label: string; value: number; gmv: number; imageUrl: string | null; href?: string }>
   topContentIds: Array<{ label: string; value: number }>
   relatedOrders: RelatedOrderRow[]
 }
@@ -372,7 +378,7 @@ export async function getShopDetail(
   // Used for: all counts (totalOrderItems, settledCount, productCount), status
   // breakdown, top products list, top content IDs, related orders.
   // Facts are always current — no refresh required.
-  const [masterRes, factsRes] = await Promise.all([
+  const [masterRes, factsRes, productImagesRes] = await Promise.all([
     supabase
       .from('tt_shop_master')
       .select('shop_code,shop_name')
@@ -381,33 +387,48 @@ export async function getShopDetail(
       .maybeSingle(),
     supabase
       .from('content_order_facts')
-      .select('order_id,sku_id,product_id,product_name,shop_name,content_id,order_settlement_status,is_successful')
+      .select('order_id,sku_id,product_id,product_name,shop_name,content_id,order_settlement_status,is_successful,gmv,total_earned_amount,is_cancelled')
       .eq('created_by', user.id)
       .eq('shop_code', shopCode),
+    supabase
+      .from('tt_product_master')
+      .select('product_id,product_image_url')
+      .eq('created_by', user.id)
+      .not('product_image_url', 'is', null),
   ])
 
   if (factsRes.error) return { data: null, error: factsRes.error.message }
 
   const rows = factsRes.data ?? []
   const master = masterRes.data  // null when master refresh has not yet run
+  const imageMap = new Map(
+    (productImagesRes.data ?? []).map((r) => [r.product_id, r.product_image_url as string | null])
+  )
 
   if (!master && rows.length === 0) return { data: null, error: 'Shop not found' }
 
   // Aggregate facts for all derived metrics
-  const productMap = new Map<string, { name: string | null; count: number }>()
+  const productMap = new Map<string, { name: string | null; count: number; gmv: number }>()
   const contentMap = new Map<string, number>()
   const statusCounts = new Map<string, number>()
   let shopNameFromFacts: string | null = null
   let settledCount = 0
+  let totalGmv = 0
+  let totalCommission = 0
+  let cancelCount = 0
 
   for (const r of rows) {
     if (!shopNameFromFacts && r.shop_name) shopNameFromFacts = r.shop_name
     if (r.is_successful) settledCount++
+    totalGmv += Number(r.gmv) || 0
+    totalCommission += Number(r.total_earned_amount) || 0
+    if (r.is_cancelled) cancelCount++
     const bucket = mapStatusBucket(r.order_settlement_status ?? '')
     statusCounts.set(bucket, (statusCounts.get(bucket) ?? 0) + 1)
     if (r.product_id) {
-      const p = productMap.get(r.product_id) ?? { name: null, count: 0 }
+      const p = productMap.get(r.product_id) ?? { name: null, count: 0, gmv: 0 }
       p.count++
+      p.gmv += Number(r.gmv) || 0
       if (!p.name && r.product_name) p.name = r.product_name
       productMap.set(r.product_id, p)
     }
@@ -427,9 +448,15 @@ export async function getShopDetail(
     shopName,
     totalOrderItems: total,
     productCount: productMap.size,
+    contentCount: contentMap.size,
     settledCount,
     settledPercent: total > 0 ? Math.round((settledCount / total) * 1000) / 10 : 0,
     topProductName: topProductEntry ? (topProductEntry[1].name ?? topProductEntry[0]) : null,
+    totalGmv,
+    totalQty: total,
+    totalCommission,
+    cancelCount,
+    cancelRate: total > 0 ? Math.round((cancelCount / total) * 1000) / 10 : 0,
   }
 
   const statusBreakdown: StatusBucket[] = (['settled', 'pending', 'awaiting_payment', 'ineligible'] as const).map((key) => ({
@@ -440,11 +467,14 @@ export async function getShopDetail(
   }))
 
   const topProducts = [...productMap.entries()]
-    .sort((a, b) => b[1].count - a[1].count)
+    .sort((a, b) => b[1].gmv - a[1].gmv || b[1].count - a[1].count)
     .slice(0, 8)
     .map(([id, v]) => ({
+      productId: id,
       label: v.name ?? id,
       value: v.count,
+      gmv: v.gmv,
+      imageUrl: imageMap.get(id) ?? null,
       href: `/content-ops/products/${encodeURIComponent(id)}`,
     }))
 
@@ -1331,21 +1361,30 @@ export async function getProductTrends(
   const prevTo = offsetDate(from, -1)
   const prevFrom = offsetDate(prevTo, -(currentDays - 1))
 
-  // Fetch both periods in one query.
+  // Fetch facts + product images in parallel to avoid sequential network calls.
   // ORDER BY order_date DESC so the 1000-row PostgREST max-rows cap returns
   // the most-recent rows instead of oldest insertion-order rows.
-  // (.limit(200000) was silently ignored — PostgREST hard cap = 1000 rows.)
-  const { data, error: dbError } = await supabase
-    .from('content_order_facts')
-    .select('product_id,product_name,shop_code,shop_name,order_date')
-    .eq('created_by', user.id)
-    .gte('order_date', prevFrom)
-    .lte('order_date', to)
-    .order('order_date', { ascending: false })
+  const [factsRes, masterRes] = await Promise.all([
+    supabase
+      .from('content_order_facts')
+      .select('product_id,product_name,shop_code,shop_name,order_date')
+      .eq('created_by', user.id)
+      .gte('order_date', prevFrom)
+      .lte('order_date', to)
+      .order('order_date', { ascending: false }),
+    supabase
+      .from('tt_product_master')
+      .select('product_id,product_image_url')
+      .eq('created_by', user.id)
+      .not('product_image_url', 'is', null),
+  ])
 
-  if (dbError) return { top: [], all: [], error: dbError.message }
+  if (factsRes.error) return { top: [], all: [], error: factsRes.error.message }
 
-  const rows = data ?? []
+  const rows = factsRes.data ?? []
+  const imageMap = new Map(
+    (masterRes.data ?? []).map((r) => [r.product_id, r.product_image_url as string | null])
+  )
   const currentDaySet = new Set(buildDayArray(from, to))
   const currentDayArray = buildDayArray(from, to)
 
@@ -1409,26 +1448,12 @@ export async function getProductTrends(
         shopCount: v.shops.size,
         topShopName: topShop ? (topShop[1] ?? topShop[0]) : null,
         dailyCounts,
+        imageUrl: imageMap.get(productId) ?? null,
       }
     })
     .sort((a, b) => b.orderItems - a.orderItems)
 
   const top = allProducts.slice(0, topN)
-
-  // Enrich all products with product_image_url from tt_product_master
-  if (allProducts.length > 0) {
-    const { data: masterRows } = await supabase
-      .from('tt_product_master')
-      .select('product_id,product_image_url')
-      .eq('created_by', user.id)
-      .in('product_id', allProducts.map((p) => p.productId))
-    const imageMap = new Map(
-      (masterRows ?? []).map((r) => [r.product_id, r.product_image_url as string | null])
-    )
-    for (const p of allProducts) {
-      p.imageUrl = imageMap.get(p.productId) ?? null
-    }
-  }
 
   // Full list for the client table
   const all: ProductTableResult[] = allProducts.map((p) => ({

@@ -1,10 +1,8 @@
 import Link from 'next/link'
 import { ArrowLeft, AlertCircle } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
+import { EntityAvatar } from '@/components/content-ops/entity-avatar'
 import { getShopDetail } from '../../actions'
 import { notFound } from 'next/navigation'
 
@@ -22,6 +20,12 @@ const STATUS_BAR_COLORS: Record<string, string> = {
   pending: 'bg-blue-400',
   awaiting_payment: 'bg-amber-400',
   ineligible: 'bg-red-400',
+}
+
+function fmtMoney(v: number): string {
+  if (v >= 1_000_000) return `฿${(v / 1_000_000).toFixed(1)}M`
+  if (v >= 1_000) return `฿${(v / 1_000).toFixed(1)}K`
+  return `฿${v.toLocaleString()}`
 }
 
 export default async function ShopDetailPage({
@@ -44,7 +48,6 @@ export default async function ShopDetailPage({
   }
 
   const { stats, statusBreakdown, topProducts, topContentIds, relatedOrders } = data
-  const total = stats.totalOrderItems
 
   return (
     <div className="space-y-5 max-w-7xl">
@@ -56,29 +59,57 @@ export default async function ShopDetailPage({
         </Link>
       </Button>
 
-      {/* Entity header */}
-      <div>
-        <h1 className="text-xl font-semibold">{stats.shopName ?? stats.shopCode}</h1>
-        <div className="flex items-center gap-3 mt-1 flex-wrap">
+      {/* Shop header */}
+      <div className="flex items-center gap-3">
+        <EntityAvatar name={stats.shopName ?? stats.shopCode} size="lg" />
+        <div>
+          <h1 className="text-xl font-semibold">{stats.shopName ?? stats.shopCode}</h1>
           <span className="text-xs font-mono text-muted-foreground">{stats.shopCode}</span>
-          <span className="text-xs text-muted-foreground">{stats.productCount} products</span>
         </div>
       </div>
 
-      {/* KPI row */}
+      {/* Primary KPI cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Card>
+          <CardContent className="pt-4 pb-3">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">GMV</p>
+            <p className="text-xl font-semibold tabular-nums mt-1">{fmtMoney(stats.totalGmv)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 pb-3">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Order Items</p>
+            <p className="text-xl font-semibold tabular-nums mt-1">{stats.totalOrderItems.toLocaleString()}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 pb-3">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Commission</p>
+            <p className="text-xl font-semibold tabular-nums mt-1">{fmtMoney(stats.totalCommission)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 pb-3">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Cancel Rate</p>
+            <p className={`text-xl font-semibold tabular-nums mt-1 ${stats.cancelRate > 10 ? 'text-red-600' : ''}`}>
+              {stats.cancelRate.toFixed(1)}%
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Secondary stat pills */}
+      <div className="flex flex-wrap gap-2">
         {[
-          { label: 'Order Items', value: total.toLocaleString() },
           { label: 'Products', value: stats.productCount.toLocaleString() },
+          { label: 'Content IDs', value: stats.contentCount.toLocaleString() },
           { label: 'Settled', value: `${stats.settledPercent}%` },
-          { label: 'Top Product', value: stats.topProductName ?? '—' },
-        ].map((kpi) => (
-          <Card key={kpi.label}>
-            <CardContent className="pt-4 pb-3">
-              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{kpi.label}</p>
-              <p className="text-xl font-semibold tabular-nums mt-1 truncate">{kpi.value}</p>
-            </CardContent>
-          </Card>
+          { label: 'Cancelled', value: stats.cancelCount.toLocaleString() },
+        ].map((s) => (
+          <div key={s.label} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border bg-muted/30 text-sm">
+            <span className="text-muted-foreground">{s.label}</span>
+            <span className="font-semibold">{s.value}</span>
+          </div>
         ))}
       </div>
 
@@ -86,7 +117,7 @@ export default async function ShopDetailPage({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Top Products</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Top Products by GMV</CardTitle>
           </CardHeader>
           <CardContent className="p-0">
             {topProducts.length === 0 ? (
@@ -95,13 +126,17 @@ export default async function ShopDetailPage({
               <div className="divide-y">
                 {topProducts.map((p, i) => (
                   <Link
-                    key={i}
+                    key={p.productId}
                     href={p.href ?? '#'}
                     className="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/40 transition-colors"
                   >
-                    <span className="text-xs text-muted-foreground w-4 shrink-0">{i + 1}</span>
-                    <p className="flex-1 text-sm truncate">{p.label}</p>
-                    <p className="text-sm font-semibold tabular-nums shrink-0">{p.value.toLocaleString()}</p>
+                    <span className="text-xs text-muted-foreground w-4 shrink-0 tabular-nums">{i + 1}</span>
+                    <EntityAvatar name={p.label} imageUrl={p.imageUrl ?? undefined} size="sm" />
+                    <p className="flex-1 text-sm truncate min-w-0">{p.label}</p>
+                    <div className="text-right shrink-0">
+                      <p className="text-sm font-semibold tabular-nums">{fmtMoney(p.gmv)}</p>
+                      <p className="text-xs text-muted-foreground tabular-nums">{p.value.toLocaleString()} items</p>
+                    </div>
                   </Link>
                 ))}
               </div>
@@ -119,11 +154,15 @@ export default async function ShopDetailPage({
             ) : (
               <div className="divide-y">
                 {topContentIds.map((c, i) => (
-                  <div key={i} className="flex items-center gap-3 px-4 py-2.5">
-                    <span className="text-xs text-muted-foreground w-4 shrink-0">{i + 1}</span>
+                  <Link
+                    key={c.label}
+                    href={`/content-ops/analysis/orders?shop_code=${encodeURIComponent(shopCode)}&content_id=${encodeURIComponent(c.label)}`}
+                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/40 transition-colors"
+                  >
+                    <span className="text-xs text-muted-foreground w-4 shrink-0 tabular-nums">{i + 1}</span>
                     <p className="flex-1 text-xs font-mono text-muted-foreground truncate">{c.label}</p>
                     <p className="text-sm font-semibold tabular-nums shrink-0">{c.value.toLocaleString()}</p>
-                  </div>
+                  </Link>
                 ))}
               </div>
             )}
@@ -134,15 +173,15 @@ export default async function ShopDetailPage({
       {/* Status breakdown */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base font-medium">Status Breakdown</CardTitle>
+          <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Status Breakdown</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="flex h-2.5 rounded-full overflow-hidden gap-0.5">
+          <div className="flex h-2 rounded-full overflow-hidden gap-0.5">
             {statusBreakdown.map((bucket) =>
               bucket.count > 0 ? (
                 <div
                   key={bucket.key}
-                  className={`${STATUS_BAR_COLORS[bucket.key]}`}
+                  className={STATUS_BAR_COLORS[bucket.key]}
                   style={{ width: `${bucket.percent}%` }}
                 />
               ) : null
@@ -167,10 +206,10 @@ export default async function ShopDetailPage({
       </Card>
 
       {/* Related orders preview */}
-      <Card>
-        <CardHeader className="pb-2">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base font-medium">Related Orders (preview)</CardTitle>
+      {relatedOrders.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-medium">Recent Orders (preview)</p>
             <Link
               href={`/content-ops/analysis/orders?shop_code=${encodeURIComponent(shopCode)}`}
               className="text-xs text-muted-foreground hover:text-foreground"
@@ -178,34 +217,34 @@ export default async function ShopDetailPage({
               View all →
             </Link>
           </div>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Order ID</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Content ID</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {relatedOrders.map((r) => (
-                  <TableRow key={r.orderId}>
-                    <TableCell className="text-xs font-mono">{r.orderId}</TableCell>
-                    <TableCell>
-                      <span className="text-xs px-2 py-0.5 rounded border font-medium bg-muted border-border">
-                        {r.status}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-xs font-mono text-muted-foreground">{r.contentId}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+          <div className="border rounded-lg overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="border-b bg-muted/30">
+                  <tr>
+                    <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Order ID</th>
+                    <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Status</th>
+                    <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Content ID</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {relatedOrders.map((r) => (
+                    <tr key={r.orderId}>
+                      <td className="px-4 py-2 text-xs font-mono">{r.orderId}</td>
+                      <td className="px-4 py-2">
+                        <span className={`text-xs px-2 py-0.5 rounded border font-medium ${STATUS_STYLE[r.status] ?? 'bg-muted border-border'}`}>
+                          {r.status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-xs font-mono text-muted-foreground">{r.contentId}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      )}
     </div>
   )
 }
