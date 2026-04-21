@@ -407,7 +407,7 @@ export function ShopeeOrdersImportDialog({
             )}
             <div className="text-xs text-muted-foreground space-y-1">
               <p className="font-medium">คอลัมน์ที่ต้องการ:</p>
-              <p>หมายเลขคำสั่งซื้อ, สถานะการสั่งซื้อ, จำนวน, ราคาขายสุทธิ</p>
+              <p>หมายเลขคำสั่งซื้อ, สถานะการสั่งซื้อ, จำนวน, ยอดชำระเงิน (หรือ ราคาขายสุทธิ)</p>
               <p>วันที่ทำการสั่งซื้อ, *หมายเลขติดตามพัสดุ, เลขอ้างอิง SKU</p>
             </div>
           </div>

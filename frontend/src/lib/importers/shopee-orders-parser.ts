@@ -9,8 +9,10 @@
  * Key rules:
  * - Multi-line order: same order_id appears multiple times (one per SKU)
  * - Use MAX(order_total_amount) per order for GMV — NOT sum of all lines
- * - line_net_amount = ราคาขายสุทธิ (revenue per SKU line)
+ * - line_net_amount: Priority A = ยอดชำระเงิน (current export); fallback = ราคาขายสุทธิ (older export)
+ *   Fallback B (derived): ราคาขาย × จำนวน when neither direct column exists
  * - Dynamic header detection: scan up to 300 rows for required headers
+ * - Shopee Seller Center exports Thai headers — do NOT map to English equivalents
  */
 
 import * as XLSX from 'xlsx'
@@ -41,11 +43,17 @@ const COL = {
   product_name: ['ชื่อสินค้า', 'Product Name'],
   qty: ['จำนวน'],
   returned_qty: ['จำนวนที่ส่งคืน'],
-  line_net_amount: ['ราคาขายสุทธิ'],
+  // Priority A: ยอดชำระเงิน = current Shopee export; ราคาขายสุทธิ = older export format
+  line_net_amount: ['ยอดชำระเงิน', 'ราคาขายสุทธิ'],
+  // Used for Fallback B derivation when no direct line_net_amount column exists
+  unit_price_raw: ['ราคาขาย'],
+  original_price: ['ราคาตั้งต้น'],
   order_total_amount: ['จำนวนเงินทั้งหมด'],
   commission: ['ค่าคอมมิชชั่น'],
   transaction_fee: ['Transaction Fee', 'ค่าธรรมเนียมการทำธุรกรรม'],
   service_fee: ['ค่าบริการ'],
+  buyer_paid_product: ['ราคาสินค้าที่ชำระโดยผู้ซื้อ (THB)'],
+  buyer_paid_shipping: ['ค่าจัดส่งที่ชำระโดยผู้ซื้อ'],
 }
 
 // ============================================================
@@ -177,11 +185,18 @@ function processShopeeOrderRows(
 ): ParseResult {
   const colMap = buildColMap(headers)
 
-  // Validate required columns
+  // Validate required columns.
+  // line_net_amount is NOT a hard literal requirement — it can be satisfied by:
+  //   Priority A: ยอดชำระเงิน or ราคาขายสุทธิ (resolved via COL mapping above)
+  //   Fallback B: ราคาขาย × จำนวน (derived when no direct column found)
   const missingColumns: string[] = []
-  const requiredFields = ['order_id', 'status_raw', 'qty', 'line_net_amount'] as const
-  for (const field of requiredFields) {
+  const hardRequiredFields = ['order_id', 'status_raw', 'qty'] as const
+  for (const field of hardRequiredFields) {
     if (!colMap[field]) missingColumns.push(field)
+  }
+  const canDeriveNetAmount = !!(colMap['line_net_amount'] || (colMap['unit_price_raw'] && colMap['qty']))
+  if (!canDeriveNetAmount) {
+    missingColumns.push('line_net_amount (ต้องการ ยอดชำระเงิน, ราคาขายสุทธิ, หรือ ราคาขาย+จำนวน)')
   }
 
   if (missingColumns.length > 0) {
@@ -250,8 +265,20 @@ function processShopeeOrderRows(
     const qty = parseNumber(qtyRaw as string | number)
     const returnedQtyRaw = colMap['returned_qty'] ? row[colMap['returned_qty']!] : 0
     const returnedQty = parseNumber(returnedQtyRaw as string | number)
-    const lineNetAmountRaw = colMap['line_net_amount'] ? row[colMap['line_net_amount']!] : 0
-    const lineNetAmount = parseNumber(lineNetAmountRaw as string | number)
+
+    // line_net_amount: Priority A = ยอดชำระเงิน or ราคาขายสุทธิ (via COL mapping)
+    //                 Fallback B = ราคาขาย × จำนวน when no direct column mapped
+    let lineNetAmount: number
+    if (colMap['line_net_amount']) {
+      lineNetAmount = parseNumber(row[colMap['line_net_amount']!] as string | number)
+    } else {
+      const unitPriceFallbackRaw = colMap['unit_price_raw'] ? row[colMap['unit_price_raw']!] : 0
+      lineNetAmount = parseNumber(unitPriceFallbackRaw as string | number) * qty
+    }
+
+    const unitPriceColRaw = colMap['unit_price_raw'] ? row[colMap['unit_price_raw']!] : 0
+    const unitPriceFromCol = parseNumber(unitPriceColRaw as string | number)
+
     const orderTotalAmountRaw = colMap['order_total_amount'] ? row[colMap['order_total_amount']!] : 0
     const orderTotalAmount = parseNumber(orderTotalAmountRaw as string | number)
     const trackingNo = getField(strRow, colMap, 'tracking_no')
@@ -268,7 +295,8 @@ function processShopeeOrderRows(
 
     uniqueOrderIds.add(orderId)
 
-    const unitPrice = qty > 0 ? lineNetAmount / qty : lineNetAmount
+    // Use explicit unit price column when available; otherwise derive from net amount
+    const unitPrice = unitPriceFromCol > 0 ? unitPriceFromCol : (qty > 0 ? lineNetAmount / qty : lineNetAmount)
     if (status !== 'cancelled') totalRevenue += lineNetAmount
 
     parsedRows.push({
