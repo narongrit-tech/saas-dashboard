@@ -962,22 +962,34 @@ export async function applyCOGSMTD(params: {
       successful_so_far?: number
       skipped_so_far?: number
       failed_so_far?: number
+      // Two-pass state (bundle-first ordering)
+      current_pass?: 1 | 2
+      pass1_completed?: boolean
+      pass1_offset_completed?: number
     }
     const prevProgress: PrevProgress =
       (prevFailedRun?.summary_json as PrevProgress | null) ?? {}
 
-    const resumeOffset =
-      typeof prevProgress.offset_completed === 'number' && prevProgress.offset_completed > 0
-        ? prevProgress.offset_completed
-        : 0
+    // Two-pass resume detection
+    // pass1_completed=true means pass 1 finished, resume pass 2 from offset_completed
+    // pass1_completed=false/missing means resume pass 1 from pass1_offset_completed
+    const pass1AlreadyDone = prevProgress.pass1_completed === true
+    const startPass1Offset = pass1AlreadyDone
+      ? 0
+      : (typeof prevProgress.pass1_offset_completed === 'number' ? prevProgress.pass1_offset_completed : 0)
+    const startPass2Offset = pass1AlreadyDone
+      ? (typeof prevProgress.offset_completed === 'number' ? prevProgress.offset_completed : 0)
+      : 0
 
-    if (resumeOffset > 0) {
+    const isResuming = startPass1Offset > 0 || startPass2Offset > 0 || pass1AlreadyDone
+    if (isResuming) {
       console.log(
-        `[applyCOGSMTD] Resuming from offset=${resumeOffset} (prev failed run: ${prevFailedRun!.id}, ` +
-        `prev_total=${prevProgress.total_so_far ?? 0}, prev_successful=${prevProgress.successful_so_far ?? 0})`
+        `[applyCOGSMTD] Resuming (prev failed run: ${prevFailedRun!.id}) — ` +
+        `pass1_done=${pass1AlreadyDone}, pass1_offset=${startPass1Offset}, pass2_offset=${startPass2Offset}, ` +
+        `prev_total=${prevProgress.total_so_far ?? 0}, prev_successful=${prevProgress.successful_so_far ?? 0}`
       )
     } else {
-      console.log('[applyCOGSMTD] Starting fresh from offset=0 (no previous failed run found for this date range)')
+      console.log('[applyCOGSMTD] Starting fresh — bundle-first two-pass run')
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -1027,11 +1039,11 @@ export async function applyCOGSMTD(params: {
     const accSkipReasons = new Map<string, SkipReasonEntry>()
     const allRunItems: RunItem[] = []
     const accSummary = {
-      total: resumeOffset > 0 ? (prevProgress.total_so_far ?? 0) : 0,
+      total: isResuming ? (prevProgress.total_so_far ?? 0) : 0,
       eligible: 0,
-      successful: resumeOffset > 0 ? (prevProgress.successful_so_far ?? 0) : 0,
-      skipped: resumeOffset > 0 ? (prevProgress.skipped_so_far ?? 0) : 0,
-      failed: resumeOffset > 0 ? (prevProgress.failed_so_far ?? 0) : 0,
+      successful: isResuming ? (prevProgress.successful_so_far ?? 0) : 0,
+      skipped: isResuming ? (prevProgress.skipped_so_far ?? 0) : 0,
+      failed: isResuming ? (prevProgress.failed_so_far ?? 0) : 0,
       partial: 0,
       errors: [] as Array<{ order_id: string; reason: string }>,
     }
@@ -1048,91 +1060,44 @@ export async function applyCOGSMTD(params: {
     }
 
     // ──────────────────────────────────────────────────────────────────────
-    // SERVER-SIDE PROCESSING LOOP
-    // Processes all orders in offset-based windows without frontend re-trigger.
+    // TWO-PASS PROCESSING LOOP (bundle-first ordering)
+    //
+    // Pass 1 — Bundle orders only (.in seller_sku bundleSkuSet):
+    //   Allocates component stock for all bundles before direct-SKU orders run.
+    //   Prevents direct-SKU demand from consuming component stock needed by bundles.
+    //
+    // Pass 2 — All remaining orders (seller_sku NOT in bundles):
+    //   Non-bundle orders get FIFO allocation from whatever component stock remains.
+    //   Any bundle orders that appear will fast-return 'already_allocated'.
     // ──────────────────────────────────────────────────────────────────────
     const LOOP_START_MS = Date.now()
     const TIMEOUT_MS = 50_000 // 50 s safety margin for Vercel Hobby 60 s limit
-    let currentOffset = resumeOffset
+    const bundleSkuArray = Array.from(bundleSkuSet)
 
-    while (true) {
-      // Safety: abort if approaching the function execution limit
-      const elapsed = Date.now() - LOOP_START_MS
-      if (elapsed > TIMEOUT_MS) {
-        const elapsedSec = Math.round(elapsed / 1000)
-        const msg = `Timeout safety triggered after ${elapsedSec}s — processed ${accSummary.total} orders so far (offset=${currentOffset}). Re-run to continue from offset ${currentOffset}.`
-        console.warn(`[applyCOGSMTD] ${msg}`)
-        if (cogs_run_id) await completeCogsRunFailed(cogs_run_id, msg)
-        return { success: false, needsResume: true, error: msg, data: null }
-      }
-
-      // Fetch next window
-      console.log(`[applyCOGSMTD] Fetching window: range(${currentOffset}, ${currentOffset + ORDERS_PER_CHUNK - 1})`)
-      const { data: windowOrders, error: ordersError } = await supabase
-        .from('sales_orders')
-        .select('id, order_id, seller_sku, quantity, shipped_at, order_date, status_group')
-        .not('shipped_at', 'is', null)
-        .neq('status_group', 'ยกเลิกแล้ว')
-        .gte('order_date', `${startDateISO}T00:00:00+07:00`)
-        .lte('order_date', `${endDateISO}T23:59:59+07:00`)
-        .order('order_date', { ascending: true })
-        .order('order_id', { ascending: true })
-        .range(currentOffset, currentOffset + ORDERS_PER_CHUNK - 1)
-
-      if (ordersError) {
-        console.error('[applyCOGSMTD] Error fetching orders:', ordersError)
-        if (cogs_run_id) await completeCogsRunFailed(cogs_run_id, ordersError.message)
-        return { success: false, error: ordersError.message, data: null }
-      }
-
-      const orders = windowOrders ?? []
-      console.log(`[applyCOGSMTD] Fetched ${orders.length} orders in window (offset=${currentOffset})`)
-
-      if (orders.length === 0) break // All windows processed
-
-      // Per-window alloc pre-check for non-bundle orders
-      const nonBundleOrderIds = orders
-        .filter((o) => o.seller_sku && !bundleSkuSet.has(o.seller_sku))
-        .map((o) => o.id)
-
-      const allocatedOrderIds = new Set<string>()
-      if (nonBundleOrderIds.length > 0) {
-        const { data: existingAllocs, error: allocError } = await supabase
-          .from('inventory_cogs_allocations')
-          .select('order_id')
-          .filter('order_id::text', 'in', `(${nonBundleOrderIds.join(',')})`)
-          .eq('is_reversal', false)
-
-        if (allocError) {
-          const errMsg = `Failed to check existing allocations: ${allocError.message || 'Bad Request'}`
-          console.error('[applyCOGSMTD] Alloc check error:', allocError)
-          if (cogs_run_id) await completeCogsRunFailed(cogs_run_id, errMsg)
-          return { success: false, error: errMsg, data: null }
-        }
-
-        for (const row of existingAllocs ?? []) {
-          allocatedOrderIds.add(String(row.order_id))
-        }
-        console.log(`[applyCOGSMTD] ${allocatedOrderIds.size} of ${nonBundleOrderIds.length} non-bundle already allocated in this window`)
-      }
-
-      // Process each order in this window
+    // ── Shared order processor (used by both passes) ──────────────────────
+    const processOrderWindow = async (
+      orders: Array<{
+        id: string; order_id: string; seller_sku: string | null
+        quantity: number | null; shipped_at: string | null
+        order_date: string; status_group: string | null
+      }>,
+      preCheckedAllocatedIds: Set<string>
+    ) => {
       for (const order of orders) {
         const order_uuid = order.id
         const order_id   = order.order_id
-        const sku = order.seller_sku
-        const qty = order.quantity
+        const sku        = order.seller_sku
+        const qty        = order.quantity
         const shipped_at = order.shipped_at
-        const isBundle = sku && bundleSkuSet.has(sku)
+        const isBundle   = sku !== null && bundleSkuSet.has(sku)
 
-        if (!isBundle && allocatedOrderIds.has(order_uuid)) {
+        if (!isBundle && preCheckedAllocatedIds.has(order_uuid)) {
           accSummary.skipped++
           accSummary.errors.push({ order_id, reason: 'already_allocated' })
-          addSkipReason('ALREADY_ALLOCATED', 'เคย allocate แล้ว (idempotent skip)', order_id, sku)
+          addSkipReason('ALREADY_ALLOCATED', 'เคย allocate แล้ว (idempotent skip)', order_id, sku ?? undefined)
           allRunItems.push({ order_id, sku: sku || null, qty: qty || null, status: 'skipped', reason: 'ALREADY_ALLOCATED', missing_skus: [], allocated_skus: sku ? [sku] : [] })
           continue
         }
-
         if (!sku || sku.trim() === '') {
           accSummary.skipped++
           accSummary.errors.push({ order_id, reason: 'missing_seller_sku' })
@@ -1140,20 +1105,18 @@ export async function applyCOGSMTD(params: {
           allRunItems.push({ order_id, sku: null, qty: qty || null, status: 'skipped', reason: 'MISSING_SKU', missing_skus: [], allocated_skus: [] })
           continue
         }
-
         if (qty == null || !Number.isFinite(qty) || qty <= 0) {
           accSummary.skipped++
           accSummary.errors.push({ order_id, reason: `invalid_quantity_${qty}` })
           addSkipReason('INVALID_QUANTITY', 'quantity ไม่ถูกต้อง (null/zero/negative)', order_id, sku, `qty=${qty}`)
-          allRunItems.push({ order_id, sku: sku || null, qty: qty || null, status: 'skipped', reason: 'INVALID_QUANTITY', missing_skus: [], allocated_skus: [] })
+          allRunItems.push({ order_id, sku, qty: qty || null, status: 'skipped', reason: 'INVALID_QUANTITY', missing_skus: [], allocated_skus: [] })
           continue
         }
-
         if (!shipped_at) {
           accSummary.skipped++
           accSummary.errors.push({ order_id, reason: 'missing_shipped_at' })
           addSkipReason('NOT_SHIPPED', 'ยังไม่ได้ shipped (ไม่มี shipped_at)', order_id, sku)
-          allRunItems.push({ order_id, sku: sku || null, qty: qty || null, status: 'skipped', reason: 'NOT_SHIPPED', missing_skus: [], allocated_skus: [] })
+          allRunItems.push({ order_id, sku, qty: qty || null, status: 'skipped', reason: 'NOT_SHIPPED', missing_skus: [], allocated_skus: [] })
           continue
         }
 
@@ -1171,43 +1134,178 @@ export async function applyCOGSMTD(params: {
 
           if (result.status === 'success') {
             accSummary.successful++
-            allRunItems.push({ order_id, sku: sku || null, qty: qty || null, status: 'successful', reason: null, missing_skus: [], allocated_skus: result.allocatedSkus })
-            console.log(`✓ Order ${order_id} (uuid: ${order_uuid}): COGS applied (SKU: ${sku}, Qty: ${qty})`)
+            allRunItems.push({ order_id, sku, qty, status: 'successful', reason: null, missing_skus: [], allocated_skus: result.allocatedSkus })
+            console.log(`✓ ${order_id} (${order_uuid}): COGS applied (${sku} ×${qty})`)
           } else if (result.status === 'already_allocated') {
             accSummary.skipped++
             accSummary.errors.push({ order_id, reason: 'already_allocated' })
             addSkipReason('ALREADY_ALLOCATED', 'เคย allocate แล้ว (idempotent skip)', order_id, sku)
-            allRunItems.push({ order_id, sku: sku || null, qty: qty || null, status: 'skipped', reason: 'ALREADY_ALLOCATED', missing_skus: [], allocated_skus: result.allocatedSkus })
+            allRunItems.push({ order_id, sku, qty, status: 'skipped', reason: 'ALREADY_ALLOCATED', missing_skus: [], allocated_skus: result.allocatedSkus })
           } else if (result.status === 'partial') {
             accSummary.partial++
             accSummary.errors.push({ order_id, reason: result.reason || 'PARTIAL' })
             addSkipReason('PARTIAL_ALLOCATION', `bundle allocate ได้บางส่วน (missing: ${result.missingSkus.join(', ')})`, order_id, sku, result.reason)
-            allRunItems.push({ order_id, sku: sku || null, qty: qty || null, status: 'partial', reason: result.reason || 'PARTIAL_ALLOCATION', missing_skus: result.missingSkus, allocated_skus: result.allocatedSkus })
-            console.warn(`~ Order ${order_id} (uuid: ${order_uuid}): Partial COGS`)
+            allRunItems.push({ order_id, sku, qty, status: 'partial', reason: result.reason || 'PARTIAL_ALLOCATION', missing_skus: result.missingSkus, allocated_skus: result.allocatedSkus })
+            console.warn(`~ ${order_id} (${order_uuid}): Partial COGS`)
           } else {
             accSummary.failed++
             accSummary.errors.push({ order_id, reason: result.reason || 'applyCOGS_failed' })
             addSkipReason('ALLOCATION_FAILED', 'ไม่สามารถ allocate ได้ (SKU ไม่มี/stock ไม่พอ/bundle ไม่มี recipe)', order_id, sku, result.reason)
-            allRunItems.push({ order_id, sku: sku || null, qty: qty || null, status: 'failed', reason: result.reason || 'ALLOCATION_FAILED', missing_skus: result.missingSkus, allocated_skus: result.allocatedSkus })
-            console.error(`✗ Order ${order_id} (uuid: ${order_uuid}): Failed to apply COGS (reason: ${result.reason})`)
+            allRunItems.push({ order_id, sku, qty, status: 'failed', reason: result.reason || 'ALLOCATION_FAILED', missing_skus: result.missingSkus, allocated_skus: result.allocatedSkus })
+            console.error(`✗ ${order_id} (${order_uuid}): Failed (reason: ${result.reason})`)
           }
         } catch (orderErr) {
           accSummary.failed++
           const errorMsg = orderErr instanceof Error ? orderErr.message : 'unknown_error'
           accSummary.errors.push({ order_id, reason: errorMsg })
           addSkipReason('EXCEPTION', 'เกิด exception ระหว่าง allocate', order_id, sku, errorMsg)
-          allRunItems.push({ order_id, sku: sku || null, qty: qty || null, status: 'failed', reason: 'EXCEPTION', missing_skus: [sku], allocated_skus: [] })
-          console.error(`✗ Order ${order_id}: Exception:`, orderErr)
+          allRunItems.push({ order_id, sku: sku || null, qty: qty || null, status: 'failed', reason: 'EXCEPTION', missing_skus: sku ? [sku] : [], allocated_skus: [] })
+          console.error(`✗ ${order_id}: Exception:`, orderErr)
         }
       }
+    }
 
-      accSummary.total += orders.length
+    // ── PASS 1: Bundle orders only ────────────────────────────────────────
+    let pass1Complete = pass1AlreadyDone
+    let pass1CurrentOffset = startPass1Offset
 
-      // Update progress after each window so the run row stays fresh
+    if (!pass1Complete && bundleSkuArray.length > 0) {
+      console.log(`[applyCOGSMTD] Pass 1 (bundles) start — ${bundleSkuArray.length} bundle SKUs, offset=${pass1CurrentOffset}`)
+      while (true) {
+        const elapsed = Date.now() - LOOP_START_MS
+        if (elapsed > TIMEOUT_MS) {
+          const msg = `Timeout in Pass 1 (bundles) after ${Math.round(elapsed / 1000)}s — offset=${pass1CurrentOffset}. Re-run to resume.`
+          console.warn(`[applyCOGSMTD] ${msg}`)
+          if (cogs_run_id) await completeCogsRunFailed(cogs_run_id, msg)
+          return { success: false, needsResume: true, error: msg, data: null }
+        }
+
+        console.log(`[applyCOGSMTD] Pass 1 window: range(${pass1CurrentOffset}, ${pass1CurrentOffset + ORDERS_PER_CHUNK - 1})`)
+        const { data: windowOrders, error: p1Error } = await supabase
+          .from('sales_orders')
+          .select('id, order_id, seller_sku, quantity, shipped_at, order_date, status_group')
+          .not('shipped_at', 'is', null)
+          .neq('status_group', 'ยกเลิกแล้ว')
+          .gte('order_date', `${startDateISO}T00:00:00+07:00`)
+          .lte('order_date', `${endDateISO}T23:59:59+07:00`)
+          .in('seller_sku', bundleSkuArray)
+          .order('order_date', { ascending: true })
+          .order('order_id', { ascending: true })
+          .range(pass1CurrentOffset, pass1CurrentOffset + ORDERS_PER_CHUNK - 1)
+
+        if (p1Error) {
+          const errMsg = `Pass 1 fetch error: ${p1Error.message}`
+          console.error('[applyCOGSMTD]', errMsg)
+          if (cogs_run_id) await completeCogsRunFailed(cogs_run_id, errMsg)
+          return { success: false, error: errMsg, data: null }
+        }
+
+        const p1Orders = windowOrders ?? []
+        console.log(`[applyCOGSMTD] Pass 1: fetched ${p1Orders.length} bundle orders`)
+        if (p1Orders.length === 0) break
+
+        await processOrderWindow(p1Orders, new Set())
+        accSummary.total += p1Orders.length
+
+        if (cogs_run_id) {
+          await updateCogsRunProgress(cogs_run_id, {
+            _phase: 'pass1',
+            current_pass: 1,
+            pass1_completed: false,
+            pass1_offset_completed: pass1CurrentOffset + p1Orders.length,
+            total_so_far: accSummary.total,
+            successful_so_far: accSummary.successful,
+            skipped_so_far: accSummary.skipped,
+            failed_so_far: accSummary.failed,
+            date_from: startDateISO,
+            date_to: endDateISO,
+            method,
+          })
+        }
+
+        console.log(`[applyCOGSMTD] Pass 1 window done (offset=${pass1CurrentOffset}): count=${p1Orders.length}, acc_successful=${accSummary.successful}`)
+        pass1CurrentOffset += ORDERS_PER_CHUNK
+        if (p1Orders.length < ORDERS_PER_CHUNK) break
+      }
+      pass1Complete = true
+      console.log('[applyCOGSMTD] Pass 1 complete — all bundle orders processed first')
+    } else if (bundleSkuArray.length === 0) {
+      pass1Complete = true
+      console.log('[applyCOGSMTD] Pass 1 skipped — no bundle SKUs registered')
+    }
+
+    // ── PASS 2: Non-bundle orders (direct SKU allocations) ────────────────
+    let pass2CurrentOffset = startPass2Offset
+    console.log(`[applyCOGSMTD] Pass 2 (non-bundle) start, offset=${pass2CurrentOffset}`)
+
+    while (true) {
+      const elapsed = Date.now() - LOOP_START_MS
+      if (elapsed > TIMEOUT_MS) {
+        const msg = `Timeout in Pass 2 after ${Math.round(elapsed / 1000)}s — ${accSummary.total} orders processed (offset=${pass2CurrentOffset}). Re-run to continue.`
+        console.warn(`[applyCOGSMTD] ${msg}`)
+        if (cogs_run_id) await completeCogsRunFailed(cogs_run_id, msg)
+        return { success: false, needsResume: true, error: msg, data: null }
+      }
+
+      console.log(`[applyCOGSMTD] Pass 2 window: range(${pass2CurrentOffset}, ${pass2CurrentOffset + ORDERS_PER_CHUNK - 1})`)
+      const { data: windowOrders, error: p2Error } = await supabase
+        .from('sales_orders')
+        .select('id, order_id, seller_sku, quantity, shipped_at, order_date, status_group')
+        .not('shipped_at', 'is', null)
+        .neq('status_group', 'ยกเลิกแล้ว')
+        .gte('order_date', `${startDateISO}T00:00:00+07:00`)
+        .lte('order_date', `${endDateISO}T23:59:59+07:00`)
+        .order('order_date', { ascending: true })
+        .order('order_id', { ascending: true })
+        .range(pass2CurrentOffset, pass2CurrentOffset + ORDERS_PER_CHUNK - 1)
+
+      if (p2Error) {
+        const errMsg = `Pass 2 fetch error: ${p2Error.message}`
+        console.error('[applyCOGSMTD]', errMsg)
+        if (cogs_run_id) await completeCogsRunFailed(cogs_run_id, errMsg)
+        return { success: false, error: errMsg, data: null }
+      }
+
+      const p2Orders = windowOrders ?? []
+      console.log(`[applyCOGSMTD] Pass 2: fetched ${p2Orders.length} orders (offset=${pass2CurrentOffset})`)
+      if (p2Orders.length === 0) break
+
+      // Per-window pre-check for already-allocated non-bundle orders
+      const nonBundleOrderIds = p2Orders
+        .filter((o) => o.seller_sku && !bundleSkuSet.has(o.seller_sku))
+        .map((o) => o.id)
+
+      const allocatedOrderIds = new Set<string>()
+      if (nonBundleOrderIds.length > 0) {
+        const { data: existingAllocs, error: allocError } = await supabase
+          .from('inventory_cogs_allocations')
+          .select('order_id')
+          .filter('order_id::text', 'in', `(${nonBundleOrderIds.join(',')})`)
+          .eq('is_reversal', false)
+
+        if (allocError) {
+          const errMsg = `Pass 2 alloc-check error: ${allocError.message || 'Bad Request'}`
+          console.error('[applyCOGSMTD]', errMsg)
+          if (cogs_run_id) await completeCogsRunFailed(cogs_run_id, errMsg)
+          return { success: false, error: errMsg, data: null }
+        }
+
+        for (const row of existingAllocs ?? []) {
+          allocatedOrderIds.add(String(row.order_id))
+        }
+        console.log(`[applyCOGSMTD] Pass 2: ${allocatedOrderIds.size} of ${nonBundleOrderIds.length} non-bundle already allocated`)
+      }
+
+      await processOrderWindow(p2Orders, allocatedOrderIds)
+      accSummary.total += p2Orders.length
+
       if (cogs_run_id) {
         await updateCogsRunProgress(cogs_run_id, {
-          _phase: 'in_progress',
-          offset_completed: currentOffset + orders.length,
+          _phase: 'pass2',
+          current_pass: 2,
+          pass1_completed: true,
+          pass1_offset_completed: pass1CurrentOffset,
+          offset_completed: pass2CurrentOffset + p2Orders.length,
           total_so_far: accSummary.total,
           successful_so_far: accSummary.successful,
           skipped_so_far: accSummary.skipped,
@@ -1218,10 +1316,10 @@ export async function applyCOGSMTD(params: {
         })
       }
 
-      console.log(`[applyCOGSMTD] Window done (offset=${currentOffset}): count=${orders.length}, acc_total=${accSummary.total}, acc_successful=${accSummary.successful}`)
-      currentOffset += ORDERS_PER_CHUNK
-      if (orders.length < ORDERS_PER_CHUNK) break // Last page — no more windows
-    } // end while (true)
+      console.log(`[applyCOGSMTD] Pass 2 window done (offset=${pass2CurrentOffset}): count=${p2Orders.length}, acc_total=${accSummary.total}, acc_successful=${accSummary.successful}`)
+      pass2CurrentOffset += ORDERS_PER_CHUNK
+      if (p2Orders.length < ORDERS_PER_CHUNK) break
+    } // end Pass 2
 
     // ──────────────────────────────────────────────────────────────────────
     // FINALIZE: save run log + complete the run
@@ -4467,5 +4565,169 @@ export async function getAdjustments(limit = 100): Promise<{
   } catch (err) {
     console.error('Unexpected error in getAdjustments:', err)
     return { success: false, error: 'Unexpected error', data: [] }
+  }
+}
+
+// ============================================
+// Admin: Reset COGS Ledger (service-role, admin only)
+// ============================================
+
+import { createServiceClient } from '@/lib/supabase/service'
+
+/**
+ * Admin-only: Reset COGS ledger and rebuild receipt-layer state.
+ *
+ * Mirrors migration-086 logic but runs from the application layer via service role.
+ * Safe to run at any time — derives source-of-truth from receipt layers + adjustments.
+ *
+ * WHAT THIS DOES:
+ *   1. DELETE inventory_cogs_allocations (re-computable)
+ *   2. DELETE inventory_cost_snapshots   (re-computable by AVG method)
+ *   3. RESTORE qty_remaining = qty_received on all non-voided receipt layers
+ *   4. REPLAY ADJUST_OUT drains (FIFO order) to re-apply manual stock-outs
+ *   5. Mark stale 'running' cogs_allocation_runs as 'failed'
+ *
+ * WHAT THIS DOES NOT TOUCH:
+ *   inventory_receipt_layers rows (not deleted — stock receipts are source of truth)
+ *   inventory_adjustments rows (not deleted — audit trail)
+ *   inventory_items, inventory_bundle_components, sales_orders
+ *
+ * After running: trigger Apply COGS (MTD) from the UI to rebuild allocations.
+ */
+export async function adminResetCogsLedger(): Promise<{
+  success: boolean
+  error?: string
+  summary?: {
+    allocations_deleted: number
+    snapshots_deleted: number
+    layers_restored: number
+    adjust_outs_replayed: number
+    stale_runs_failed: number
+  }
+}> {
+  try {
+    const supabase = createClient()
+
+    // Auth + admin check (user session)
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'Not authenticated' }
+
+    const adminResult = await checkIsInventoryAdmin()
+    if (!adminResult.success || !adminResult.isAdmin) {
+      return { success: false, error: 'Admin permission required' }
+    }
+
+    // Service role client — bypasses RLS for reset writes
+    const svc = createServiceClient()
+
+    // 1. Delete all COGS allocations
+    const { count: allocCount, error: allocErr } = await svc
+      .from('inventory_cogs_allocations')
+      .delete({ count: 'exact' })
+      .eq('created_by', user.id)
+    if (allocErr) return { success: false, error: `Failed to delete allocations: ${allocErr.message}` }
+
+    // 2. Delete all cost snapshots
+    const { count: snapCount, error: snapErr } = await svc
+      .from('inventory_cost_snapshots')
+      .delete({ count: 'exact' })
+      .eq('created_by', user.id)
+    if (snapErr) return { success: false, error: `Failed to delete snapshots: ${snapErr.message}` }
+
+    // 3. Restore qty_remaining = qty_received on all non-voided layers
+    const { data: layers, error: layerFetchErr } = await svc
+      .from('inventory_receipt_layers')
+      .select('id, qty_received')
+      .eq('created_by', user.id)
+      .eq('is_voided', false)
+    if (layerFetchErr) return { success: false, error: `Failed to fetch layers: ${layerFetchErr.message}` }
+
+    let layersRestored = 0
+    if (layers && layers.length > 0) {
+      for (const layer of layers) {
+        const { error: restoreErr } = await svc
+          .from('inventory_receipt_layers')
+          .update({ qty_remaining: layer.qty_received })
+          .eq('id', layer.id)
+        if (restoreErr) {
+          console.error(`Failed to restore layer ${layer.id}:`, restoreErr.message)
+        } else {
+          layersRestored++
+        }
+      }
+    }
+
+    // 4. Replay ADJUST_OUT drains in chronological FIFO order
+    const { data: adjOuts, error: adjFetchErr } = await svc
+      .from('inventory_adjustments')
+      .select('id, sku_internal, quantity, adjusted_at')
+      .eq('created_by', user.id)
+      .eq('adjustment_type', 'ADJUST_OUT')
+      .order('adjusted_at', { ascending: true })
+    if (adjFetchErr) return { success: false, error: `Failed to fetch adjustments: ${adjFetchErr.message}` }
+
+    let adjOutsReplayed = 0
+    for (const adj of adjOuts ?? []) {
+      let remaining = adj.quantity
+
+      // Fetch and drain FIFO layers for this SKU
+      const { data: skuLayers, error: skuLayerErr } = await svc
+        .from('inventory_receipt_layers')
+        .select('id, qty_remaining')
+        .eq('sku_internal', adj.sku_internal)
+        .eq('created_by', user.id)
+        .eq('is_voided', false)
+        .gt('qty_remaining', 0)
+        .order('received_at', { ascending: true })
+
+      if (skuLayerErr) {
+        console.error(`Replay ADJUST_OUT ${adj.id}: layer fetch error`, skuLayerErr.message)
+        continue
+      }
+
+      for (const sl of skuLayers ?? []) {
+        if (remaining <= 0) break
+        const drain = Math.min(remaining, Number(sl.qty_remaining))
+        await svc
+          .from('inventory_receipt_layers')
+          .update({ qty_remaining: Number(sl.qty_remaining) - drain })
+          .eq('id', sl.id)
+        remaining -= drain
+      }
+
+      if (remaining > 0) {
+        console.warn(`Replay ADJUST_OUT ${adj.id}: SKU=${adj.sku_internal} still needed ${remaining} units after all layers — deficit left as-is`)
+      }
+
+      adjOutsReplayed++
+    }
+
+    // 5. Mark stale 'running' cogs_allocation_runs as failed
+    const { count: staleCount, error: staleErr } = await svc
+      .from('cogs_allocation_runs')
+      .update({
+        status: 'failed',
+        error_message: 'Retroactively failed by adminResetCogsLedger — ledger was reset',
+        updated_at: new Date().toISOString(),
+      }, { count: 'exact' })
+      .eq('created_by', user.id)
+      .eq('status', 'running')
+    if (staleErr) console.error('Failed to mark stale runs:', staleErr.message)
+
+    revalidatePath('/inventory')
+
+    return {
+      success: true,
+      summary: {
+        allocations_deleted: allocCount ?? 0,
+        snapshots_deleted:   snapCount  ?? 0,
+        layers_restored:     layersRestored,
+        adjust_outs_replayed: adjOutsReplayed,
+        stale_runs_failed:   staleCount ?? 0,
+      },
+    }
+  } catch (err) {
+    console.error('Unexpected error in adminResetCogsLedger:', err)
+    return { success: false, error: err instanceof Error ? err.message : 'Unexpected error' }
   }
 }

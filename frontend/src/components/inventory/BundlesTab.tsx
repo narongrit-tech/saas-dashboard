@@ -25,7 +25,9 @@ import {
   getInventoryItems,
   getBundles,
   getBundleComponents,
+  getBundleOnHand,
   upsertBundleRecipe,
+  type BundleOnHandInfo,
 } from '@/app/(dashboard)/inventory/actions'
 import { RenameSkuModal } from '@/components/inventory/RenameSkuModal'
 import { CreateBundleModal } from '@/components/inventory/CreateBundleModal'
@@ -58,6 +60,7 @@ interface BundleWithComponents extends Bundle {
 export function BundlesTab() {
   const [items, setItems] = useState<InventoryItem[]>([])
   const [bundles, setBundles] = useState<BundleWithComponents[]>([])
+  const [bundleStock, setBundleStock] = useState<Record<string, BundleOnHandInfo>>({})
   const [loading, setLoading] = useState(true)
 
   // Form state
@@ -78,13 +81,18 @@ export function BundlesTab() {
 
   async function loadData() {
     setLoading(true)
-    const [itemsResult, bundlesResult] = await Promise.all([
+    const [itemsResult, bundlesResult, stockResult] = await Promise.all([
       getInventoryItems(),
       getBundles(),
+      getBundleOnHand(),
     ])
 
     if (itemsResult.success) {
       setItems(itemsResult.data)
+    }
+
+    if (stockResult.success) {
+      setBundleStock(stockResult.data)
     }
 
     if (bundlesResult.success) {
@@ -341,44 +349,75 @@ export function BundlesTab() {
               <TableRow>
                 <TableHead>Bundle SKU</TableHead>
                 <TableHead>Bundle Name</TableHead>
-                <TableHead className="text-right">Base Cost</TableHead>
-                <TableHead>Components</TableHead>
+                <TableHead>Recipe</TableHead>
+                <TableHead className="text-right">Max Sellable</TableHead>
+                <TableHead>คอขวด</TableHead>
+                <TableHead>Stock Components</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {bundles.map((bundle) => (
-                <TableRow key={bundle.sku_internal}>
-                  <TableCell className="font-mono">{bundle.sku_internal}</TableCell>
-                  <TableCell>{bundle.product_name}</TableCell>
-                  <TableCell className="text-right">
-                    {bundle.base_cost_per_unit.toFixed(2)}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {bundle.components_summary || '-'}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleEditBundle(bundle.sku_internal)}
-                        title="Edit Recipe"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => openRenameModal(bundle.sku_internal)}
-                        title="Rename Bundle SKU"
-                      >
-                        <FileEdit className="w-4 h-4 text-orange-600" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {bundles.map((bundle) => {
+                const stock = bundleStock[bundle.sku_internal]
+                return (
+                  <TableRow key={bundle.sku_internal}>
+                    <TableCell className="font-mono">{bundle.sku_internal}</TableCell>
+                    <TableCell>{bundle.product_name}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {bundle.components_summary || '-'}
+                    </TableCell>
+                    <TableCell className="text-right font-semibold">
+                      {stock ? (
+                        <span className={stock.available_sets === 0 ? 'text-red-600' : stock.available_sets < 10 ? 'text-orange-500' : 'text-green-600'}>
+                          {stock.available_sets.toLocaleString()}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {stock?.limiting_component ? (
+                        <span className="font-mono text-orange-600">{stock.limiting_component}</span>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {stock?.components && stock.components.length > 0 ? (
+                        <div className="space-y-0.5">
+                          {stock.components.map((c) => (
+                            <div key={c.sku} className={c.sku === stock.limiting_component ? 'text-orange-600 font-medium' : ''}>
+                              {c.sku}: {c.on_hand.toLocaleString()} / ต้อง {c.required_per_set}/ชุด
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <span>-</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleEditBundle(bundle.sku_internal)}
+                          title="Edit Recipe"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openRenameModal(bundle.sku_internal)}
+                          title="Rename Bundle SKU"
+                        >
+                          <FileEdit className="w-4 h-4 text-orange-600" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
             </TableBody>
           </Table>
         )}
