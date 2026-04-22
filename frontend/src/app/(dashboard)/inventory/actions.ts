@@ -1291,6 +1291,10 @@ export async function applyCOGSMTD(params: {
             accSummary.errors.push({ order_id, reason: 'already_allocated' })
             addSkipReason('ALREADY_ALLOCATED', 'เคย allocate แล้ว (idempotent skip)', order_id, sku)
             allRunItems.push({ order_id, sku, qty, status: 'skipped', reason: 'ALREADY_ALLOCATED', missing_skus: [], allocated_skus: result.allocatedSkus })
+            // Log first 5 bundle already_allocated so we can confirm they are fully done, not failed
+            if (isBundle && accSummary.skipped <= 5) {
+              console.log(`[BUNDLE SKIP] ${order_id} (${sku}): already_allocated — all components present in DB`)
+            }
           } else if (result.status === 'partial') {
             accSummary.partial++
             accSummary.errors.push({ order_id, reason: result.reason || 'PARTIAL' })
@@ -1373,7 +1377,7 @@ export async function applyCOGSMTD(params: {
           })
         }
 
-        console.log(`[applyCOGSMTD] Pass 1 window done (offset=${pass1CurrentOffset}): count=${p1Orders.length}, acc_successful=${accSummary.successful}`)
+        console.log(`[applyCOGSMTD] Pass 1 window done (offset=${pass1CurrentOffset}): count=${p1Orders.length} | successful=${accSummary.successful} skipped=${accSummary.skipped} failed=${accSummary.failed} partial=${accSummary.partial}`)
         pass1CurrentOffset += ORDERS_PER_CHUNK
         if (p1Orders.length < ORDERS_PER_CHUNK) break
       }
@@ -1466,7 +1470,7 @@ export async function applyCOGSMTD(params: {
         })
       }
 
-      console.log(`[applyCOGSMTD] Pass 2 window done (offset=${pass2CurrentOffset}): count=${p2Orders.length}, acc_total=${accSummary.total}, acc_successful=${accSummary.successful}`)
+      console.log(`[applyCOGSMTD] Pass 2 window done (offset=${pass2CurrentOffset}): count=${p2Orders.length} | total=${accSummary.total} successful=${accSummary.successful} skipped=${accSummary.skipped} failed=${accSummary.failed}`)
       pass2CurrentOffset += ORDERS_PER_CHUNK
       if (p2Orders.length < ORDERS_PER_CHUNK) break
     } // end Pass 2
