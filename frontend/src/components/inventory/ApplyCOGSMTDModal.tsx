@@ -146,11 +146,22 @@ export function ApplyCOGSMTDModal({
     let finalResponse: any = null
 
     while (true) {
-      const progressMsg = autoRetryCount === 0
-        ? (firstCallMode === 'continue' && evalState?.status === 'can_resume'
-            ? `กำลังต่อจาก Pass ${evalState.pass1Completed ? 2 : 1} offset ${evalState.pass1Completed ? evalState.pass2Offset : evalState.pass1Offset} — อาจใช้เวลาสักครู่…`
-            : 'กำลังประมวลผล orders ทั้งหมด — อาจใช้เวลาสักครู่…')
-        : `กำลังประมวลผลต่อ (รอบที่ ${autoRetryCount + 1}) — อาจใช้เวลาสักครู่…`
+      let progressMsg: string
+      if (autoRetryCount > 0) {
+        progressMsg = `กำลังประมวลผลต่อ (รอบที่ ${autoRetryCount + 1}) — อาจใช้เวลาสักครู่…`
+      } else if (firstCallMode === 'continue' && evalState?.status === 'can_resume') {
+        const activePass = evalState.pass1Completed ? 2 : 1
+        const activeOffset = evalState.pass1Completed ? evalState.pass2Offset : evalState.pass1Offset
+        progressMsg = `กำลังต่อจาก Pass ${activePass} offset ${activeOffset} — อาจใช้เวลาสักครู่…`
+      } else if (firstCallMode === 'fresh' && evalState?.status === 'can_resume') {
+        const activePass = evalState.pass1Completed ? 2 : 1
+        const activeOffset = evalState.pass1Completed ? evalState.pass2Offset : evalState.pass1Offset
+        progressMsg = `เริ่มใหม่จาก offset 0 — ข้าม run เก่า (Pass ${activePass} offset ${activeOffset}) — อาจใช้เวลาสักครู่…`
+      } else if (firstCallMode === 'fresh' && evalState?.status === 'stale_resume') {
+        progressMsg = `เริ่มใหม่จาก offset 0 — ข้าม stale offset — อาจใช้เวลาสักครู่…`
+      } else {
+        progressMsg = 'กำลังประมวลผล orders ทั้งหมด — อาจใช้เวลาสักครู่…'
+      }
       setChunkProgress(progressMsg)
 
       const response = await applyCOGSMTD({ method: 'FIFO', startDate, endDate, mode: currentMode })
@@ -171,14 +182,28 @@ export function ApplyCOGSMTDModal({
   }
 
   // ── "Start fresh" handler ───────────────────────────────────────────────────
+  // Automatically runs partial-bundle cleanup before the fresh allocation run.
+  // This ensures stale partial rows (from a prior sequential run or failed RPC) are
+  // cleared and old failed-run records are marked as reset — so the 'continue' chain
+  // in runAllocationLoop never accidentally picks up the old Jan 2026 run offset.
   async function handleFresh() {
     if (!startDate || !endDate) { setError('กรุณาเลือกวันที่'); return }
     setLoading(true)
     setError(null)
     setResult(null)
-    setChunkProgress(null)
+    setChunkProgress('กำลัง reset partial bundles ก่อน Start Fresh…')
 
     try {
+      // Pre-cleanup: cleans partial bundles + marks old failed runs as reset
+      // Non-blocking: if it fails we proceed anyway (applyCOGSMTD also cleans internally)
+      const cleanResult = await adminResetStaleCogsRange(startDate, endDate)
+      if (!cleanResult.success) {
+        console.warn('[handleFresh] pre-cleanup warning (non-fatal):', cleanResult.error)
+      } else {
+        const s = cleanResult.summary
+        console.log(`[handleFresh] pre-cleanup done — partial_found=${s?.partial_orders_found} deleted=${s?.allocation_rows_deleted} layers_restored=${s?.layers_restored} runs_marked=${s?.runs_marked_reset}`)
+      }
+
       const finalResponse = await runAllocationLoop('fresh')
       setChunkProgress(null)
       if (!finalResponse.success) {

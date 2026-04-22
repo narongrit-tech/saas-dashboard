@@ -126,6 +126,11 @@ async function _allocateBundleOrderCOGS(
       if (msg.includes('invalid_input')) {
         return { status: 'failed', allocatedSkus: [], missingSkus: allSkus, reason: 'NO_BUNDLE_RECIPE' }
       }
+      // Detect if the RPC function itself is missing (migration-090 not applied to DB)
+      if (msg.toLowerCase().includes('does not exist') || msg.toLowerCase().includes('could not find the function')) {
+        console.error(`_allocateBundleOrderCOGS: allocate_cogs_bundle_fifo NOT FOUND in DB — migration-090 must be applied in Supabase SQL Editor`)
+        return { status: 'failed', allocatedSkus: [], missingSkus: allSkus, reason: 'RPC_NOT_FOUND: apply migration-090' }
+      }
       console.error(`_allocateBundleOrderCOGS RPC error for ${bundleSku}:`, msg)
       return {
         status: 'failed',
@@ -1021,6 +1026,8 @@ export async function applyCOGSMTD(params: {
       prevFailedRun = pfr
     }
 
+    console.log(`[applyCOGSMTD] mode=${mode} prevFailedRun=${prevFailedRun?.id ?? 'none (skipped — fresh mode)'}`)
+
     type PrevProgress = {
       offset_completed?: number
       total_so_far?: number
@@ -1057,6 +1064,22 @@ export async function applyCOGSMTD(params: {
       console.log('[applyCOGSMTD] Starting fresh — bundle-first two-pass run')
     }
 
+    // ── Hard guard: fresh mode must never inherit non-zero offsets ─────────────
+    if (mode === 'fresh') {
+      console.log(
+        `[applyCOGSMTD] FRESH GUARD: run=${cogs_run_id} startPass1=${startPass1Offset} startPass2=${startPass2Offset} pass1Done=${pass1AlreadyDone}`
+      )
+      if (startPass1Offset !== 0 || startPass2Offset !== 0 || pass1AlreadyDone) {
+        const guardMsg =
+          `[FRESH_GUARD] mode=fresh but inherited non-zero offsets — ` +
+          `pass1=${startPass1Offset} pass2=${startPass2Offset} pass1Done=${pass1AlreadyDone} — THIS IS A BUG`
+        console.error(guardMsg)
+        if (cogs_run_id) await completeCogsRunFailed(cogs_run_id, guardMsg)
+        return { success: false, error: guardMsg, data: null }
+      }
+      console.log(`[applyCOGSMTD] FRESH GUARD OK — run ${cogs_run_id} confirmed starting from offset 0`)
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     // PRE-FETCH BUNDLE CONTEXT (once, before the processing loop)
     // ──────────────────────────────────────────────────────────────────────
@@ -1079,6 +1102,68 @@ export async function applyCOGSMTD(params: {
         bundleComponentsMap.get(row.bundle_sku)!.push({ component_sku: row.component_sku, quantity: row.quantity })
       }
       console.log(`[applyCOGSMTD] Pre-loaded components for ${bundleComponentsMap.size} bundle SKUs`)
+    }
+
+    // ── Fresh mode: TypeScript-level partial bundle pre-cleanup ───────────────────
+    // Runs BEFORE pass 1. Cleans partial rows from prior sequential runs or failed
+    // RPCs so the atomic RPC (or the pre-validation in it) starts with a clean slate.
+    // Works even if migration-090 (allocate_cogs_bundle_fifo) is not yet applied.
+    if (mode === 'fresh' && bundleSkuSet.size > 0) {
+      console.log('[applyCOGSMTD] fresh pre-clean: scanning for partial bundle allocations...')
+      const { data: preBundleOrders } = await supabase
+        .from('sales_orders')
+        .select('id, seller_sku')
+        .in('seller_sku', Array.from(bundleSkuSet))
+        .gte('order_date', `${startDateISO}T00:00:00+07:00`)
+        .lte('order_date', `${endDateISO}T23:59:59+07:00`)
+        .not('shipped_at', 'is', null)
+        .neq('status_group', 'ยกเลิกแล้ว')
+        .limit(2000)
+
+      if (preBundleOrders && preBundleOrders.length > 0) {
+        const preBundleIds = preBundleOrders.map((o) => o.id)
+        const { data: preAllocs } = await supabase
+          .from('inventory_cogs_allocations')
+          .select('id, order_id, sku_internal, qty, layer_id')
+          .in('order_id', preBundleIds)
+          .eq('is_reversal', false)
+
+        const preAllocMap = new Map<string, Array<{ id: string; sku_internal: string; qty: number; layer_id: string | null }>>()
+        for (const row of preAllocs ?? []) {
+          const oid = String(row.order_id)
+          if (!preAllocMap.has(oid)) preAllocMap.set(oid, [])
+          preAllocMap.get(oid)!.push({ id: row.id, sku_internal: row.sku_internal, qty: Number(row.qty), layer_id: row.layer_id ?? null })
+        }
+
+        let prePartialFixed = 0
+        for (const order of preBundleOrders) {
+          const rows = preAllocMap.get(order.id) ?? []
+          if (rows.length === 0) continue
+          const expectedCount = bundleComponentsMap.get(order.seller_sku)?.length ?? 0
+          const allocatedSkuCount = new Set(rows.map((r) => r.sku_internal)).size
+          if (allocatedSkuCount > 0 && allocatedSkuCount < expectedCount) {
+            // Restore qty_remaining on each layer, then delete the stale rows
+            for (const row of rows) {
+              if (!row.layer_id) continue
+              const { data: layer } = await supabase
+                .from('inventory_receipt_layers')
+                .select('qty_remaining')
+                .eq('id', row.layer_id)
+                .single()
+              if (layer) {
+                await supabase
+                  .from('inventory_receipt_layers')
+                  .update({ qty_remaining: Number(layer.qty_remaining) + row.qty })
+                  .eq('id', row.layer_id)
+              }
+            }
+            const ids = rows.map((r) => r.id)
+            await supabase.from('inventory_cogs_allocations').delete().in('id', ids)
+            prePartialFixed++
+          }
+        }
+        console.log(`[applyCOGSMTD] fresh pre-clean: ${prePartialFixed}/${preBundleOrders.length} bundle orders had partial state — cleaned`)
+      }
     }
 
     // ──────────────────────────────────────────────────────────────────────

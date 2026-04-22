@@ -619,6 +619,40 @@ export async function evaluateCogsRunState(
       }
     }
 
+    // DB-state cross-check: if the run claims progress but no allocation rows exist,
+    // the ledger was reset via SQL (migration/manual) and was not caught by error_message.
+    if (failedRun && !isFromLedgerReset) {
+      const staleSummary = failedRun.summary_json as CogsSummaryJson | null
+      const claimedSuccess = staleSummary?.successful_so_far ?? 0
+      if (claimedSuccess > 0) {
+        const { data: sampleOrders } = await supabase
+          .from('sales_orders')
+          .select('id')
+          .gte('order_date', `${dateFrom}T00:00:00+07:00`)
+          .lte('order_date', `${dateTo}T23:59:59+07:00`)
+          .not('shipped_at', 'is', null)
+          .limit(5)
+        if (sampleOrders && sampleOrders.length > 0) {
+          const { count: allocCount } = await supabase
+            .from('inventory_cogs_allocations')
+            .select('id', { count: 'exact', head: true })
+            .in('order_id', sampleOrders.map((o) => o.id))
+            .eq('is_reversal', false)
+          if ((allocCount ?? 0) === 0) {
+            console.warn(
+              `[evaluateCogsRunState] Stale offset: run ${failedRun.id} claims ${claimedSuccess} allocated ` +
+              `but 0 allocation rows found for ${sampleOrders.length} sample orders — treating as stale_resume`
+            )
+            return {
+              status: 'stale_resume',
+              staleRunId: failedRun.id,
+              message: `Run ก่อนหน้าอ้างว่า allocate ${claimedSuccess} orders แต่ไม่พบ allocation rows เลย — ledger ถูก reset ผ่าน SQL — ต้องเริ่มใหม่`,
+            }
+          }
+        }
+      }
+    }
+
     // ── 3. Partial bundle detection (direct allocation check) ─────────────────
     // Fetch bundle SKUs
     const { data: bundleItems } = await supabase
