@@ -1451,6 +1451,7 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
         <ApplyCOGSMTDModal
           open={showCOGSMTDModal}
           onOpenChange={setShowCOGSMTDModal}
+          isAdmin={isAdmin}
           onSuccess={() => {
             fetchOrders()
           }}

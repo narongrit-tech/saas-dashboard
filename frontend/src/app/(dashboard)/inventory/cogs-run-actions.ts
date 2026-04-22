@@ -64,6 +64,40 @@ export interface CogsSummaryJson {
   failed_so_far?: number
   offset_completed?: number
   _phase?: string
+  // Two-pass resume fields
+  current_pass?: 1 | 2
+  pass1_completed?: boolean
+  pass1_offset_completed?: number
+}
+
+// ─────────────────────────────────────────────
+// Run State Evaluation
+// ─────────────────────────────────────────────
+
+export type RunStateStatus =
+  | 'clean'               // no prior run; start fresh
+  | 'can_resume'          // failed run with valid offset; safe to continue
+  | 'stale_resume'        // failed run exists but offset is stale (after ledger reset)
+  | 'has_partial_bundles' // partial bundle allocations exist; cleanup needed
+  | 'blocked'             // another run is actively in progress
+
+export interface RunStateEval {
+  status: RunStateStatus
+  // can_resume fields
+  resumeRunId?: string
+  pass1Completed?: boolean
+  pass1Offset?: number
+  pass2Offset?: number
+  totalSoFar?: number
+  successfulSoFar?: number
+  // has_partial_bundles fields
+  partialBundleCount?: number
+  // blocked fields
+  activeRunId?: string
+  // stale_resume fields
+  staleRunId?: string
+  // Human-readable Thai message for the UI
+  message: string
 }
 
 // ─────────────────────────────────────────────
@@ -514,5 +548,171 @@ export async function getRunStatusForDateRange(
     return { successRun, failedRun }
   } catch {
     return { successRun: null, failedRun: null }
+  }
+}
+
+// ─────────────────────────────────────────────
+// 12) evaluateCogsRunState
+// ─────────────────────────────────────────────
+
+/**
+ * Validate the current COGS run state for a date range and return a typed
+ * recommendation so the UI can offer safe, accurate action choices.
+ *
+ * Checks (in priority order):
+ *  1. Blocked — another run is actively in progress
+ *  2. Stale resume — failed run exists but was created by a ledger reset
+ *  3. Partial bundles — bundle orders with incomplete component allocations
+ *  4. Can resume — failed run with a valid pass/offset that can be continued
+ *  5. Clean — no prior run; start fresh
+ */
+export async function evaluateCogsRunState(
+  dateFrom: string,
+  dateTo: string
+): Promise<RunStateEval> {
+  try {
+    const supabase = createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { status: 'clean', message: 'ไม่พบผู้ใช้' }
+
+    // ── 1. Blocked: active running run ───────────────────────────────────────
+    const { data: activeRun } = await supabase
+      .from('cogs_allocation_runs')
+      .select('id')
+      .eq('status', 'running')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (activeRun) {
+      return {
+        status: 'blocked',
+        activeRunId: activeRun.id,
+        message: `มี COGS run ที่กำลังทำงานอยู่ (${activeRun.id.slice(0, 8)}…) — กรุณารอให้เสร็จก่อน`,
+      }
+    }
+
+    // ── 2. Most recent failed run for this date range ─────────────────────────
+    const { data: failedRun } = await supabase
+      .from('cogs_allocation_runs')
+      .select('id, summary_json, error_message')
+      .eq('status', 'failed')
+      .eq('trigger_source', 'DATE_RANGE')
+      .eq('date_from', dateFrom)
+      .eq('date_to', dateTo)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    // Stale resume: the failed run was caused by a ledger reset, not a timeout
+    const isFromLedgerReset =
+      typeof failedRun?.error_message === 'string' &&
+      (failedRun.error_message.includes('adminResetCogsLedger') ||
+       failedRun.error_message.includes('ledger was reset') ||
+       failedRun.error_message.includes('Retroactively failed'))
+
+    if (failedRun && isFromLedgerReset) {
+      return {
+        status: 'stale_resume',
+        staleRunId: failedRun.id,
+        message: 'Run ก่อนหน้าถูก Reset แล้ว — offset เก่าไม่ valid อีกต่อไป ต้องเริ่มใหม่',
+      }
+    }
+
+    // ── 3. Partial bundle detection (direct allocation check) ─────────────────
+    // Fetch bundle SKUs
+    const { data: bundleItems } = await supabase
+      .from('inventory_items')
+      .select('sku_internal')
+      .eq('is_bundle', true)
+    const bundleSkus = (bundleItems ?? []).map((i) => i.sku_internal)
+
+    let partialBundleCount = 0
+
+    if (bundleSkus.length > 0) {
+      // Fetch bundle orders in date range that are shipped
+      const { data: bundleOrders } = await supabase
+        .from('sales_orders')
+        .select('id, seller_sku')
+        .in('seller_sku', bundleSkus)
+        .gte('order_date', `${dateFrom}T00:00:00+07:00`)
+        .lte('order_date', `${dateTo}T23:59:59+07:00`)
+        .not('shipped_at', 'is', null)
+        .limit(500)
+
+      if (bundleOrders && bundleOrders.length > 0) {
+        // Fetch bundle component counts
+        const { data: components } = await supabase
+          .from('inventory_bundle_components')
+          .select('bundle_sku, component_sku')
+          .in('bundle_sku', bundleSkus)
+
+        const componentCountMap = new Map<string, number>()
+        for (const c of components ?? []) {
+          componentCountMap.set(c.bundle_sku, (componentCountMap.get(c.bundle_sku) ?? 0) + 1)
+        }
+
+        // Fetch existing allocations for those orders in one query
+        const orderUuids = bundleOrders.map((o) => o.id)
+        const { data: allocations } = await supabase
+          .from('inventory_cogs_allocations')
+          .select('order_id, sku_internal')
+          .in('order_id', orderUuids)
+          .eq('is_reversal', false)
+
+        const orderAllocMap = new Map<string, Set<string>>()
+        for (const row of allocations ?? []) {
+          const orderId = String(row.order_id)
+          if (!orderAllocMap.has(orderId)) orderAllocMap.set(orderId, new Set())
+          orderAllocMap.get(orderId)!.add(row.sku_internal)
+        }
+
+        for (const order of bundleOrders) {
+          const expectedCount = componentCountMap.get(order.seller_sku) ?? 0
+          const allocatedSkus = orderAllocMap.get(order.id) ?? new Set()
+          if (allocatedSkus.size > 0 && allocatedSkus.size < expectedCount) {
+            partialBundleCount++
+          }
+        }
+      }
+    }
+
+    if (partialBundleCount > 0) {
+      return {
+        status: 'has_partial_bundles',
+        partialBundleCount,
+        message: `พบ ${partialBundleCount} Bundle orders ที่ allocate ไม่ครบ (partial state) — ต้อง Reset ก่อนจึงจะ Rerun ได้`,
+      }
+    }
+
+    // ── 4. Can resume: failed run with a valid pass/offset ────────────────────
+    const summary = failedRun?.summary_json as CogsSummaryJson | null
+    const pass1Completed = summary?.pass1_completed === true
+    const pass1Offset = typeof summary?.pass1_offset_completed === 'number'
+      ? summary.pass1_offset_completed : 0
+    const pass2Offset = typeof summary?.offset_completed === 'number'
+      ? summary.offset_completed : 0
+    const hasResumableOffset = pass1Offset > 0 || pass2Offset > 0 || pass1Completed
+
+    if (failedRun && hasResumableOffset) {
+      const activePass = pass1Completed ? 2 : 1
+      const activeOffset = pass1Completed ? pass2Offset : pass1Offset
+      return {
+        status: 'can_resume',
+        resumeRunId: failedRun.id,
+        pass1Completed,
+        pass1Offset,
+        pass2Offset,
+        totalSoFar: summary?.total_so_far ?? 0,
+        successfulSoFar: summary?.successful_so_far ?? 0,
+        message: `Run ก่อนหน้า timeout ที่ Pass ${activePass} offset ${activeOffset} — สามารถต่อได้ (${summary?.successful_so_far ?? 0} orders สำเร็จแล้ว)`,
+      }
+    }
+
+    // ── 5. Clean ─────────────────────────────────────────────────────────────
+    return { status: 'clean', message: 'ไม่มี run ค้าง — พร้อมเริ่มใหม่' }
+  } catch (err) {
+    console.error('evaluateCogsRunState error:', err)
+    return { status: 'clean', message: 'ไม่สามารถตรวจสอบสถานะ run ได้ — เริ่มใหม่ได้เลย' }
   }
 }

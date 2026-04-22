@@ -844,8 +844,16 @@ export async function applyCOGSMTD(params: {
   method?: CostingMethod
   startDate?: string
   endDate?: string
+  /**
+   * 'fresh'    — ignore any previous failed run; always start from pass1/offset0.
+   *              Use this for explicit "Start fresh" or "Reset and rerun" flows.
+   * 'continue' — (default) resume from the most recent failed run for the same
+   *              date range if one exists, otherwise start fresh.
+   */
+  mode?: 'fresh' | 'continue'
 } = {}) {
   const method = params.method || 'FIFO'
+  const mode   = params.mode   || 'continue'
   let run_id: string | null = null
   let cogs_run_id: string | null = null
 
@@ -992,20 +1000,26 @@ export async function applyCOGSMTD(params: {
     }
 
     // ──────────────────────────────────────────────────────────────────────
-    // RESUME DETECTION: find most recent failed run for the same date range
-    // so re-runs continue from where the previous timed-out run left off
-    // instead of restarting at offset 0.
+    // RESUME DETECTION
+    // mode='continue': find most recent failed run for the same date range
+    //   so re-runs continue from where the previous timed-out run left off.
+    // mode='fresh': skip this lookup entirely — always start from offset 0.
+    //   Use this after a ledger reset or when the user explicitly wants fresh.
     // ──────────────────────────────────────────────────────────────────────
-    const { data: prevFailedRun } = await supabase
-      .from('cogs_allocation_runs')
-      .select('id, summary_json')
-      .eq('status', 'failed')
-      .eq('trigger_source', 'DATE_RANGE')
-      .eq('date_from', startDateISO)
-      .eq('date_to', endDateISO)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
+    let prevFailedRun: { id: string; summary_json: unknown } | null = null
+    if (mode !== 'fresh') {
+      const { data: pfr } = await supabase
+        .from('cogs_allocation_runs')
+        .select('id, summary_json')
+        .eq('status', 'failed')
+        .eq('trigger_source', 'DATE_RANGE')
+        .eq('date_from', startDateISO)
+        .eq('date_to', endDateISO)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      prevFailedRun = pfr
+    }
 
     type PrevProgress = {
       offset_completed?: number
@@ -4779,6 +4793,212 @@ export async function adminResetCogsLedger(): Promise<{
     }
   } catch (err) {
     console.error('Unexpected error in adminResetCogsLedger:', err)
+    return { success: false, error: err instanceof Error ? err.message : 'Unexpected error' }
+  }
+}
+
+// ============================================
+// Admin: Reset stale partial bundle allocations for a date range
+// ============================================
+
+/**
+ * Admin-only: Clean up stale partial bundle allocations for a specific date range.
+ *
+ * "Partial" means: a bundle order has SOME but not ALL component SKUs allocated.
+ * This is broken state — the order can never be correctly P&L'd and will block
+ * future reruns from completing cleanly.
+ *
+ * WHAT THIS DOES (targeted — not a full ledger reset):
+ *   1. Find all bundle orders in the date range
+ *   2. For each: check if allocation is partial (some components allocated, not all)
+ *   3. For each partial order:
+ *      a. Restore qty_remaining on each consumed receipt layer (+= allocated qty)
+ *      b. Delete the stale partial allocation rows for that order
+ *   4. Mark failed cogs_allocation_runs for the date range with a reset note
+ *      so the continue-offset logic won't try to resume a stale position
+ *
+ * WHAT THIS DOES NOT TOUCH:
+ *   - Fully allocated (complete) bundle orders
+ *   - Non-bundle order allocations
+ *   - receipt layers source rows (never deleted)
+ *   - inventory_adjustments (audit trail)
+ *
+ * After running: use applyCOGSMTD({ mode: 'fresh', startDate, endDate }) to rerun.
+ */
+export async function adminResetStaleCogsRange(
+  dateFrom: string,
+  dateTo: string
+): Promise<{
+  success: boolean
+  error?: string
+  summary?: {
+    bundle_orders_checked: number
+    partial_orders_found: number
+    allocation_rows_deleted: number
+    layers_restored: number
+    runs_marked_reset: number
+  }
+}> {
+  try {
+    const supabase = createClient()
+
+    // Auth + admin check
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'Not authenticated' }
+
+    const adminResult = await checkIsInventoryAdmin()
+    if (!adminResult.success || !adminResult.isAdmin) {
+      return { success: false, error: 'Admin permission required' }
+    }
+
+    // Validate date format
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/
+    if (!dateRegex.test(dateFrom) || !dateRegex.test(dateTo)) {
+      return { success: false, error: 'Invalid date format (expected YYYY-MM-DD)' }
+    }
+
+    const svc = createServiceClient()
+
+    // ── 1. Fetch bundle SKUs + component map ──────────────────────────────────
+    const { data: bundleItems } = await svc
+      .from('inventory_items')
+      .select('sku_internal')
+      .eq('is_bundle', true)
+    const bundleSkus = (bundleItems ?? []).map((i) => i.sku_internal)
+
+    if (bundleSkus.length === 0) {
+      return {
+        success: true,
+        summary: { bundle_orders_checked: 0, partial_orders_found: 0, allocation_rows_deleted: 0, layers_restored: 0, runs_marked_reset: 0 },
+      }
+    }
+
+    const { data: allComponents } = await svc
+      .from('inventory_bundle_components')
+      .select('bundle_sku, component_sku')
+      .in('bundle_sku', bundleSkus)
+
+    const componentCountMap = new Map<string, number>()
+    for (const c of allComponents ?? []) {
+      componentCountMap.set(c.bundle_sku, (componentCountMap.get(c.bundle_sku) ?? 0) + 1)
+    }
+
+    // ── 2. Fetch bundle orders in date range (shipped, owned by this user) ────
+    const { data: bundleOrders } = await svc
+      .from('sales_orders')
+      .select('id, seller_sku')
+      .in('seller_sku', bundleSkus)
+      .gte('order_date', `${dateFrom}T00:00:00+07:00`)
+      .lte('order_date', `${dateTo}T23:59:59+07:00`)
+      .not('shipped_at', 'is', null)
+      .eq('created_by', user.id)
+      .limit(2000)
+
+    if (!bundleOrders || bundleOrders.length === 0) {
+      return {
+        success: true,
+        summary: { bundle_orders_checked: 0, partial_orders_found: 0, allocation_rows_deleted: 0, layers_restored: 0, runs_marked_reset: 0 },
+      }
+    }
+
+    const orderUuids = bundleOrders.map((o) => o.id)
+
+    // ── 3. Fetch all allocation rows for those orders (one query) ─────────────
+    const { data: allocations } = await svc
+      .from('inventory_cogs_allocations')
+      .select('id, order_id, sku_internal, qty, layer_id')
+      .in('order_id', orderUuids)
+      .eq('is_reversal', false)
+      .eq('created_by', user.id)
+
+    // Build per-order allocation map
+    const orderAllocMap = new Map<string, Array<{ id: string; sku_internal: string; qty: number; layer_id: string | null }>>()
+    for (const row of allocations ?? []) {
+      const orderId = String(row.order_id)
+      if (!orderAllocMap.has(orderId)) orderAllocMap.set(orderId, [])
+      orderAllocMap.get(orderId)!.push({
+        id: row.id,
+        sku_internal: row.sku_internal,
+        qty: Number(row.qty),
+        layer_id: row.layer_id,
+      })
+    }
+
+    // ── 4. Identify partial orders ────────────────────────────────────────────
+    const partialOrders: Array<{ orderUuid: string; bundleSku: string }> = []
+    for (const order of bundleOrders) {
+      const expectedCount = componentCountMap.get(order.seller_sku) ?? 0
+      const orderRows = orderAllocMap.get(order.id) ?? []
+      const allocatedSkuCount = new Set(orderRows.map((r) => r.sku_internal)).size
+
+      if (orderRows.length > 0 && allocatedSkuCount < expectedCount) {
+        partialOrders.push({ orderUuid: order.id, bundleSku: order.seller_sku })
+      }
+    }
+
+    // ── 5. Clean each partial order ───────────────────────────────────────────
+    let allocationsDeleted = 0
+    let layersRestored = 0
+
+    for (const { orderUuid } of partialOrders) {
+      const rows = orderAllocMap.get(orderUuid) ?? []
+
+      // Restore qty_remaining for each layer referenced by a stale allocation row
+      for (const row of rows) {
+        if (!row.layer_id) continue
+        const { data: layer } = await svc
+          .from('inventory_receipt_layers')
+          .select('qty_remaining')
+          .eq('id', row.layer_id)
+          .single()
+        if (layer) {
+          await svc
+            .from('inventory_receipt_layers')
+            .update({ qty_remaining: Number(layer.qty_remaining) + row.qty })
+            .eq('id', row.layer_id)
+          layersRestored++
+        }
+      }
+
+      // Delete the stale allocation rows for this order
+      const rowIds = rows.map((r) => r.id)
+      if (rowIds.length > 0) {
+        const { count } = await svc
+          .from('inventory_cogs_allocations')
+          .delete({ count: 'exact' })
+          .in('id', rowIds)
+        allocationsDeleted += count ?? 0
+      }
+    }
+
+    // ── 6. Mark failed cogs_allocation_runs for this range as reset ───────────
+    // This prevents the continue-offset logic from reading stale offsets.
+    const { count: runsReset } = await svc
+      .from('cogs_allocation_runs')
+      .update({
+        error_message: `Retroactively failed by adminResetStaleCogsRange (${dateFrom} – ${dateTo}) — ledger was reset`,
+        updated_at: new Date().toISOString(),
+      }, { count: 'exact' })
+      .eq('created_by', user.id)
+      .eq('status', 'failed')
+      .eq('trigger_source', 'DATE_RANGE')
+      .eq('date_from', dateFrom)
+      .eq('date_to', dateTo)
+
+    revalidatePath('/inventory')
+
+    return {
+      success: true,
+      summary: {
+        bundle_orders_checked: bundleOrders.length,
+        partial_orders_found: partialOrders.length,
+        allocation_rows_deleted: allocationsDeleted,
+        layers_restored: layersRestored,
+        runs_marked_reset: runsReset ?? 0,
+      },
+    }
+  } catch (err) {
+    console.error('Unexpected error in adminResetStaleCogsRange:', err)
     return { success: false, error: err instanceof Error ? err.message : 'Unexpected error' }
   }
 }

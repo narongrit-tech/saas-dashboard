@@ -458,6 +458,7 @@ export function MovementsTab() {
         <ApplyCOGSMTDModal
           open={showCOGSMTDModal}
           onOpenChange={handleCOGSModalClose}
+          isAdmin={isAdmin}
           onSuccess={handleCOGSSuccess}
           onViewRunDetails={handleViewRunDetails}
           initialStartDate={prefillStartDate}
