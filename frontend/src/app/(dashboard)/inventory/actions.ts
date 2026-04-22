@@ -76,8 +76,13 @@ async function _allocateRPC(
 
 /**
  * Allocate COGS for a bundle order using pre-loaded component definitions.
- * Still needs per-component idempotency SELECT (bundles can be partially done),
- * but skips auth re-check, inventory_items lookup, and getBundleComponents call.
+ *
+ * FIFO: delegates to allocate_cogs_bundle_fifo — a single Postgres transaction
+ * covering all components. Either all allocations commit or none do (atomic).
+ * Stale partial rows from a previous failed run are cleaned up inside the RPC.
+ *
+ * AVG: falls back to the sequential per-component path (snapshot-based, partial
+ * state is acceptable because AVG snapshots track running balance independently).
  */
 async function _allocateBundleOrderCOGS(
   supabase: ReturnType<typeof createClient>,
@@ -93,8 +98,54 @@ async function _allocateBundleOrderCOGS(
     return { status: 'failed', allocatedSkus: [], missingSkus: [bundleSku], reason: 'NO_BUNDLE_RECIPE' }
   }
 
-  const items = components.map((c) => ({ sku: c.component_sku, qty: c.quantity * qty }))
+  const items   = components.map((c) => ({ sku: c.component_sku, qty: c.quantity * qty }))
+  const allSkus = items.map((i) => i.sku)
 
+  // ── FIFO: single atomic RPC — all components or none ──────────────────────────
+  if (method === 'FIFO') {
+    const { data, error } = await supabase.rpc('allocate_cogs_bundle_fifo', {
+      p_order_id:   orderUuid,
+      p_components: items,        // [{sku, qty}] serialised as JSONB by Supabase client
+      p_shipped_at: shippedAt,
+      p_user_id:    userId,
+    })
+
+    if (error) {
+      const msg = error.message ?? ''
+      // Parse: insufficient_stock:SKU available=X required=Y
+      const insuffMatch = msg.match(/insufficient_stock:(\S+)/)
+      if (insuffMatch) {
+        const failedSku = insuffMatch[1]
+        return {
+          status: 'failed',
+          allocatedSkus: [],
+          missingSkus: allSkus,
+          reason: `INSUFFICIENT_STOCK: ${failedSku}`,
+        }
+      }
+      if (msg.includes('invalid_input')) {
+        return { status: 'failed', allocatedSkus: [], missingSkus: allSkus, reason: 'NO_BUNDLE_RECIPE' }
+      }
+      console.error(`_allocateBundleOrderCOGS RPC error for ${bundleSku}:`, msg)
+      return {
+        status: 'failed',
+        allocatedSkus: [],
+        missingSkus: allSkus,
+        reason: `ALLOCATION_FAILED: ${msg.slice(0, 120)}`,
+      }
+    }
+
+    const status = (data as { status?: string } | null)?.status
+    if (status === 'already_allocated') {
+      return { status: 'already_allocated', allocatedSkus: allSkus, missingSkus: [] }
+    }
+    if (status === 'success') {
+      return { status: 'success', allocatedSkus: allSkus, missingSkus: [] }
+    }
+    return { status: 'failed', allocatedSkus: [], missingSkus: allSkus, reason: 'ALLOCATION_FAILED' }
+  }
+
+  // ── AVG: sequential per-component (snapshot-based, existing behaviour) ────────
   const alreadyDone = new Set<string>()
   for (const comp of items) {
     const { data: existing } = await supabase
@@ -108,7 +159,7 @@ async function _allocateBundleOrderCOGS(
   }
 
   if (alreadyDone.size === items.length) {
-    return { status: 'already_allocated', allocatedSkus: items.map((i) => i.sku), missingSkus: [] }
+    return { status: 'already_allocated', allocatedSkus: allSkus, missingSkus: [] }
   }
 
   const allocated: string[] = []
