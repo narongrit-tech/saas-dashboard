@@ -181,6 +181,18 @@ export function ApplyCOGSMTDModal({
     return finalResponse
   }
 
+  async function refreshEvalState() {
+    if (!startDate || !endDate) return
+    setEvaluating(true)
+    try {
+      const state = await evaluateCogsRunState(startDate, endDate)
+      setEvalState(state)
+      setResetConfirm(false)
+    } finally {
+      setEvaluating(false)
+    }
+  }
+
   // ── "Start fresh" handler ───────────────────────────────────────────────────
   // Automatically runs partial-bundle cleanup before the fresh allocation run.
   // This ensures stale partial rows (from a prior sequential run or failed RPC) are
@@ -208,6 +220,7 @@ export function ApplyCOGSMTDModal({
       setChunkProgress(null)
       if (!finalResponse.success) {
         setError(finalResponse.error || 'เกิดข้อผิดพลาด')
+        await refreshEvalState()
       } else {
         setResult(finalResponse.data)
         if (onSuccess) onSuccess()
@@ -215,6 +228,7 @@ export function ApplyCOGSMTDModal({
     } catch (err) {
       setChunkProgress(null)
       setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด')
+      await refreshEvalState()
     } finally {
       setLoading(false)
     }
@@ -233,6 +247,7 @@ export function ApplyCOGSMTDModal({
       setChunkProgress(null)
       if (!finalResponse.success) {
         setError(finalResponse.error || 'เกิดข้อผิดพลาด')
+        await refreshEvalState()
       } else {
         setResult(finalResponse.data)
         if (onSuccess) onSuccess()
@@ -240,6 +255,7 @@ export function ApplyCOGSMTDModal({
     } catch (err) {
       setChunkProgress(null)
       setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดที่ไม่คาดคิด')
+      await refreshEvalState()
     } finally {
       setLoading(false)
     }
@@ -465,7 +481,12 @@ export function ApplyCOGSMTDModal({
                       สาเหตุ: Stock ไม่เพียงพอสำหรับ SKU ที่ระบุ — ตรวจสอบ receipt layers ใน Inventory
                     </p>
                   )}
-                  {(error.includes('stale') || error.includes('offset')) && (
+                  {error.toLowerCase().includes('timeout') && (
+                    <p className="text-xs font-medium mt-1">
+                      Timeout — กด <strong>Continue Run</strong> เพื่อดำเนินการต่อจาก offset ที่ค้างอยู่
+                    </p>
+                  )}
+                  {error.includes('stale') && (
                     <p className="text-xs font-medium mt-1">
                       สาเหตุ: Run state ไม่ valid — ลอง Start Fresh
                     </p>
