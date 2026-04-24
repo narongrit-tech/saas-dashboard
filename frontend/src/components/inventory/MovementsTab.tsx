@@ -14,10 +14,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Package, Search, Sliders, Wrench } from 'lucide-react'
+import { Check, Package, Pencil, Search, Sliders, Wrench, X } from 'lucide-react'
 import { formatBangkok } from '@/lib/bangkok-time'
 import { getTodayBangkokString, getFirstDayOfMonthBangkokString } from '@/lib/bangkok-date-range'
-import { getReceiptLayers, getCOGSAllocations, checkIsInventoryAdmin, getAdjustments } from '@/app/(dashboard)/inventory/actions'
+import { getReceiptLayers, getCOGSAllocations, checkIsInventoryAdmin, getAdjustments, updateStockInLayerCost } from '@/app/(dashboard)/inventory/actions'
 import { ApplyCOGSMTDModal } from '@/components/inventory/ApplyCOGSMTDModal'
 import { COGSCoveragePanel } from '@/components/inventory/COGSCoveragePanel'
 import { RunHistorySection } from '@/components/inventory/RunHistorySection'
@@ -72,6 +72,12 @@ export function MovementsTab() {
 
   // Adjust Stock dialog
   const [showAdjustStockDialog, setShowAdjustStockDialog] = useState(false)
+
+  // Edit STOCK_IN unit cost (inline)
+  const [editingLayerId, setEditingLayerId] = useState<string | null>(null)
+  const [editingCost, setEditingCost] = useState('')
+  const [editSaving, setEditSaving] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
 
   // Adjustments tab data
   const [adjustments, setAdjustments] = useState<Awaited<ReturnType<typeof getAdjustments>>['data']>([])
@@ -159,6 +165,37 @@ export function MovementsTab() {
     }
   }
 
+  function startEditCost(layer: ReceiptLayer) {
+    setEditingLayerId(layer.id)
+    setEditingCost(layer.unit_cost.toString())
+    setEditError(null)
+  }
+
+  function cancelEditCost() {
+    setEditingLayerId(null)
+    setEditingCost('')
+    setEditError(null)
+  }
+
+  async function saveEditCost(layerId: string) {
+    const cost = parseFloat(editingCost)
+    if (isNaN(cost) || cost <= 0) {
+      setEditError('กรุณาใส่ต้นทุนที่ถูกต้อง (> 0)')
+      return
+    }
+    setEditSaving(true)
+    setEditError(null)
+    const result = await updateStockInLayerCost(layerId, cost)
+    setEditSaving(false)
+    if (result.success) {
+      setEditingLayerId(null)
+      setEditingCost('')
+      await loadData()
+    } else {
+      setEditError(result.error ?? 'เกิดข้อผิดพลาด')
+    }
+  }
+
   // Filter allocations by Order ID search
   const filteredAllocations = orderIdSearch.trim()
     ? allocations.filter(alloc =>
@@ -227,40 +264,101 @@ export function MovementsTab() {
                     <TableHead className="text-right">Unit Cost</TableHead>
                     <TableHead className="text-right">Total Value</TableHead>
                     <TableHead>Ref Type</TableHead>
+                    <TableHead></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {layers.map((layer) => (
-                    <TableRow key={layer.id}>
-                      <TableCell className="font-mono">{layer.sku_internal}</TableCell>
-                      <TableCell>
-                        {formatBangkok(new Date(layer.received_at), 'dd/MM/yyyy HH:mm')}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {layer.qty_received.toFixed(4)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <span
-                          className={
-                            layer.qty_remaining === 0
-                              ? 'text-muted-foreground'
-                              : 'font-semibold'
-                          }
-                        >
-                          {layer.qty_remaining.toFixed(4)}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {layer.unit_cost.toFixed(2)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {(layer.qty_remaining * layer.unit_cost).toFixed(2)}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{layer.ref_type}</Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {layers.map((layer) => {
+                    const isEditing = editingLayerId === layer.id
+                    const canEdit =
+                      layer.ref_type === 'STOCK_IN' &&
+                      layer.qty_remaining === layer.qty_received
+                    return (
+                      <TableRow key={layer.id}>
+                        <TableCell className="font-mono">{layer.sku_internal}</TableCell>
+                        <TableCell>
+                          {formatBangkok(new Date(layer.received_at), 'dd/MM/yyyy HH:mm')}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {layer.qty_received.toFixed(4)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <span
+                            className={
+                              layer.qty_remaining === 0
+                                ? 'text-muted-foreground'
+                                : 'font-semibold'
+                            }
+                          >
+                            {layer.qty_remaining.toFixed(4)}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {isEditing ? (
+                            <div className="flex flex-col items-end gap-1">
+                              <Input
+                                type="number"
+                                step="0.01"
+                                min="0.01"
+                                value={editingCost}
+                                onChange={(e) => setEditingCost(e.target.value)}
+                                className="w-28 h-7 text-right text-sm"
+                                autoFocus
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') saveEditCost(layer.id)
+                                  if (e.key === 'Escape') cancelEditCost()
+                                }}
+                              />
+                              {editError && editingLayerId === layer.id && (
+                                <p className="text-xs text-destructive">{editError}</p>
+                              )}
+                            </div>
+                          ) : (
+                            layer.unit_cost.toFixed(2)
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {(layer.qty_remaining * layer.unit_cost).toFixed(2)}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{layer.ref_type}</Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {isEditing ? (
+                            <div className="flex gap-1 justify-end">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7 text-green-600 hover:text-green-700"
+                                disabled={editSaving}
+                                onClick={() => saveEditCost(layer.id)}
+                              >
+                                <Check className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7"
+                                disabled={editSaving}
+                                onClick={cancelEditCost}
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          ) : canEdit ? (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 opacity-50 hover:opacity-100"
+                              onClick={() => startEditCost(layer)}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                          ) : null}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
                 </TableBody>
               </Table>
             </div>

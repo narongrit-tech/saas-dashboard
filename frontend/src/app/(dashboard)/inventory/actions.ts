@@ -493,6 +493,83 @@ export async function updateOpeningBalanceLayer(
 }
 
 /**
+ * Update unit_cost of a STOCK_IN layer — only if not yet consumed (no allocations)
+ */
+export async function updateStockInLayerCost(
+  layer_id: string,
+  unit_cost: number
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const supabase = createClient()
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'Not authenticated' }
+    }
+
+    const { data: layer, error: fetchError } = await supabase
+      .from('inventory_receipt_layers')
+      .select('*')
+      .eq('id', layer_id)
+      .single()
+
+    if (fetchError || !layer) {
+      return { success: false, error: 'Layer not found' }
+    }
+
+    if (layer.ref_type !== 'STOCK_IN') {
+      return { success: false, error: 'Can only edit STOCK_IN layers' }
+    }
+
+    if (layer.is_voided) {
+      return { success: false, error: 'Cannot edit voided layer' }
+    }
+
+    if (layer.qty_remaining !== layer.qty_received) {
+      return { success: false, error: 'Cannot edit layer that has been partially consumed' }
+    }
+
+    const { data: allocations, error: allocError } = await supabase
+      .from('inventory_cogs_allocations')
+      .select('id')
+      .eq('layer_id', layer_id)
+      .limit(1)
+
+    if (allocError) {
+      return { success: false, error: 'Error checking allocations' }
+    }
+
+    if (allocations && allocations.length > 0) {
+      return { success: false, error: 'Cannot edit layer that has COGS allocations' }
+    }
+
+    if (unit_cost <= 0) {
+      return { success: false, error: 'Unit cost must be greater than 0' }
+    }
+
+    const { error: updateError } = await supabase
+      .from('inventory_receipt_layers')
+      .update({ unit_cost })
+      .eq('id', layer_id)
+
+    if (updateError) {
+      console.error('Error updating STOCK_IN layer cost:', updateError)
+      return { success: false, error: updateError.message }
+    }
+
+    revalidatePath('/inventory')
+    return { success: true }
+  } catch (error) {
+    console.error('Unexpected error in updateStockInLayerCost:', error)
+    return { success: false, error: 'Unexpected error' }
+  }
+}
+
+/**
  * Void (soft delete) opening balance layer (only if not yet consumed)
  */
 /**
