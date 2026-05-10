@@ -419,7 +419,7 @@ export async function exportSalesOrders(filters: ExportFilters): Promise<ExportR
     if (dateBasis === 'order') {
       // Fetch by order_date (broader) to include created_time=NULL rows
       if (filters.startDate) {
-        query = query.gte('order_date', filters.startDate)
+        query = query.gte('order_date', `${filters.startDate}T00:00:00+07:00`)
       }
       if (filters.endDate) {
         const { toZonedTime } = await import('date-fns-tz')
@@ -967,7 +967,7 @@ export async function getSalesOrdersGrouped(
       // IMPORTANT: Fetch by order_date (broader) to include created_time=NULL rows
       // Client-side filter will apply COALESCE(created_time, order_date) logic
       if (filters.startDate) {
-        baseQuery = baseQuery.gte('order_date', filters.startDate)
+        baseQuery = baseQuery.gte('order_date', `${filters.startDate}T00:00:00+07:00`)
       }
       if (filters.endDate) {
         const { toZonedTime } = await import('date-fns-tz')
@@ -1315,7 +1315,7 @@ export async function getMultiSkuOrders(filters: ExportFilters & { dateBasis?: '
       }
     } else {
       // Use order_date (broader) to fetch rows with created_time=NULL
-      if (filters.startDate) baseQuery = baseQuery.gte('order_date', filters.startDate)
+      if (filters.startDate) baseQuery = baseQuery.gte('order_date', `${filters.startDate}T00:00:00+07:00`)
       if (filters.endDate) {
         const { toZonedTime } = await import('date-fns-tz')
         const { endOfDay } = await import('date-fns')
@@ -1589,8 +1589,8 @@ export async function getSalesReconciliation(filters: {
       .from('sales_orders')
       .select('external_order_id, order_id, created_time, order_date')
       .eq('source_platform', 'tiktok_shop')
-      .gte('order_date', filters.startDate)
-      .lte('order_date', filters.endDate + 'T23:59:59')
+      .gte('order_date', `${filters.startDate}T00:00:00+07:00`)
+      .lte('order_date', `${filters.endDate}T23:59:59.999+07:00`)
 
     if (fetchError) {
       console.error('Error fetching reconciliation data:', fetchError)
@@ -2057,7 +2057,7 @@ export async function getSalesGMVSummary(
     } else {
       // Fetch by order_date (broader); COALESCE(created_time, order_date) applied in TS
       baseQuery = baseQuery
-        .gte('order_date', filters.startDate)
+        .gte('order_date', `${filters.startDate}T00:00:00+07:00`)
         .lte('order_date', endOfDayISO)
     }
 
@@ -2295,7 +2295,7 @@ export async function getSalesPlatformBreakdown(
         .lte('paid_time', endOfDayISO)
     } else {
       baseQuery = baseQuery
-        .gte('order_date', filters.startDate)
+        .gte('order_date', `${filters.startDate}T00:00:00+07:00`)
         .lte('order_date', endOfDayISO)
     }
 
@@ -2495,7 +2495,7 @@ export async function getMainSkuOutflowSummary(
       }
     } else {
       if (filters.startDate) {
-        baseQuery = baseQuery.gte('order_date', filters.startDate)
+        baseQuery = baseQuery.gte('order_date', `${filters.startDate}T00:00:00+07:00`)
       }
       if (filters.endDate) {
         const { toZonedTime } = await import('date-fns-tz')

@@ -476,7 +476,7 @@ export default function SalesPageClient({ isAdmin, debugInfo }: SalesPageClientP
 
           if (dateBasis === 'order') {
             if (filters.startDate) {
-              query = query.gte('order_date', filters.startDate)
+              query = query.gte('order_date', `${filters.startDate}T00:00:00+07:00`)
             }
             if (filters.endDate) {
               const endBangkok = endOfDayBangkok(filters.endDate)
