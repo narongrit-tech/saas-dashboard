@@ -27,30 +27,29 @@ import { parse as parseDate, isValid } from 'date-fns'
 
 /**
  * Generate SHA256 hash for sales order line deduplication.
- * Matches PostgreSQL backfill formula in migration-024.
  *
- * Hash input includes `userId` (created_by) so that:
- *   - Same user re-importing the same file produces identical hashes → idempotent upsert.
- *   - Different users importing the same order produce different hashes → no cross-user conflict.
+ * Hash excludes userId — a single business operates as one workspace (see
+ * workspace_owner_map / migration-112), so the same order imported by any
+ * delegate must produce the same hash to remain idempotent across users.
  *
- * Cross-user / cross-file dedup is enforced at the import_batches level
- * (file_hash + report_type unique index, migration-093).
+ * Earlier versions included userId, which caused 4,139 duplicate groups in
+ * May 2026 when a delegate (Nawapan) and the primary (Narongrit) both
+ * imported overlapping files: same order content → different hash → row
+ * inserted twice → over-allocated COGS.
  *
- * DB constraint: sales_orders_unique_order_line_hash ON (order_line_hash)
- * — single-column, no WHERE clause, required for PostgREST ON CONFLICT inference.
- * — created by migration-099 (or migration-093 sales_orders block).
+ * DB constraints (defense in depth):
+ *   - sales_orders_unique_order_line_hash ON (order_line_hash) — migration-099
+ *   - sales_orders_unique_order_line ON (order_id, seller_sku) — migration-113
  */
 function generateOrderLineHash(
-  userId: string,
+  _userId: string,
   sourcePlatform: string,
   externalOrderId: string,
   productName: string,
   quantity: number,
   totalAmount: number
 ): string {
-  // Format: created_by|source_platform|external_order_id|product_name|quantity|total_amount
   const hashInput = [
-    userId,
     sourcePlatform || '',
     externalOrderId || '',
     productName || '',
@@ -1110,7 +1109,7 @@ export async function importSalesChunk(
     const { data: upsertedRows, error: upsertError } = await supabase
       .from('sales_orders')
       .upsert(salesRows, {
-        onConflict: 'order_line_hash',
+        onConflict: 'order_id,seller_sku',
         ignoreDuplicates: false, // Update existing rows
       })
       .select()
@@ -1727,7 +1726,7 @@ export async function importSalesToSystem(
     const { data: upsertedRows, error: upsertError } = await supabase
       .from('sales_orders')
       .upsert(salesRows, {
-        onConflict: 'order_line_hash',
+        onConflict: 'order_id,seller_sku',
         ignoreDuplicates: false, // Update existing rows
       })
       .select()
