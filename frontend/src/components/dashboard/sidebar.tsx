@@ -104,57 +104,8 @@ const menuGroups: MenuGroup[] = [
       },
     ],
   },
-  {
-    title: 'Content Ops',
-    defaultExpanded: true,
-    items: [
-      {
-        title: 'Content Library',
-        href: '/content-ops/library',
-        icon: Film,
-      },
-      {
-        title: 'Video Overview',
-        href: '/content-ops/video-master',
-        icon: Video,
-      },
-      {
-        title: 'Products',
-        href: '/content-ops/products',
-        icon: Package2,
-      },
-      {
-        title: 'Shops',
-        href: '/content-ops/shops',
-        icon: Store,
-      },
-      {
-        title: 'Orders Explorer',
-        href: '/content-ops/analysis/orders',
-        icon: Search,
-      },
-      {
-        title: 'Attribution',
-        href: '/content-ops/analysis/attribution',
-        icon: GitBranch,
-      },
-      {
-        title: 'Data Health',
-        href: '/content-ops/data-health',
-        icon: HeartPulse,
-      },
-      {
-        title: 'Mapping Review',
-        href: '/content-ops/video-mapping-review',
-        icon: GitMerge,
-      },
-      {
-        title: 'Upload Data',
-        href: '/content-ops/tiktok-affiliate/upload',
-        icon: Upload,
-      },
-    ],
-  },
+  // Content Ops hidden — moved to COS (Creator Ops System) at localhost:3001
+  // Routes remain accessible directly; only removed from navigation.
   {
     title: 'Money',
     defaultExpanded: true,
