@@ -2,7 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { TrendingUp, Megaphone, AlertCircle, Wallet } from 'lucide-react'
 import { format, subDays, parseISO, isValid } from 'date-fns'
 import { getPerformanceDashboard, getExpensePickerTotal, getMarketplaceCashIn, getBankInflowRevenueTotal } from './actions'
-import type { CogsBasis, RevenueBasis, BankInflowRevenueTotals } from './actions'
+import type { CogsBasis, CogsInclude, RevenueBasis, BankInflowRevenueTotals } from './actions'
 import { getBangkokNow } from '@/lib/bangkok-time'
 import { PerformanceTrendChart } from '@/components/dashboard/PerformanceTrendChart'
 import { AdsBreakdownSection } from '@/components/dashboard/AdsBreakdownSection'
@@ -62,6 +62,8 @@ export default async function PerformanceDashboardPage({
 
   // ── Basis params — strict whitelist ─────────────────────────────────────────
   const cogsBasis:    CogsBasis    = sp(searchParams, 'cogsBasis') === 'created' ? 'created' : 'shipped'
+  const _rawCogsInclude = sp(searchParams, 'cogsInclude')
+  const cogsInclude: CogsInclude = _rawCogsInclude === 'allocated' ? 'allocated' : _rawCogsInclude === 'expenses' ? 'expenses' : 'both'
   const _rawRevBasis = sp(searchParams, 'revBasis')
   const revenueBasis: RevenueBasis = _rawRevBasis === 'cashin' ? 'cashin' : _rawRevBasis === 'bank' ? 'bank' : 'gmv'
 
@@ -107,7 +109,9 @@ export default async function PerformanceDashboardPage({
   const displayOp      = summary.operating
   const displayTax     = summary.tax
   const displayCogsExp = cogsExpResult.data?.total ?? 0
-  const displayCogs    = summary.cogs + displayCogsExp
+  const displayCogs    = cogsInclude === 'allocated' ? summary.cogs
+    : cogsInclude === 'expenses' ? displayCogsExp
+    : summary.cogs + displayCogsExp
 
   const cashInData        = cashInResult.success ? cashInResult.data : undefined
   const displayCashIn     = cashInData?.total ?? 0
@@ -224,6 +228,7 @@ export default async function PerformanceDashboardPage({
             cogsExpenses={displayCogsExp}
             cogsExpState={cogsExpState}
             cogsBasis={cogsBasis}
+            cogsInclude={cogsInclude}
             from={from}
             to={to}
             allSearchParams={allSearchParamsFlat}

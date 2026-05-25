@@ -10,6 +10,7 @@ import { fetchGMVByCreatedTime } from '@/lib/sales-metrics'
 
 export type GmvBasis      = 'created' | 'paid'
 export type CogsBasis     = 'shipped' | 'created'
+export type CogsInclude   = 'both' | 'allocated' | 'expenses'
 export type RevenueBasis     = 'gmv' | 'cashin' | 'bank'
 export type RevenueChannel   = 'tiktok' | 'shopee' | 'other'
 
