@@ -5,6 +5,7 @@ import { format, subDays, addDays, parseISO, isValid, startOfDay } from 'date-fn
 import { getBangkokNow } from '@/lib/bangkok-time'
 import { toBangkokDateString } from '@/lib/bangkok-date-range'
 import { fetchGMVByCreatedTime } from '@/lib/sales-metrics'
+import { getLiveCampaignFilter } from '@/app/(dashboard)/ads/campaign-config-actions'
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
 
@@ -245,8 +246,7 @@ type ExpensePickerInput = {
  * getExpensePickerTotal. Returns a Map<YYYY-MM-DD, amount> for use in trend building.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function buildExpensesByDay(
-  supabase: any,
+async function buildExpensesByDay(supabase: any,
   from: string,
   to: string,
   state: ExpensePickerInput | undefined,
@@ -348,7 +348,7 @@ export async function getPerformanceDashboard(
     // Fetch all sources in parallel
     // Revenue: strict created_time (no fallback). COGS branches on cogsBasis.
     // Operating/Tax: use picker-state filters so trend matches card totals exactly.
-    const [gmvByDate, cogsByDate, adPerfRes, awarenessRes, opByDate, taxByDate] = await Promise.all([
+    const [gmvByDate, cogsByDate, adPerfRes, awarenessRes, opByDate, taxByDate, liveCampaignFilter] = await Promise.all([
       fetchGMVByCreatedTime(supabase, startDateStr, endDateStr),
 
       cogsMapPromise,
@@ -356,7 +356,7 @@ export async function getPerformanceDashboard(
       // Product + Live spend + revenue from ad_daily_performance
       supabase
         .from('ad_daily_performance')
-        .select('ad_date, campaign_type, spend, revenue')
+        .select('ad_date, campaign_type, campaign_id, spend, revenue')
         .gte('ad_date', startDateStr)
         .lte('ad_date', endDateStr)
         .in('campaign_type', ['product', 'live']),
@@ -379,6 +379,9 @@ export async function getPerformanceDashboard(
 
       // Tax expenses — applies picker state so chart matches cards
       buildExpensesByDay(supabase, startDateStr, endDateStr, taxState, 'Tax'),
+
+      // Live campaign filter: which campaign_ids are included in P&L
+      getLiveCampaignFilter(supabase),
     ])
 
     if (adPerfRes.error)    throw new Error(`Ad performance query failed: ${adPerfRes.error.message}`)
@@ -392,9 +395,16 @@ export async function getPerformanceDashboard(
 
     adPerfRes.data?.forEach((row) => {
       const d = row.ad_date as string
+      const campaignId = row.campaign_id as string | null
+
       if (row.campaign_type === 'product') {
         productByDate.set(d, (productByDate.get(d) || 0) + Math.max(0, (row.spend as number) || 0))
       } else if (row.campaign_type === 'live') {
+        // If user has classified live campaigns, only include campaigns with include_in_pnl=true.
+        // Campaigns with null/empty campaign_id are always included (cannot be classified).
+        if (liveCampaignFilter.hasConfig && campaignId) {
+          if (!liveCampaignFilter.includedIds.includes(campaignId)) return
+        }
         liveByDate.set(d, (liveByDate.get(d) || 0) + Math.max(0, (row.spend as number) || 0))
       }
       const rev = (row.revenue as number) || 0
@@ -532,13 +542,18 @@ export async function getAdsBreakdown(
     // Fetch ADS wallet IDs first (needed for awareness query)
     const adsWalletIds = await getAdsWalletIds(supabase)
 
+    // Fetch live campaign filter (needed for 'live' and 'all' tabs)
+    const liveCampaignFilter = (tab === 'product' || tab === 'awareness')
+      ? { hasConfig: false, includedIds: [] as string[] }
+      : await getLiveCampaignFilter(supabase)
+
     // ad_daily_performance query: skip for 'awareness' tab
     const adPerfPromise = tab === 'awareness'
-      ? Promise.resolve({ data: [] as Array<{ad_date: string; campaign_type: string; spend: number; revenue: number}>, error: null })
+      ? Promise.resolve({ data: [] as Array<{ad_date: string; campaign_type: string; campaign_id: string | null; spend: number; revenue: number}>, error: null })
       : (() => {
           let q = supabase
             .from('ad_daily_performance')
-            .select('ad_date, campaign_type, spend, revenue')
+            .select('ad_date, campaign_type, campaign_id, spend, revenue')
             .gte('ad_date', from)
             .lte('ad_date', to)
           if (tab === 'product') q = q.eq('campaign_type', 'product')
@@ -573,6 +588,13 @@ export async function getAdsBreakdown(
 
     for (const row of adPerfRes.data ?? []) {
       const d = row.ad_date as string
+      const campaignId = row.campaign_id as string | null
+
+      // For live campaigns: skip if user has config and this campaign is not included
+      if (row.campaign_type === 'live' && liveCampaignFilter.hasConfig && campaignId) {
+        if (!liveCampaignFilter.includedIds.includes(campaignId)) continue
+      }
+
       attributedSpendByDate.set(d, (attributedSpendByDate.get(d) || 0) + Math.max(0, (row.spend as number) || 0))
       if (hasRevenue) {
         const rev = (row.revenue as number) || 0
@@ -1350,7 +1372,7 @@ export async function getBankInflowRows(params: {
     const ids = (txns ?? []).map((t) => t.id as string)
 
     // Fetch classifications for this page's transactions
-    let classMap = new Map<string, { include_as_revenue: boolean; revenue_channel: RevenueChannel | null; revenue_type: string | null; note: string | null }>()
+    const classMap = new Map<string, { include_as_revenue: boolean; revenue_channel: RevenueChannel | null; revenue_type: string | null; note: string | null }>()
     if (ids.length > 0) {
       const { data: cls, error: clsErr } = await supabase
         .from('bank_txn_classifications')

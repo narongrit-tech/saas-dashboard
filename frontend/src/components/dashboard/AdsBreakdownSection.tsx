@@ -11,7 +11,8 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
-import { Loader2, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react'
+import { Loader2, AlertCircle, ChevronDown, ChevronRight, Settings2 } from 'lucide-react'
+import { LiveCampaignManager } from '@/components/ads/LiveCampaignManager'
 import {
   ComposedChart, LineChart,
   Bar, Line, XAxis, YAxis, CartesianGrid,
@@ -119,6 +120,7 @@ function AdsPanel({
     )
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { totalSpend, totalGmv, roas, spendRange, roasRange, byDay, hasRevenue, awarenessSpend } = breakdown
   const chartData = byDay.filter((r) => r.spend > 0 || r.gmv > 0)
 
@@ -309,10 +311,11 @@ function AdsPanel({
 
 // ─── AdsBreakdownSection ──────────────────────────────────────────────────────
 export function AdsBreakdownSection({ from, to }: Props) {
-  const [activeTab, setActiveTab] = useState<AdsTab>('all')
-  const [data, setData]           = useState<AdsBreakdownType | null>(null)
-  const [loading, setLoading]     = useState(true)
-  const [error, setError]         = useState<string | null>(null)
+  const [activeTab, setActiveTab]       = useState<AdsTab>('all')
+  const [data, setData]                 = useState<AdsBreakdownType | null>(null)
+  const [loading, setLoading]           = useState(true)
+  const [error, setError]               = useState<string | null>(null)
+  const [showManager, setShowManager]   = useState(false)
 
   const fetchData = useCallback(
     async (tab: AdsTab) => {
@@ -334,18 +337,49 @@ export function AdsBreakdownSection({ from, to }: Props) {
     fetchData(activeTab)
   }, [from, to, activeTab, fetchData])
 
+  // Close manager when switching away from live tab
+  useEffect(() => {
+    if (activeTab !== 'live') setShowManager(false)
+  }, [activeTab])
+
   return (
     <div className="space-y-4">
       {/* Tab selector */}
-      <div className="flex items-center gap-3">
-        <span className="text-xs text-muted-foreground font-medium shrink-0">Ads Type:</span>
-        <div className="inline-flex rounded border overflow-hidden">
-          <TabBtn active={activeTab === 'all'}       onClick={() => setActiveTab('all')}>All</TabBtn>
-          <TabBtn active={activeTab === 'product'}   onClick={() => setActiveTab('product')}>Product GMV Max</TabBtn>
-          <TabBtn active={activeTab === 'live'}      onClick={() => setActiveTab('live')}>Live GMV Max</TabBtn>
-          <TabBtn active={activeTab === 'awareness'} onClick={() => setActiveTab('awareness')}>Awareness</TabBtn>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-muted-foreground font-medium shrink-0">Ads Type:</span>
+          <div className="inline-flex rounded border overflow-hidden">
+            <TabBtn active={activeTab === 'all'}       onClick={() => setActiveTab('all')}>All</TabBtn>
+            <TabBtn active={activeTab === 'product'}   onClick={() => setActiveTab('product')}>Product GMV Max</TabBtn>
+            <TabBtn active={activeTab === 'live'}      onClick={() => setActiveTab('live')}>Live GMV Max</TabBtn>
+            <TabBtn active={activeTab === 'awareness'} onClick={() => setActiveTab('awareness')}>Awareness</TabBtn>
+          </div>
         </div>
+
+        {/* Campaign manager button — shown only on Live tab */}
+        {activeTab === 'live' && (
+          <button
+            type="button"
+            onClick={() => setShowManager((p) => !p)}
+            className={[
+              'flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border transition-colors',
+              showManager
+                ? 'bg-primary text-primary-foreground border-primary'
+                : 'bg-background text-muted-foreground hover:bg-muted hover:text-foreground',
+            ].join(' ')}
+          >
+            <Settings2 className="h-3.5 w-3.5" />
+            จัดการ Campaigns
+          </button>
+        )}
       </div>
+
+      {/* Campaign manager panel (Live tab only) */}
+      {activeTab === 'live' && showManager && (
+        <div className="rounded-lg border bg-card p-4">
+          <LiveCampaignManager />
+        </div>
+      )}
 
       {/* Panel */}
       <AdsPanel
