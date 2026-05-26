@@ -1,7 +1,10 @@
 import path from 'node:path'
 import fs from 'node:fs'
+import { config } from 'dotenv'
 import { parseBankStatementExcel, calculateFileHash, computeTxnHash } from '../src/lib/importers/kbank-statement'
 import { createServiceClient } from '../src/lib/supabase/service'
+
+config({ path: path.resolve(__dirname, '../.env.local') })
 
 const BATCH_SIZE = 200
 
