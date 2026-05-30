@@ -254,7 +254,7 @@ export function ReturnDrawer({ open, order, onClose, onSuccess }: ReturnDrawerPr
                               type="number"
                               min="0"
                               max={available}
-                              value={state.qty_to_return || ''}
+                              value={state.qty_to_return}
                               onChange={(e) => handleQtyChange(item.id, e.target.value)}
                               className="w-20 text-right"
                               disabled={submitting}
