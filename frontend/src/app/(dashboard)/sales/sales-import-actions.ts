@@ -45,16 +45,16 @@ function generateOrderLineHash(
   _userId: string,
   sourcePlatform: string,
   externalOrderId: string,
-  productName: string,
+  _productName: string,   // excluded: product names can change between TikTok report exports
   quantity: number,
-  totalAmount: number
+  _totalAmount: number,   // excluded: amounts change when TikTok adjusts price/promotions
+  sku?: string            // included: stable marketplace variant identifier
 ): string {
   const hashInput = [
     sourcePlatform || '',
     externalOrderId || '',
-    productName || '',
+    sku || '',
     quantity.toString(),
-    totalAmount.toString(),
   ].join('|')
 
   return crypto.createHash('sha256').update(hashInput).digest('hex')
@@ -1015,7 +1015,8 @@ export async function importSalesChunk(
         row.external_order_id || row.order_id || '',
         row.product_name || '',
         row.quantity || 0,
-        row.total_amount || 0
+        row.total_amount || 0,
+        row.sku || ''
       )
 
       // Resolve order_amount with 3-level priority:
@@ -1677,7 +1678,8 @@ export async function importSalesToSystem(
         row.external_order_id || row.order_id || '',
         row.product_name || '',
         row.quantity || 0,
-        row.total_amount || 0
+        row.total_amount || 0,
+        row.sku || ''
       )
 
       return {
