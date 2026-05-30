@@ -78,6 +78,32 @@ const _resolveSalesOrderByNote = async (
 }
 
 /**
+ * Internal helper: compute net returned qty per order_id|sku key.
+ * Counts only active RETURN records (action_type='RETURN', is_undone=false).
+ * Returns Map keyed by `${order_id}|${sku}`.
+ */
+const _getNetReturnedQtyMap = async (
+  supabase: any,
+  orderIds: string[],
+): Promise<Map<string, number>> => {
+  if (orderIds.length === 0) return new Map()
+  const { data } = await supabase
+    .from('inventory_returns')
+    .select('order_id, sku, qty')
+    .in('order_id', orderIds)
+    .eq('action_type', 'RETURN')
+    .eq('is_undone', false)
+  const map = new Map<string, number>()
+  if (data) {
+    for (const ret of data) {
+      const key = `${ret.order_id}|${ret.sku}`
+      map.set(key, (map.get(key) || 0) + ret.qty)
+    }
+  }
+  return map
+}
+
+/**
  * Internal helper: for a RETURN_RECEIVED inventory_returns record,
  * - Insert inventory_receipt_layers with ref_type='RETURN', ref_id=returnId
  * - Insert COGS reversal using Method B (weighted avg unit_cost from original allocations)
@@ -333,48 +359,47 @@ export async function searchOrdersForReturn(
         })
       }
 
-      // Add line item
+      // Add line item — merge duplicate SKUs (same seller_sku or sku) within the same order
       const order = ordersMap.get(orderKey)!
-      order.line_items.push({
-        id: line.id,
-        sku: line.sku || '',
-        seller_sku: line.seller_sku,
-        product_name: line.product_name,
-        quantity: line.quantity,
-        qty_returned: 0, // Will populate next
-        unit_price: line.unit_price,
-        total_amount: line.total_amount,
-      })
-    }
+      const dedupKey = line.seller_sku || line.sku || ''
+      const existingItem = dedupKey
+        ? order.line_items.find((i) => (i.seller_sku || i.sku) === dedupKey)
+        : null
 
-    // Get qty_returned for each line item
-    const lineItemIds = orderLines.map((l) => l.id)
-
-    const { data: returns, error: returnsError } = await supabase
-      .from('inventory_returns')
-      .select('order_id, sku, qty')
-      .in('order_id', lineItemIds)
-
-    if (returnsError) {
-      console.error('[searchOrdersForReturn] Returns error:', returnsError)
-      // Continue without returns data (qty_returned = 0)
-    }
-
-    // Aggregate qty_returned by order_id + sku
-    const returnsMap = new Map<string, number>()
-    if (returns) {
-      for (const ret of returns) {
-        const key = `${ret.order_id}|${ret.sku}`
-        returnsMap.set(key, (returnsMap.get(key) || 0) + ret.qty)
+      if (existingItem) {
+        existingItem.quantity += line.quantity || 0
+        existingItem.total_amount += line.total_amount || 0
+        existingItem.merged_rows.push({ id: line.id, qty: line.quantity || 0, qty_returned: 0 })
+      } else {
+        order.line_items.push({
+          id: line.id,
+          sku: line.sku || '',
+          seller_sku: line.seller_sku,
+          product_name: line.product_name,
+          quantity: line.quantity,
+          qty_returned: 0,
+          unit_price: line.unit_price,
+          total_amount: line.total_amount,
+          merged_rows: [{ id: line.id, qty: line.quantity || 0, qty_returned: 0 }],
+        })
       }
     }
 
-    // Populate qty_returned
+    // Get net qty_returned for each line item (active RETURN only, excludes undone)
+    const lineItemIds = orderLines.map((l) => l.id)
+    const returnsMap = await _getNetReturnedQtyMap(supabase, lineItemIds)
+
+    // Populate qty_returned across all merged rows
     const results = Array.from(ordersMap.values())
     for (const order of results) {
       for (const item of order.line_items) {
-        const key = `${item.id}|${item.sku}`
-        item.qty_returned = returnsMap.get(key) || 0
+        let totalReturned = 0
+        for (const row of item.merged_rows) {
+          const key = `${row.id}|${item.sku}`
+          row.qty_returned = returnsMap.get(key) || 0
+          totalReturned += row.qty_returned
+        }
+        item.qty_returned = totalReturned
       }
     }
 
@@ -434,25 +459,8 @@ export async function submitReturn(
       return { success: false, error: 'Cannot return orders you do not own' }
     }
 
-    // Get existing returns for validation
-    const { data: existingReturns, error: returnsError } = await supabase
-      .from('inventory_returns')
-      .select('order_id, sku, qty')
-      .in('order_id', lineItemIds)
-
-    if (returnsError) {
-      console.error('[submitReturn] Returns fetch error:', returnsError)
-      // Continue without existing returns (assume 0)
-    }
-
-    // Build map: line_item_id|sku -> qty_returned
-    const returnsMap = new Map<string, number>()
-    if (existingReturns) {
-      for (const ret of existingReturns) {
-        const key = `${ret.order_id}|${ret.sku}`
-        returnsMap.set(key, (returnsMap.get(key) || 0) + ret.qty)
-      }
-    }
+    // Build map: line_item_id|sku -> net qty_returned (active, non-undone RETURN records only)
+    const returnsMap = await _getNetReturnedQtyMap(supabase, lineItemIds)
 
     // Resolve sku_internal for each item
     const skuResolutionMap = new Map<string, string>()  // line_item_id -> sku_internal
@@ -675,6 +683,7 @@ export async function getReturnsQueue(filters?: {
       .select('order_id, qty')
       .in('order_id', orderLineIds)
       .eq('action_type', 'RETURN')
+      .eq('is_undone', false)
 
     if (returnsError) {
       console.error('[getReturnsQueue] Returns error:', returnsError)
@@ -741,23 +750,28 @@ export async function getReturnsQueue(filters?: {
 }
 
 /**
- * Get recent returns: last 20 return records
+ * Get recent returns with pagination.
+ * page: 0-indexed. limit: records per page (default 50).
+ * hasMore: true when there are additional pages.
  */
-export async function getRecentReturns(): Promise<{
+export async function getRecentReturns(page = 0, limit = 50): Promise<{
   data: RecentReturn[] | null
   error: string | null
+  hasMore: boolean
 }> {
   try {
     const supabase = await createClient()
 
-    // Get current user
     const {
       data: { user },
       error: authError,
     } = await supabase.auth.getUser()
     if (authError || !user) {
-      return { data: null, error: 'Not authenticated' }
+      return { data: null, error: 'Not authenticated', hasMore: false }
     }
+
+    const from = page * limit
+    const to = from + limit  // fetch one extra to detect hasMore
 
     // Fetch recent returns
     const { data: returns, error: fetchError } = await supabase
@@ -773,23 +787,27 @@ export async function getRecentReturns(): Promise<{
         returned_at,
         action_type,
         reversed_return_id,
+        is_undone,
         created_by
       `
       )
       .order('returned_at', { ascending: false })
-      .limit(20)
+      .range(from, to)
 
     if (fetchError) {
       console.error('[getRecentReturns] Fetch error:', fetchError)
-      return { data: null, error: fetchError.message }
+      return { data: null, error: fetchError.message, hasMore: false }
     }
 
     if (!returns || returns.length === 0) {
-      return { data: [], error: null }
+      return { data: [], error: null, hasMore: false }
     }
 
+    const hasMore = returns.length > limit
+    const pageReturns = hasMore ? returns.slice(0, limit) : returns
+
     // Get order info for display (external_order_id, tracking_number)
-    const orderIdsSet = new Set(returns.map((r) => r.order_id))
+    const orderIdsSet = new Set(pageReturns.map((r) => r.order_id))
     const orderIds = Array.from(orderIdsSet)
     const { data: orders, error: ordersError } = await supabase
       .from('sales_orders')
@@ -813,29 +831,42 @@ export async function getRecentReturns(): Promise<{
     }
 
     // Enrich returns with order info
-    const results: RecentReturn[] = returns.map((ret) => {
+    const results: RecentReturn[] = pageReturns.map((ret) => {
       const orderInfo = ordersMap.get(ret.order_id)
       return {
         ...ret,
         action_type: (ret.action_type || 'RETURN') as 'RETURN' | 'UNDO',
+        is_undone: ret.is_undone ?? false,
         external_order_id: orderInfo?.external_order_id || null,
         tracking_number: orderInfo?.tracking_number || null,
       }
     })
 
-    return { data: results, error: null }
+    return { data: results, error: null, hasMore }
   } catch (error) {
     console.error('[getRecentReturns] Unexpected error:', error)
     return {
       data: null,
       error: error instanceof Error ? error.message : 'Unknown error',
+      hasMore: false,
     }
   }
 }
 
 /**
- * Undo a return: create reversal record
- * Reverses stock/COGS for RETURN_RECEIVED type
+ * Undo a return: reverse all effects of the original RETURN record.
+ *
+ * For RETURN_RECEIVED:
+ *   1. Safety check: receipt layer qty_remaining must equal qty_received
+ *      (stock must not have been consumed by a later FIFO allocation).
+ *   2. Void the receipt layer (removes return stock from inventory).
+ *   3. Insert a counter-COGS entry (positive qty/amount) to negate the original
+ *      COGS reversal, restoring COGS to the pre-return state.
+ *
+ * In all cases:
+ *   4. Create UNDO record pointing to original via reversed_return_id.
+ *   5. Set is_undone=TRUE on the original RETURN record (removes it from
+ *      the dedup unique index so the same order+sku can be returned again).
  */
 export async function undoReturn(
   payload: UndoReturnPayload
@@ -843,16 +874,9 @@ export async function undoReturn(
   try {
     const supabase = await createClient()
 
-    // Get current user
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return { success: false, error: 'Not authenticated' }
-    }
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'Not authenticated' }
 
-    // Fetch original return
     const { data: originalReturn, error: fetchError } = await supabase
       .from('inventory_returns')
       .select('*')
@@ -861,62 +885,134 @@ export async function undoReturn(
       .single()
 
     if (fetchError || !originalReturn) {
-      console.error('[undoReturn] Fetch error:', fetchError)
       return { success: false, error: 'Return not found or not owned by user' }
     }
-
-    // Validate: must be RETURN action (not already UNDO)
     if (originalReturn.action_type === 'UNDO') {
       return { success: false, error: 'Cannot undo an undo action' }
     }
+    if (originalReturn.is_undone) {
+      return { success: false, error: 'This return has already been undone' }
+    }
 
-    // Validate: not already undone
-    const { data: existingUndo, error: undoCheckError } = await supabase
+    // Secondary guard: check no UNDO record exists (covers pre-migration records)
+    const { data: existingUndo } = await supabase
       .from('inventory_returns')
       .select('id')
       .eq('reversed_return_id', payload.return_id)
       .eq('action_type', 'UNDO')
       .maybeSingle()
-
-    if (undoCheckError) {
-      console.error('[undoReturn] Undo check error:', undoCheckError)
-      return { success: false, error: undoCheckError.message }
-    }
-
     if (existingUndo) {
       return { success: false, error: 'This return has already been undone' }
     }
 
-    // Create undo record
-    const undoRecord = {
-      order_id: originalReturn.order_id,
-      sku: originalReturn.sku,
-      qty: originalReturn.qty,
-      return_type: originalReturn.return_type,
-      note: `UNDO: ${originalReturn.note || '(no note)'}`,
-      created_by: user.id,
-      returned_at: new Date().toISOString(),
-      action_type: 'UNDO',
-      reversed_return_id: originalReturn.id,
+    // For RETURN_RECEIVED: safety check before committing to undo
+    let receiptLayer: { id: string; qty_received: number; qty_remaining: number; unit_cost: number } | null = null
+    if (originalReturn.return_type === 'RETURN_RECEIVED' && originalReturn.sku_internal) {
+      const { data: layer } = await supabase
+        .from('inventory_receipt_layers')
+        .select('id, qty_received, qty_remaining, unit_cost')
+        .eq('ref_type', 'RETURN')
+        .eq('ref_id', originalReturn.id)
+        .eq('is_voided', false)
+        .maybeSingle()
+
+      if (layer && layer.qty_remaining < layer.qty_received) {
+        const consumed = layer.qty_received - layer.qty_remaining
+        return {
+          success: false,
+          error: `ไม่สามารถ Undo ได้ สินค้า ${originalReturn.sku_internal} ที่รับคืน ${layer.qty_received} ชิ้น ถูกจ่ายออกไปแล้ว ${consumed} ชิ้น กรุณา adjust สต็อกก่อน`,
+        }
+      }
+      receiptLayer = layer
     }
 
-    const { error: insertError } = await supabase
+    const undoAt = new Date().toISOString()
+
+    // Step 1: Create UNDO record
+    const { data: undoRec, error: insertError } = await supabase
       .from('inventory_returns')
-      .insert([undoRecord])
+      .insert([{
+        order_id:           originalReturn.order_id,
+        sku:                originalReturn.sku,
+        marketplace_sku:    originalReturn.marketplace_sku,
+        sku_internal:       originalReturn.sku_internal,
+        qty:                originalReturn.qty,
+        return_type:        originalReturn.return_type,
+        note:               `UNDO: ${originalReturn.note || '(no note)'}`,
+        created_by:         user.id,
+        returned_at:        undoAt,
+        action_type:        'UNDO',
+        reversed_return_id: originalReturn.id,
+      }])
+      .select('id')
+      .single()
 
     if (insertError) {
-      console.error('[undoReturn] Insert error:', insertError)
+      console.error('[undoReturn] Insert undo record error:', insertError)
       return { success: false, error: insertError.message }
     }
 
-    // TODO: For RETURN_RECEIVED type:
-    // - Create inventory movement OUT (reverse the stock in)
-    // - Create COGS allocation with is_reversal=true (to negate the previous reversal)
-    // This requires integration with inventory costing engine
-    // For MVP, we just track the undo record
+    // Step 2: Mark original as undone (drops it from dedup index, allows re-return)
+    const { error: updateError } = await supabase
+      .from('inventory_returns')
+      .update({ is_undone: true })
+      .eq('id', originalReturn.id)
+
+    if (updateError) {
+      console.error('[undoReturn] Failed to mark original as undone:', updateError)
+      // Clean up undo record to keep state consistent
+      await supabase.from('inventory_returns').delete().eq('id', undoRec.id)
+      return { success: false, error: `ไม่สามารถ Undo ได้: ${updateError.message}` }
+    }
+
+    // Step 3: For RETURN_RECEIVED — void receipt layer + insert counter-COGS
+    if (originalReturn.return_type === 'RETURN_RECEIVED' && originalReturn.sku_internal && receiptLayer) {
+      // Void the receipt layer (removes the return stock from inventory)
+      const { error: voidError } = await supabase
+        .from('inventory_receipt_layers')
+        .update({ is_voided: true })
+        .eq('id', receiptLayer.id)
+
+      if (voidError) {
+        console.error('[undoReturn] Void receipt layer error:', voidError)
+        // Non-fatal: backfill can detect and fix a voided-flag mismatch
+      }
+
+      // Find the original COGS reversal tied to this receipt layer
+      const { data: cogsReversal } = await supabase
+        .from('inventory_cogs_allocations')
+        .select('id, order_id, sku_internal, unit_cost_used, method')
+        .eq('layer_id', receiptLayer.id)
+        .eq('is_reversal', true)
+        .maybeSingle()
+
+      if (cogsReversal) {
+        const counterAmount = originalReturn.qty * cogsReversal.unit_cost_used
+        const { error: cogsError } = await supabase
+          .from('inventory_cogs_allocations')
+          .insert({
+            order_id:        cogsReversal.order_id,
+            sku_internal:    cogsReversal.sku_internal,
+            shipped_at:      undoAt,
+            method:          cogsReversal.method,
+            qty:             originalReturn.qty,
+            unit_cost_used:  cogsReversal.unit_cost_used,
+            amount:          counterAmount,
+            layer_id:        null,
+            is_reversal:     false,
+            reversed_reason: `UNDO_RETURN:${undoRec.id}`,
+            reversed_at:     undoAt,
+            reversed_by:     user.id,
+            created_by:      user.id,
+          })
+        if (cogsError) {
+          console.error('[undoReturn] Counter-COGS insert error:', cogsError)
+          // Non-fatal: backfill can detect missing counter-COGS
+        }
+      }
+    }
 
     revalidatePath('/returns')
-
     return { success: true, error: null }
   } catch (error) {
     console.error('[undoReturn] Unexpected error:', error)
@@ -1104,7 +1200,7 @@ export async function backfillMissingReturnStock(): Promise<{
       .select('id, order_id, sku, marketplace_sku, sku_internal, qty, return_type, note, returned_at')
       .eq('created_by', user.id)
       .eq('action_type', 'RETURN')
-      .is('reversed_return_id', null)
+      .eq('is_undone', false)
       .eq('return_type', 'RETURN_RECEIVED')
 
     if (fetchErr || !allReturns) {

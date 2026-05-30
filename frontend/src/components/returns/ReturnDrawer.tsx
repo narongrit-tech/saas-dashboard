@@ -110,14 +110,29 @@ export function ReturnDrawer({ open, order, onClose, onSuccess }: ReturnDrawerPr
 
     setSubmitting(true)
 
+    // Expand items: distribute qty sequentially across merged rows for same-SKU line items
+    const expandedItems: Array<{ line_item_id: string; sku: string; qty: number; return_type: ReturnType }> = []
+    for (const item of itemsToReturn) {
+      const orderItem = order.line_items.find((i) => i.id === item.line_item_id)
+      const rows = orderItem?.merged_rows
+      if (!rows || rows.length <= 1) {
+        expandedItems.push({ line_item_id: item.line_item_id, sku: item.sku, qty: item.qty_to_return, return_type: item.return_type })
+      } else {
+        let remaining = item.qty_to_return
+        for (const row of rows) {
+          if (remaining <= 0) break
+          const rowAvailable = row.qty - row.qty_returned
+          if (rowAvailable <= 0) continue
+          const qtyForRow = Math.min(remaining, rowAvailable)
+          expandedItems.push({ line_item_id: row.id, sku: item.sku, qty: qtyForRow, return_type: item.return_type })
+          remaining -= qtyForRow
+        }
+      }
+    }
+
     const payload: ReturnSubmitPayload = {
       order_id: order.id,
-      items: itemsToReturn.map((item) => ({
-        line_item_id: item.line_item_id,
-        sku: item.sku,
-        qty: item.qty_to_return,
-        return_type: item.return_type,
-      })),
+      items: expandedItems,
       note: note.trim() || undefined,
     }
 

@@ -14,19 +14,31 @@ export const RETURN_TYPE_LABELS: Record<ReturnType, string> = {
 }
 
 /**
- * Order line item in search results
+ * Underlying row data for a merged line item (same SKU appearing multiple times in one order).
+ */
+export interface MergedRow {
+  id: string           // sales_orders.id of this specific row
+  qty: number          // quantity sold in this row
+  qty_returned: number // net returned qty for this row
+}
+
+/**
+ * Order line item in search results.
+ * When the same seller_sku appears in multiple sales_orders rows for the same order,
+ * they are merged into one line item and the underlying rows are stored in merged_rows.
  */
 export interface OrderLineItem {
-  id: string // sales_orders.id (for reference)
+  id: string // representative sales_orders.id (first row when merged)
   sku: string // sales_orders.sku
   seller_sku?: string | null // sales_orders.seller_sku
   sku_internal?: string | null // resolved canonical SKU from inventory_sku_mappings
   marketplace_sku?: string | null // raw marketplace variant ID
   product_name: string
-  quantity: number // quantity sold
-  qty_returned: number // quantity already returned
+  quantity: number // total quantity sold (sum across merged rows)
+  qty_returned: number // total quantity already returned (sum across merged rows)
   unit_price: number
   total_amount: number
+  merged_rows: MergedRow[] // always present; length > 1 when rows were merged
 }
 
 /**
@@ -79,6 +91,7 @@ export interface InventoryReturn {
   created_by: string
   action_type?: 'RETURN' | 'UNDO'
   reversed_return_id?: string | null
+  is_undone?: boolean
 }
 
 /**
@@ -116,6 +129,7 @@ export interface RecentReturn {
   returned_at: string
   action_type: 'RETURN' | 'UNDO'
   reversed_return_id: string | null
+  is_undone: boolean
   created_by: string
   // Additional fields for display
   external_order_id?: string | null

@@ -95,6 +95,9 @@ export default function ReturnsPage() {
   const handleDrawerClose = () => {
     setDrawerOpen(false)
     setSelectedOrder(null)
+    setQuery('')
+    setSearchResults([])
+    setError(null)
     // Refocus handled by useEffect
   }
 

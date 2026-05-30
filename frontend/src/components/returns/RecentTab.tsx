@@ -25,7 +25,10 @@ interface RecentTabProps {
 
 export function RecentTab({ onRefresh }: RecentTabProps) {
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [recentReturns, setRecentReturns] = useState<RecentReturn[]>([])
+  const [page, setPage] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedReturn, setSelectedReturn] = useState<RecentReturn | null>(null)
   const [undoModalOpen, setUndoModalOpen] = useState(false)
@@ -41,8 +44,9 @@ export function RecentTab({ onRefresh }: RecentTabProps) {
   const fetchRecent = async () => {
     setLoading(true)
     setError(null)
+    setPage(0)
 
-    const { data, error: fetchError } = await getRecentReturns()
+    const { data, error: fetchError, hasMore: more } = await getRecentReturns(0)
 
     setLoading(false)
 
@@ -53,6 +57,18 @@ export function RecentTab({ onRefresh }: RecentTabProps) {
     }
 
     setRecentReturns(data || [])
+    setHasMore(more)
+  }
+
+  const loadMore = async () => {
+    const nextPage = page + 1
+    setLoadingMore(true)
+    const { data, error: fetchError, hasMore: more } = await getRecentReturns(nextPage)
+    setLoadingMore(false)
+    if (fetchError || !data) return
+    setRecentReturns((prev) => [...prev, ...data])
+    setPage(nextPage)
+    setHasMore(more)
   }
 
   useEffect(() => {
@@ -90,15 +106,8 @@ export function RecentTab({ onRefresh }: RecentTabProps) {
     }
   }
 
-  // Check if a return can be undone
-  const canUndo = (ret: RecentReturn) => {
-    return ret.action_type === 'RETURN' && !ret.reversed_return_id
-  }
-
-  // Check if a return has been undone
-  const isUndone = (ret: RecentReturn) => {
-    return recentReturns.some((r) => r.reversed_return_id === ret.id)
-  }
+  const canUndo = (ret: RecentReturn) => ret.action_type === 'RETURN' && !ret.is_undone
+  const isUndone = (ret: RecentReturn) => ret.is_undone === true
 
   return (
     <div className="space-y-4">
@@ -109,10 +118,10 @@ export function RecentTab({ onRefresh }: RecentTabProps) {
             <div>
               <CardTitle className="flex items-center gap-2">
                 <History className="h-5 w-5" />
-                คืนล่าสุด (20 รายการ)
+                ประวัติการรับคืน
               </CardTitle>
               <CardDescription>
-                รายการรับคืนล่าสุด สามารถ Undo ได้
+                {recentReturns.length > 0 ? `แสดง ${recentReturns.length} รายการ` : 'รายการรับคืนทั้งหมด'} — สามารถ Undo ได้
               </CardDescription>
             </div>
             <Button onClick={fetchRecent} disabled={loading} variant="outline" size="sm">
@@ -226,6 +235,25 @@ export function RecentTab({ onRefresh }: RecentTabProps) {
                   ))}
                 </TableBody>
               </Table>
+            </div>
+          )}
+          {hasMore && !loading && (
+            <div className="mt-3 flex justify-center">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={loadMore}
+                disabled={loadingMore}
+              >
+                {loadingMore ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    กำลังโหลด...
+                  </>
+                ) : (
+                  'โหลดเพิ่มเติม'
+                )}
+              </Button>
             </div>
           )}
         </CardContent>
