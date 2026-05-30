@@ -73,15 +73,36 @@ export function ReturnDrawer({ open, order, onClose, onSuccess }: ReturnDrawerPr
 
   const handleReturnTypeChange = (lineItemId: string, value: ReturnType) => {
     setLineItems((prev) =>
-      prev.map((item) =>
-        item.line_item_id === lineItemId ? { ...item, return_type: value } : item
-      )
+      prev.map((item) => {
+        if (item.line_item_id !== lineItemId) return item
+        // For non-physical return types: if qty is still 0, auto-fill with available qty
+        // (REFUND_ONLY / CANCEL_BEFORE_SHIP = money refunded, no physical item — qty = units refunded)
+        const isNonPhysical = value === 'REFUND_ONLY' || value === 'CANCEL_BEFORE_SHIP'
+        if (isNonPhysical && item.qty_to_return === 0) {
+          const orderItem = order.line_items.find((i) => i.id === lineItemId)
+          const available = orderItem ? orderItem.quantity - orderItem.qty_returned : 0
+          return { ...item, return_type: value, qty_to_return: available }
+        }
+        return { ...item, return_type: value }
+      })
     )
   }
 
   const handleSubmit = async () => {
     // Validate: at least one item with qty > 0
-    const itemsToReturn = lineItems.filter((item) => item.qty_to_return > 0)
+    // For REFUND_ONLY / CANCEL_BEFORE_SHIP with qty=0: auto-fill with available qty
+    // (user typed 0 meaning "no physical item" — still need a qty for financial tracking)
+    const resolvedItems = lineItems.map((item) => {
+      const isNonPhysical = item.return_type === 'REFUND_ONLY' || item.return_type === 'CANCEL_BEFORE_SHIP'
+      if (isNonPhysical && item.qty_to_return === 0) {
+        const orderItem = order.line_items.find((i) => i.id === item.line_item_id)
+        const available = orderItem ? orderItem.quantity - orderItem.qty_returned : 0
+        return { ...item, qty_to_return: available }
+      }
+      return item
+    })
+
+    const itemsToReturn = resolvedItems.filter((item) => item.qty_to_return > 0)
 
     if (itemsToReturn.length === 0) {
       toast({
