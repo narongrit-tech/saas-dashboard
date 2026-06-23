@@ -49,9 +49,19 @@ export async function GET() {
       }
     }
 
-    // 3. Burn rate: avg daily sales (shipped orders) last 7 days per SKU
+    // 3. Burn rate: avg daily sales last 7 days, mapped via inventory_sku_mappings
     const sevenDaysAgo = new Date()
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
+
+    // Load sku mappings: marketplace_sku → sku_internal
+    const { data: mappingRows } = await supabase
+      .from('inventory_sku_mappings')
+      .select('marketplace_sku, sku_internal')
+    const skuMap: Record<string, string> = {}
+    for (const m of mappingRows ?? []) {
+      if (m.marketplace_sku && m.sku_internal) skuMap[m.marketplace_sku] = m.sku_internal
+    }
+
     const { data: salesRows, error: salesErr } = await supabase
       .from('sales_orders')
       .select('sku, quantity, order_date')
@@ -62,7 +72,9 @@ export async function GET() {
     const skuQty: Record<string, number> = {}
     for (const row of salesRows ?? []) {
       if (!row.sku) continue
-      skuQty[row.sku] = (skuQty[row.sku] ?? 0) + (row.quantity ?? 1)
+      // Resolve marketplace SKU → internal SKU (fallback to raw sku if already internal)
+      const internalSku = skuMap[row.sku] ?? row.sku
+      skuQty[internalSku] = (skuQty[internalSku] ?? 0) + (row.quantity ?? 1)
     }
 
     // 4. Pending orders
