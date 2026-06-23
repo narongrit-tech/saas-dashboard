@@ -90,14 +90,19 @@ function parseDate(value: unknown): Date | null {
     return fromZonedTime(toZonedTime(date, BANGKOK_TZ), BANGKOK_TZ)
   }
   if (typeof value === 'string') {
-    let date = new Date(value)
-    if (!isNaN(date.getTime())) return fromZonedTime(toZonedTime(date, BANGKOK_TZ), BANGKOK_TZ)
-
-    // TikTok export uses DD/MM/YYYY HH:MM:SS — not parseable by new Date() directly
+    // TikTok export uses DD/MM/YYYY HH:MM:SS (Thai date format) — parse this FIRST.
+    // Never use new Date("07/04/2026") as a pre-check: JS interprets it as MM/DD (July 4)
+    // instead of DD/MM (April 7), silently writing future-dated records to the DB.
     const m = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{2}:\d{2}:\d{2}))?$/)
     if (m) {
       const iso = `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}${m[4] ? 'T' + m[4] : ''}`
-      date = new Date(iso)
+      const date = new Date(iso)
+      if (!isNaN(date.getTime())) return fromZonedTime(toZonedTime(date, BANGKOK_TZ), BANGKOK_TZ)
+    }
+
+    // Fallback: ISO-8601 strings only (YYYY-MM-DD* format — unambiguous)
+    if (/^\d{4}-\d{2}-\d{2}/.test(value)) {
+      const date = new Date(value)
       if (!isNaN(date.getTime())) return fromZonedTime(toZonedTime(date, BANGKOK_TZ), BANGKOK_TZ)
     }
   }
