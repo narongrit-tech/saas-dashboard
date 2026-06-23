@@ -177,8 +177,11 @@ function SnapshotRow({
 
   const runout = estimateRunout(snap, formula)
 
-  const activeCallRounds = snap.call_rounds.filter(r => r.date && parseInt(r.qty) > 0)
-  const activeProdRounds = snap.prod_rounds.filter(r => r.date && parseInt(r.qty) > 0)
+  const activeCallRounds    = snap.call_rounds.filter(r => r.date && parseInt(r.qty) > 0)
+  const activeProdRounds    = snap.prod_rounds.filter(r => r.date && parseInt(r.qty) > 0)
+  const activeTubeSent      = (snap.tube_sent_rounds  ?? []).filter(r => r.date && parseInt(r.qty) > 0)
+  const activeTubeNew       = (snap.tube_new_rounds   ?? []).filter(r => r.date && parseInt(r.qty) > 0)
+  const activeOilRounds     = (snap.oil_rounds        ?? []).filter(r => r.date && parseFloat(r.qty) > 0)
 
   async function handleDelete(e: React.MouseEvent) {
     e.stopPropagation()
@@ -203,6 +206,8 @@ function SnapshotRow({
         <span className="text-muted-foreground">Burn {Number(snap.burn_rate).toFixed(1)}/วัน</span>
         <span className="text-muted-foreground">
           เรียก {activeCallRounds.length} รอบ · ผลิต {activeProdRounds.length} รอบ
+          {activeTubeSent.length + activeTubeNew.length > 0 && ` · หลอด ${activeTubeSent.length + activeTubeNew.length} รอบ`}
+          {activeOilRounds.length > 0 && ` · น้ำมัน ${activeOilRounds.length} รอบ`}
         </span>
         {runout && <span className="text-red-500 ml-auto shrink-0">หมด {runout}</span>}
         <button
@@ -218,12 +223,15 @@ function SnapshotRow({
       {expanded && (
         <div className="px-3 pb-3 space-y-2 border-t">
           {/* Stock at save time */}
-          <div className="pt-2 flex gap-4 text-muted-foreground">
-            <span>🏠 คลังเรา <span className="font-mono text-foreground">{Number(snap.fg_warehouse_qty).toLocaleString()}</span></span>
-            <span>🏭 โรงงาน <span className="font-mono text-foreground">{Number(snap.fg_factory_qty).toLocaleString()}</span></span>
+          <div className="pt-2 flex flex-wrap gap-4 text-muted-foreground">
+            <span>FG 🏠 <span className="font-mono text-foreground">{Number(snap.fg_warehouse_qty).toLocaleString()}</span></span>
+            <span>FG 🏭 <span className="font-mono text-foreground">{Number(snap.fg_factory_qty).toLocaleString()}</span></span>
+            {snap.tubes_warehouse_qty != null && <span>หลอด 🏠 <span className="font-mono text-foreground">{Number(snap.tubes_warehouse_qty).toLocaleString()}</span></span>}
+            {snap.tubes_factory_qty  != null && <span>หลอด 🏭 <span className="font-mono text-foreground">{Number(snap.tubes_factory_qty).toLocaleString()}</span></span>}
+            {snap.oil_qty_kg         != null && <span>🫙 น้ำมัน <span className="font-mono text-foreground">{Number(snap.oil_qty_kg).toFixed(2)} kg</span></span>}
           </div>
 
-          {/* Call rounds */}
+          {/* FG Call rounds */}
           {activeCallRounds.length > 0 && (
             <div>
               <p className="text-muted-foreground mb-1">เรียก FG จากโรงงาน:</p>
@@ -257,6 +265,54 @@ function SnapshotRow({
                     </div>
                   )
                 })}
+              </div>
+            </div>
+          )}
+
+          {/* Tube sent rounds */}
+          {activeTubeSent.length > 0 && (
+            <div>
+              <p className="text-muted-foreground mb-1">ส่งหลอดไปโรงงาน:</p>
+              <div className="space-y-0.5">
+                {activeTubeSent.map((r, i) => (
+                  <div key={i} className="flex gap-3">
+                    <span className="text-muted-foreground">{i + 1}.</span>
+                    <span>{r.date}</span>
+                    <span className="font-mono">{parseInt(r.qty).toLocaleString()} หลอด</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Tube new order rounds */}
+          {activeTubeNew.length > 0 && (
+            <div>
+              <p className="text-muted-foreground mb-1">สั่งหลอดใหม่เข้าโรงงาน:</p>
+              <div className="space-y-0.5">
+                {activeTubeNew.map((r, i) => (
+                  <div key={i} className="flex gap-3">
+                    <span className="text-muted-foreground">{i + 1}.</span>
+                    <span>{r.date}</span>
+                    <span className="font-mono">{parseInt(r.qty).toLocaleString()} หลอด</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Oil order rounds */}
+          {activeOilRounds.length > 0 && (
+            <div>
+              <p className="text-muted-foreground mb-1">🫙 สั่งน้ำมันใหม่:</p>
+              <div className="space-y-0.5">
+                {activeOilRounds.map((r, i) => (
+                  <div key={i} className="flex gap-3">
+                    <span className="text-muted-foreground">{i + 1}.</span>
+                    <span>{r.date}</span>
+                    <span className="font-mono">{parseFloat(r.qty).toFixed(2)} kg</span>
+                  </div>
+                ))}
               </div>
             </div>
           )}
