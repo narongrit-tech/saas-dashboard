@@ -6,9 +6,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Loader2, AlertTriangle, CheckCircle2, XCircle, RefreshCw, Plus, Settings2, X, Check } from 'lucide-react'
+import { Loader2, AlertTriangle, CheckCircle2, XCircle, RefreshCw, Plus, Settings2, X, Check, TrendingDown } from 'lucide-react'
 import Link from 'next/link'
-import type { DashboardData, FormulaStatus, PlanningAlert, AlertLevel } from '@/types/production-planning'
+import type { DashboardData, FormulaStatus, PlanningAlert, AlertLevel, ProdProductionOrder } from '@/types/production-planning'
 import { ORDER_TYPE_LABELS, STOCK_TYPE_LABELS } from '@/types/production-planning'
 
 export default function ProductionPlanningPage() {
@@ -79,6 +79,8 @@ export default function ProductionPlanningPage() {
               <FormulaCard key={fs.formula.id} status={fs} onUpdate={load} />
             ))}
           </div>
+
+          <StockProjectionSection formulas={data.formulas} pendingOrders={data.pending_orders} />
 
           {data.pending_orders.length > 0 && (
             <Card>
@@ -399,4 +401,275 @@ function levelClass(level: AlertLevel | 'none') {
   if (level === 'warning')  return 'border-yellow-300 text-yellow-700 dark:text-yellow-400'
   if (level === 'ok')       return 'border-green-300 text-green-700 dark:text-green-400'
   return ''
+}
+
+// ── Stock Projection (FG Runway) ─────────────────────────────────────────────
+
+function addDays(date: Date, days: number): Date {
+  const d = new Date(date)
+  d.setDate(d.getDate() + Math.round(days))
+  return d
+}
+
+function thaiDate(date: Date): string {
+  return date.toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' })
+}
+
+interface RunwayEvent {
+  dayOffset: number
+  date: Date
+  qty: number
+  label: string
+  stockBefore: number
+  stockAfter: number
+}
+
+interface FormulaProjection {
+  formulaId: string
+  formulaName: string
+  fgWarehouse: number
+  fgFactory: number
+  totalFG: number
+  burnPerDay: number
+  naturalDays: number
+  naturalRunoutDate: Date
+  events: RunwayEvent[]
+  extendedDays: number
+  extendedRunoutDate: Date
+  gainDays: number
+}
+
+function buildProjection(
+  fs: FormulaStatus,
+  pendingOrders: (ProdProductionOrder & { formula_name: string | null })[],
+  today: Date,
+): FormulaProjection | null {
+  const burn = fs.burn_rate_per_day
+  if (burn <= 0) return null
+
+  const fgWarehouse = fs.layers['fg_warehouse']?.quantity ?? 0
+  const fgFactory   = fs.layers['fg_factory']?.quantity   ?? 0
+  const totalFG     = fgWarehouse + fgFactory
+
+  const naturalDays = totalFG / burn
+  const naturalRunoutDate = addDays(today, naturalDays)
+
+  // All FG-adding pending orders for this formula with an expected date
+  const relevant = pendingOrders.filter(o =>
+    o.formula_id === fs.formula.id &&
+    o.expected_at &&
+    (o.order_type === 'call_fg' || o.order_type === 'production'),
+  )
+
+  // Simulate day-by-day
+  let stock = totalFG
+  const events: RunwayEvent[] = []
+  let extendedDays = Math.round(naturalDays)
+  let extendedRunoutDate = naturalRunoutDate
+
+  for (let i = 0; i <= 1000; i++) {
+    const d = addDays(today, i)
+    const ds = d.toISOString().slice(0, 10)
+
+    const dayOrders = relevant.filter(o => o.expected_at!.slice(0, 10) === ds)
+    for (const o of dayOrders) {
+      const qty = Number(o.ordered_qty)
+      events.push({
+        dayOffset: i,
+        date: d,
+        qty,
+        label: ORDER_TYPE_LABELS[o.order_type],
+        stockBefore: Math.max(0, stock),
+        stockAfter: Math.max(0, stock) + qty,
+      })
+      stock += qty
+    }
+
+    stock -= burn
+    if (stock <= 0) {
+      extendedDays = i + 1
+      extendedRunoutDate = addDays(today, i + 1)
+      break
+    }
+  }
+
+  return {
+    formulaId: fs.formula.id,
+    formulaName: fs.formula.formula_name,
+    fgWarehouse,
+    fgFactory,
+    totalFG,
+    burnPerDay: burn,
+    naturalDays: Math.round(naturalDays),
+    naturalRunoutDate,
+    events,
+    extendedDays,
+    extendedRunoutDate,
+    gainDays: events.length > 0 ? extendedDays - Math.round(naturalDays) : 0,
+  }
+}
+
+function StockProjectionSection({
+  formulas,
+  pendingOrders,
+}: {
+  formulas: FormulaStatus[]
+  pendingOrders: (ProdProductionOrder & { formula_name: string | null })[]
+}) {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  const projections = formulas
+    .map(fs => buildProjection(fs, pendingOrders, today))
+    .filter((p): p is FormulaProjection => p !== null)
+
+  if (projections.length === 0) return null
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <TrendingDown className="h-4 w-4 text-muted-foreground" />
+          ประมาณการ FG Runway
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {projections.map(p => (
+          <FormulaRunway key={p.formulaId} p={p} today={today} />
+        ))}
+      </CardContent>
+    </Card>
+  )
+}
+
+function FormulaRunway({ p, today }: { p: FormulaProjection; today: Date }) {
+  const hasOrders = p.events.length > 0
+  const urgency = p.naturalDays <= 7 ? 'critical' : p.naturalDays <= 21 ? 'warning' : 'ok'
+
+  const urgencyColor = {
+    critical: 'text-red-600 dark:text-red-400',
+    warning:  'text-yellow-600 dark:text-yellow-500',
+    ok:       'text-green-600 dark:text-green-500',
+  }[urgency]
+
+  // Bar: max 90 days visual range
+  const maxDays   = Math.max(90, p.extendedDays + 10)
+  const barNatural  = Math.min(100, (p.naturalDays / maxDays) * 100)
+  const barExtended = hasOrders ? Math.min(100, (p.extendedDays / maxDays) * 100) : null
+
+  return (
+    <div className="space-y-3">
+      {/* Header row */}
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+        <span className="font-semibold text-sm">{p.formulaName}</span>
+        <span className="text-xs text-muted-foreground">
+          FG รวม {p.totalFG.toLocaleString()} หลอด
+          <span className="ml-1 opacity-70">
+            ({p.fgWarehouse.toLocaleString()} คลัง + {p.fgFactory.toLocaleString()} โรงงาน)
+          </span>
+        </span>
+        <span className="text-xs text-muted-foreground">Burn {p.burnPerDay.toFixed(1)}/วัน</span>
+      </div>
+
+      {/* Visual bar */}
+      <div className="relative h-5 bg-muted rounded-full overflow-hidden">
+        {/* Natural runway bar */}
+        <div
+          className={`absolute left-0 top-0 h-full rounded-full transition-all ${
+            urgency === 'critical' ? 'bg-red-400' :
+            urgency === 'warning'  ? 'bg-yellow-400' : 'bg-green-400'
+          }`}
+          style={{ width: `${barNatural}%` }}
+        />
+        {/* Extended runway overlay */}
+        {barExtended !== null && barExtended > barNatural && (
+          <div
+            className="absolute top-0 h-full rounded-full bg-blue-300 dark:bg-blue-600 opacity-60"
+            style={{ left: `${barNatural}%`, width: `${barExtended - barNatural}%` }}
+          />
+        )}
+        {/* Event markers */}
+        {p.events.map((ev, i) => {
+          const pct = Math.min(99, (ev.dayOffset / maxDays) * 100)
+          return (
+            <div
+              key={i}
+              className="absolute top-0 h-full w-0.5 bg-blue-600 dark:bg-blue-300"
+              style={{ left: `${pct}%` }}
+            />
+          )
+        })}
+      </div>
+
+      {/* Key milestone row */}
+      <div className="grid grid-cols-2 gap-3 text-sm">
+        {/* Without orders */}
+        <div className="rounded-lg border p-3 space-y-1">
+          <p className="text-xs text-muted-foreground font-medium">ถ้าไม่มีรับเพิ่ม</p>
+          <p className={`font-semibold ${urgencyColor}`}>
+            หมด {thaiDate(p.naturalRunoutDate)}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            อีก {p.naturalDays} วัน {p.naturalDays <= 0 ? '⚠️ หมดแล้ว' : ''}
+          </p>
+        </div>
+
+        {/* With orders */}
+        <div className={`rounded-lg border p-3 space-y-1 ${hasOrders ? 'border-blue-200 bg-blue-50 dark:bg-blue-950/20' : 'opacity-50'}`}>
+          <p className="text-xs text-muted-foreground font-medium">
+            {hasOrders ? `หลังรับของแล้ว (${p.events.length} รายการ)` : 'ยังไม่มีของรอรับ'}
+          </p>
+          <p className="font-semibold text-blue-700 dark:text-blue-300">
+            {hasOrders ? `หมด ${thaiDate(p.extendedRunoutDate)}` : '—'}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {hasOrders ? (
+              <>อีก {p.extendedDays} วัน <span className="text-blue-600 dark:text-blue-400">(+{p.gainDays} วัน)</span></>
+            ) : 'สั่งของเพื่อต่ออายุ'}
+          </p>
+        </div>
+      </div>
+
+      {/* Event timeline */}
+      {p.events.length > 0 && (
+        <div className="space-y-1.5 pl-1">
+          {/* "Now" marker */}
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="h-2 w-2 rounded-full bg-gray-400 shrink-0" />
+            <span>วันนี้ ({thaiDate(today)}) — FG {p.totalFG.toLocaleString()} หลอด</span>
+          </div>
+
+          {p.events.map((ev, i) => (
+            <div key={i} className="flex items-start gap-2 text-xs">
+              <div className="flex flex-col items-center shrink-0">
+                <span className="h-2 w-2 rounded-full bg-blue-500 shrink-0" />
+              </div>
+              <div className="flex-1">
+                <span className="font-medium text-blue-700 dark:text-blue-300">
+                  {thaiDate(ev.date)} (+{ev.dayOffset} วัน)
+                </span>
+                <span className="text-muted-foreground ml-2">
+                  {ev.label}: รับ {ev.qty.toLocaleString()} หลอด
+                </span>
+                <span className="text-muted-foreground ml-1">
+                  → stock {Math.round(ev.stockBefore).toLocaleString()} → {Math.round(ev.stockAfter).toLocaleString()} หลอด
+                </span>
+              </div>
+            </div>
+          ))}
+
+          {/* Final runout marker */}
+          <div className="flex items-center gap-2 text-xs">
+            <span className={`h-2 w-2 rounded-full shrink-0 ${
+              p.extendedDays <= 14 ? 'bg-red-500' :
+              p.extendedDays <= 30 ? 'bg-yellow-500' : 'bg-green-500'
+            }`} />
+            <span className="font-medium">
+              {thaiDate(p.extendedRunoutDate)} (+{p.extendedDays} วัน) — FG หมด
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
