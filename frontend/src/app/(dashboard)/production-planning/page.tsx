@@ -4,7 +4,9 @@ import { useEffect, useState, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Loader2, AlertTriangle, CheckCircle2, XCircle, Package, Factory, Droplets, RefreshCw, Plus } from 'lucide-react'
+import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Loader2, AlertTriangle, CheckCircle2, XCircle, RefreshCw, Plus, Settings2, X, Check } from 'lucide-react'
 import Link from 'next/link'
 import type { DashboardData, FormulaStatus, PlanningAlert, AlertLevel } from '@/types/production-planning'
 import { ORDER_TYPE_LABELS, STOCK_TYPE_LABELS } from '@/types/production-planning'
@@ -37,9 +39,7 @@ export default function ProductionPlanningPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Production Planning</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            วางแผนการผลิตและ stock ทุก layer
-          </p>
+          <p className="text-sm text-muted-foreground mt-1">วางแผนการผลิตและ stock ทุก layer</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={load} disabled={loading}>
@@ -72,17 +72,14 @@ export default function ProductionPlanningPage() {
 
       {data && (
         <>
-          {/* Alert summary */}
           <AlertSummary formulas={data.formulas} />
 
-          {/* Per-formula cards */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {data.formulas.map(fs => (
-              <FormulaCard key={fs.formula.id} status={fs} />
+              <FormulaCard key={fs.formula.id} status={fs} onUpdate={load} />
             ))}
           </div>
 
-          {/* Pending orders */}
           {data.pending_orders.length > 0 && (
             <Card>
               <CardHeader className="pb-3">
@@ -173,23 +170,59 @@ function AlertBadge({ alert }: { alert: PlanningAlert }) {
         </span>
       </div>
       <Link href="/production-planning/orders">
-        <Button size="sm" variant={isCritical ? 'destructive' : 'outline'} className="shrink-0">
-          สั่ง
-        </Button>
+        <Button size="sm" variant={isCritical ? 'destructive' : 'outline'} className="shrink-0">สั่ง</Button>
       </Link>
     </div>
   )
 }
 
-function FormulaCard({ status }: { status: FormulaStatus }) {
-  const { formula, layers, burn_rate_per_day, days_of_supply: dos } = status
+// ── Formula Card with inline settings ────────────────────────────────────────
 
-  const stockItems: Array<{ key: string; label: string; qty: number | undefined; unit: string; dos: number | null }> = [
-    { key: 'fg_warehouse', label: 'FG คลังเรา', qty: layers['fg_warehouse']?.quantity, unit: 'หลอด', dos: dos.fg_warehouse },
-    { key: 'fg_factory', label: 'FG คลังโรงงาน', qty: layers['fg_factory']?.quantity, unit: 'หลอด', dos: dos.fg_factory },
-    { key: 'tubes_factory', label: 'หลอดเปล่า (โรงงาน)', qty: layers['tubes_factory']?.quantity, unit: 'หลอด', dos: dos.tubes_factory },
+function FormulaCard({ status, onUpdate }: { status: FormulaStatus; onUpdate: () => void }) {
+  const { formula, layers, burn_rate_per_day, days_of_supply: dos } = status
+  const [showSettings, setShowSettings] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  // Local editable state mirrors formula config
+  const [window, setWindow] = useState(String(formula.burn_rate_window_days ?? 7))
+  const [overrideEnabled, setOverrideEnabled] = useState(formula.burn_rate_override !== null)
+  const [overrideVal, setOverrideVal] = useState(
+    formula.burn_rate_override !== null ? String(formula.burn_rate_override) : ''
+  )
+
+  const isOverride = formula.burn_rate_override !== null
+
+  async function saveSettings() {
+    setSaving(true)
+    try {
+      const body: Record<string, unknown> = {
+        burn_rate_window_days: Number(window),
+        burn_rate_override: overrideEnabled && overrideVal !== '' ? Number(overrideVal) : null,
+      }
+      const res = await fetch(`/api/production-planning/config/${formula.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.error)
+      setShowSettings(false)
+      onUpdate()
+    } catch {
+      // keep panel open on error
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const stockItems = [
+    { key: 'fg_warehouse',    label: 'FG คลังเรา',          qty: layers['fg_warehouse']?.quantity,    unit: 'หลอด', dos: dos.fg_warehouse },
+    { key: 'fg_factory',      label: 'FG คลังโรงงาน',       qty: layers['fg_factory']?.quantity,      unit: 'หลอด', dos: dos.fg_factory },
+    { key: 'tubes_factory',   label: 'หลอดเปล่า (โรงงาน)',  qty: layers['tubes_factory']?.quantity,   unit: 'หลอด', dos: dos.tubes_factory },
     { key: 'tubes_warehouse', label: 'หลอดเปล่า (คลังเรา)', qty: layers['tubes_warehouse']?.quantity, unit: 'หลอด', dos: dos.tubes_warehouse },
-    ...(formula.uses_oil ? [{ key: 'oil_kg', label: 'Essential Oil', qty: layers['oil_kg']?.quantity, unit: 'kg', dos: dos.oil_kg }] : []),
+    ...(formula.uses_oil
+      ? [{ key: 'oil_kg', label: 'Essential Oil', qty: layers['oil_kg']?.quantity, unit: 'kg', dos: dos.oil_kg }]
+      : []),
   ]
 
   return (
@@ -197,11 +230,91 @@ function FormulaCard({ status }: { status: FormulaStatus }) {
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <CardTitle className="text-base">{formula.formula_name}</CardTitle>
-          <div className="text-xs text-muted-foreground">
-            Burn rate: <span className="font-mono font-medium">{burn_rate_per_day > 0 ? `${burn_rate_per_day.toFixed(1)} หลอด/วัน` : '—'}</span>
+          <div className="flex items-center gap-2">
+            <div className="text-xs text-muted-foreground">
+              Burn rate:{' '}
+              <span className={`font-mono font-medium ${isOverride ? 'text-orange-600 dark:text-orange-400' : ''}`}>
+                {burn_rate_per_day > 0 ? `${burn_rate_per_day.toFixed(1)} หลอด/วัน` : '—'}
+              </span>
+              {isOverride && <span className="ml-1 text-orange-500">(manual)</span>}
+              {!isOverride && (
+                <span className="ml-1 opacity-60">({formula.burn_rate_window_days ?? 7}d avg)</span>
+              )}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 p-0"
+              onClick={() => setShowSettings(v => !v)}
+            >
+              <Settings2 className="h-3.5 w-3.5" />
+            </Button>
           </div>
         </div>
+
+        {/* Inline settings panel */}
+        {showSettings && (
+          <div className="mt-3 p-3 rounded-lg bg-muted/50 border space-y-3 text-sm">
+            {/* Window selector */}
+            <div className="flex items-center gap-3">
+              <span className="text-muted-foreground w-28 shrink-0">คำนวณจาก</span>
+              <Select value={window} onValueChange={setWindow} disabled={overrideEnabled}>
+                <SelectTrigger className="h-7 w-28 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="2">2 วันล่าสุด</SelectItem>
+                  <SelectItem value="7">7 วันล่าสุด</SelectItem>
+                  <SelectItem value="14">14 วันล่าสุด</SelectItem>
+                  <SelectItem value="30">30 วันล่าสุด</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Manual override toggle + input */}
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-2 cursor-pointer select-none text-muted-foreground w-28 shrink-0">
+                <input
+                  type="checkbox"
+                  checked={overrideEnabled}
+                  onChange={e => {
+                    setOverrideEnabled(e.target.checked)
+                    if (!e.target.checked) setOverrideVal('')
+                  }}
+                  className="rounded"
+                />
+                Manual rate
+              </label>
+              {overrideEnabled && (
+                <div className="flex items-center gap-1">
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value={overrideVal}
+                    onChange={e => setOverrideVal(e.target.value)}
+                    placeholder="หลอด/วัน"
+                    className="h-7 w-24 text-xs font-mono"
+                  />
+                  <span className="text-xs text-muted-foreground">หลอด/วัน</span>
+                </div>
+              )}
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex gap-2 justify-end">
+              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setShowSettings(false)}>
+                <X className="h-3 w-3 mr-1" />ยกเลิก
+              </Button>
+              <Button size="sm" className="h-7 text-xs" onClick={saveSettings} disabled={saving}>
+                {saving ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Check className="h-3 w-3 mr-1" />}
+                บันทึก
+              </Button>
+            </div>
+          </div>
+        )}
       </CardHeader>
+
       <CardContent className="space-y-2">
         {stockItems.map(({ key, ...item }) => (
           <StockRow key={key} {...item} formula={formula} />
@@ -251,23 +364,19 @@ function StockRow({
 
 function DosIndicator({ level }: { level: AlertLevel | 'none' }) {
   if (level === 'critical') return <span className="h-2 w-2 rounded-full bg-red-500 shrink-0" />
-  if (level === 'warning') return <span className="h-2 w-2 rounded-full bg-yellow-500 shrink-0" />
-  if (level === 'ok') return <span className="h-2 w-2 rounded-full bg-green-500 shrink-0" />
+  if (level === 'warning')  return <span className="h-2 w-2 rounded-full bg-yellow-500 shrink-0" />
+  if (level === 'ok')       return <span className="h-2 w-2 rounded-full bg-green-500 shrink-0" />
   return <span className="h-2 w-2 rounded-full bg-gray-300 shrink-0" />
 }
 
-function getDosLevel(
-  dos: number | null,
-  label: string,
-  formula: FormulaStatus['formula'],
-): AlertLevel | 'none' {
+function getDosLevel(dos: number | null, label: string, formula: FormulaStatus['formula']): AlertLevel | 'none' {
   if (dos === null) return 'none'
   if (label.includes('FG คลังเรา')) {
     if (dos <= 3) return 'critical'
     if (dos <= formula.alert_fg_days) return 'warning'
     return 'ok'
   }
-  if (label.includes('FG คลัง') || label.includes('FG')) {
+  if (label.includes('FG')) {
     if (dos <= 20) return 'critical'
     if (dos <= formula.alert_production_days) return 'warning'
     return 'ok'
@@ -287,7 +396,7 @@ function getDosLevel(
 
 function levelClass(level: AlertLevel | 'none') {
   if (level === 'critical') return 'border-red-300 text-red-700 dark:text-red-400'
-  if (level === 'warning') return 'border-yellow-300 text-yellow-700 dark:text-yellow-400'
-  if (level === 'ok') return 'border-green-300 text-green-700 dark:text-green-400'
+  if (level === 'warning')  return 'border-yellow-300 text-yellow-700 dark:text-yellow-400'
+  if (level === 'ok')       return 'border-green-300 text-green-700 dark:text-green-400'
   return ''
 }

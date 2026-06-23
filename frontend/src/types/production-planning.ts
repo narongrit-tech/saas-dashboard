@@ -27,6 +27,8 @@ export interface ProdFormulaConfig {
   alert_tubes_days: number
   alert_oil_days: number
   active: boolean
+  burn_rate_window_days: number
+  burn_rate_override: number | null
   created_at: string
   updated_at: string
 }

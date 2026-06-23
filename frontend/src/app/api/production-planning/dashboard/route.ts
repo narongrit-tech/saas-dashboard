@@ -49,11 +49,9 @@ export async function GET() {
       }
     }
 
-    // 3. Burn rate: avg daily sales last 7 days, mapped via inventory_sku_mappings
-    const sevenDaysAgo = new Date()
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
-
-    // Load sku mappings: marketplace_sku → sku_internal
+    // 3. Burn rate: load sku mappings then fetch all non-cancelled orders
+    //    Use the largest window across all formulas for a single DB query,
+    //    then aggregate per formula using each formula's own window.
     const { data: mappingRows } = await supabase
       .from('inventory_sku_mappings')
       .select('marketplace_sku, sku_internal')
@@ -62,19 +60,31 @@ export async function GET() {
       if (m.marketplace_sku && m.sku_internal) skuMap[m.marketplace_sku] = m.sku_internal
     }
 
+    const now = new Date()
+    const maxWindow = Math.max(...(configs ?? []).map((c: ProdFormulaConfig) => c.burn_rate_window_days ?? 7), 7)
+    const windowStart = new Date(now)
+    windowStart.setDate(windowStart.getDate() - maxWindow)
+
+    // Exclude cancelled only — count all other statuses (pending-shipped orders are real demand)
+    // Cap at now to exclude future-dated import errors
+    const CANCELLED_STATUSES = ['cancelled', 'Cancelled', 'ยกเลิกคำสั่งซื้อ', 'ยกเลิกแล้ว']
     const { data: salesRows, error: salesErr } = await supabase
       .from('sales_orders')
-      .select('sku, quantity, order_date')
-      .in('status', ['delivered', 'completed', 'shipped', 'Delivered', 'Completed'])
-      .gte('order_date', sevenDaysAgo.toISOString())
+      .select('sku, quantity, order_date, status')
+      .not('status', 'in', `(${CANCELLED_STATUSES.map(s => `"${s}"`).join(',')})`)
+      .gte('order_date', windowStart.toISOString())
+      .lte('order_date', now.toISOString())
     if (salesErr) throw salesErr
 
-    const skuQty: Record<string, number> = {}
+    // Build per-sku daily rows: { internalSku -> [{ date, qty }] }
+    type DailyRow = { date: string; qty: number }
+    const skuDailyRows: Record<string, DailyRow[]> = {}
     for (const row of salesRows ?? []) {
       if (!row.sku) continue
-      // Resolve marketplace SKU → internal SKU (fallback to raw sku if already internal)
       const internalSku = skuMap[row.sku] ?? row.sku
-      skuQty[internalSku] = (skuQty[internalSku] ?? 0) + (row.quantity ?? 1)
+      const date = row.order_date?.slice(0, 10) ?? ''
+      if (!skuDailyRows[internalSku]) skuDailyRows[internalSku] = []
+      skuDailyRows[internalSku].push({ date, qty: row.quantity ?? 1 })
     }
 
     // 4. Pending orders
@@ -92,13 +102,25 @@ export async function GET() {
       const layers: Partial<Record<ProdStockType, StockLayer>> = {}
       for (const [k, v] of typeMap.entries()) layers[k] = v
 
-      // Oil is keyed separately (formula_id-based for oil rows)
       if (cfg.uses_oil) {
         const oilMap = latestStock.get(cfg.id)
         if (oilMap?.has('oil_kg')) layers['oil_kg'] = oilMap.get('oil_kg')!
       }
 
-      const burnRatePerDay = (skuQty[cfg.sku_internal] ?? 0) / 7
+      // Burn rate: override wins; otherwise avg over this formula's window
+      let burnRatePerDay: number
+      if (cfg.burn_rate_override !== null && cfg.burn_rate_override !== undefined) {
+        burnRatePerDay = Number(cfg.burn_rate_override)
+      } else {
+        const windowDays = cfg.burn_rate_window_days ?? 7
+        const cutoff = new Date(now)
+        cutoff.setDate(cutoff.getDate() - windowDays)
+        const cutoffStr = cutoff.toISOString().slice(0, 10)
+        const totalQty = (skuDailyRows[cfg.sku_internal] ?? [])
+          .filter(r => r.date >= cutoffStr)
+          .reduce((sum, r) => sum + r.qty, 0)
+        burnRatePerDay = totalQty / windowDays
+      }
 
       const dos = {
         fg_warehouse: calcDos(layers['fg_warehouse']?.quantity, burnRatePerDay),
@@ -157,7 +179,6 @@ function buildAlerts(
 ): PlanningAlert[] {
   const alerts: PlanningAlert[] = []
 
-  // FG warehouse → call from factory
   if (dos.fg_warehouse !== null && dos.fg_warehouse <= cfg.alert_fg_days) {
     alerts.push({
       level: dos.fg_warehouse <= 3 ? 'critical' : 'warning',
@@ -168,7 +189,6 @@ function buildAlerts(
     })
   }
 
-  // Production run
   const fgTotal = (dos.fg_warehouse ?? 0) + (dos.fg_factory ?? 0)
   if (dos.fg_warehouse !== null && fgTotal <= cfg.alert_production_days) {
     alerts.push({
@@ -180,7 +200,6 @@ function buildAlerts(
     })
   }
 
-  // Empty tubes
   const tubesTotal = (dos.tubes_factory ?? 0) + (dos.tubes_warehouse ?? 0)
   if (dos.tubes_factory !== null && tubesTotal <= cfg.alert_tubes_days) {
     alerts.push({
@@ -192,7 +211,6 @@ function buildAlerts(
     })
   }
 
-  // Essential oil
   if (cfg.uses_oil && dos.oil_kg !== null && dos.oil_kg <= cfg.alert_oil_days) {
     const kgNeeded = Math.max(
       cfg.min_oil_kg,
