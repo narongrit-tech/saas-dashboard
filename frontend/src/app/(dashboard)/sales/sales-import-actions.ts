@@ -1104,7 +1104,18 @@ export async function importSalesChunk(
     // PRE-DEDUP: Delete stale rows whose hash changed (e.g. TikTok qty/price update).
     // The uq_sales_orders_external_sku partial index blocks INSERT when
     // (created_by, external_order_id, sku) already exists with a different hash.
-    // We surgically remove only those rows before upserting.
+    //
+    // IMPORTANT: migration-112 trigger rewrites created_by → workspace primary owner
+    // at INSERT time. So existing rows always carry the primary owner's ID, even when
+    // a delegate (Nawapan) imported them. We must resolve the primary owner here so
+    // the pre-delete query finds the right rows.
+    const { data: ownerMap } = await supabase
+      .from('workspace_owner_map')
+      .select('primary_user_id')
+      .eq('delegate_user_id', user.id)
+      .maybeSingle()
+    const workspaceOwnerId: string = ownerMap?.primary_user_id ?? user.id
+
     const incomingHashes = new Set(salesRows.map((r) => r.order_line_hash))
     const rowsWithExternalSku = salesRows.filter((r) => r.external_order_id && r.sku)
     if (rowsWithExternalSku.length > 0) {
@@ -1112,14 +1123,14 @@ export async function importSalesChunk(
       const { data: existingRows } = await supabase
         .from('sales_orders')
         .select('id, order_line_hash, external_order_id, sku')
-        .eq('created_by', user.id)
+        .eq('created_by', workspaceOwnerId)
         .in('external_order_id', externalIds)
       const staleIds = (existingRows || [])
         .filter((e) => e.sku && !incomingHashes.has(e.order_line_hash))
         .map((e) => e.id)
       if (staleIds.length > 0) {
         await supabase.from('sales_orders').delete().in('id', staleIds)
-        console.log(`[importSalesChunk] Pre-deleted ${staleIds.length} stale rows (hash changed)`)
+        console.log(`[importSalesChunk] Pre-deleted ${staleIds.length} stale rows (hash changed, workspaceOwner=${workspaceOwnerId.slice(0, 8)})`)
       }
     }
 
