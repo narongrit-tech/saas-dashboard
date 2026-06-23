@@ -1101,54 +1101,9 @@ export async function importSalesChunk(
       console.log(`[importSalesChunk] ✓ All ${salesRows.length} rows have order_amount set`)
     }
 
-    // PRE-DEDUP: Delete stale rows whose hash changed (e.g. TikTok qty/price update).
-    // The uq_sales_orders_external_sku partial index blocks INSERT when
-    // (created_by, external_order_id, sku) already exists with a different hash.
-    //
-    // IMPORTANT: migration-112 trigger rewrites created_by → workspace primary owner
-    // at INSERT time. So existing rows always carry the primary owner's ID, even when
-    // a delegate (Nawapan) imported them. We must resolve the primary owner here so
-    // the pre-delete query finds the right rows.
-    const { data: ownerMap } = await supabase
-      .from('workspace_owner_map')
-      .select('primary_user_id')
-      .eq('delegate_user_id', user.id)
-      .maybeSingle()
-    const workspaceOwnerId: string = ownerMap?.primary_user_id ?? user.id
-
-    const incomingHashes = new Set(salesRows.map((r) => r.order_line_hash))
-    const rowsWithExternalSku = salesRows.filter((r) => r.external_order_id && r.sku)
-    if (rowsWithExternalSku.length > 0) {
-      const externalIds = [...new Set(rowsWithExternalSku.map((r) => r.external_order_id as string))]
-
-      // Batch lookups into groups of 50 to stay under URL length limits.
-      // TikTok order IDs are ~18 chars; 400+ IDs in one .in() would exceed 8 KB.
-      const LOOKUP_BATCH = 50
-      const allExistingRows: Array<{ id: string; order_line_hash: string; sku: string | null }> = []
-      for (let i = 0; i < externalIds.length; i += LOOKUP_BATCH) {
-        const batch = externalIds.slice(i, i + LOOKUP_BATCH)
-        const { data: batchRows, error: batchErr } = await supabase
-          .from('sales_orders')
-          .select('id, order_line_hash, sku')
-          .eq('created_by', workspaceOwnerId)
-          .in('external_order_id', batch)
-        if (batchErr) {
-          console.warn(`[importSalesChunk] Pre-delete lookup batch ${i / LOOKUP_BATCH + 1} error:`, batchErr.message)
-        } else if (batchRows) {
-          allExistingRows.push(...batchRows)
-        }
-      }
-
-      const staleIds = allExistingRows
-        .filter((e) => e.sku && !incomingHashes.has(e.order_line_hash))
-        .map((e) => e.id)
-      if (staleIds.length > 0) {
-        await supabase.from('sales_orders').delete().in('id', staleIds)
-        console.log(`[importSalesChunk] Pre-deleted ${staleIds.length} stale rows (hash changed, owner=${workspaceOwnerId.slice(0, 8)})`)
-      }
-    }
-
     // Upsert with idempotency (safe field updates on conflict)
+    // Stale-row cleanup (same external_order_id+sku, different hash) is handled atomically
+    // by BEFORE INSERT trigger trg_sales_orders_dedup_external_sku (migration-116).
     let insertedCount = 0
     let updatedCount = 0
 
