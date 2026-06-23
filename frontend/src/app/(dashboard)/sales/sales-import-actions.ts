@@ -1101,6 +1101,28 @@ export async function importSalesChunk(
       console.log(`[importSalesChunk] ✓ All ${salesRows.length} rows have order_amount set`)
     }
 
+    // PRE-DEDUP: Delete stale rows whose hash changed (e.g. TikTok qty/price update).
+    // The uq_sales_orders_external_sku partial index blocks INSERT when
+    // (created_by, external_order_id, sku) already exists with a different hash.
+    // We surgically remove only those rows before upserting.
+    const incomingHashes = new Set(salesRows.map((r) => r.order_line_hash))
+    const rowsWithExternalSku = salesRows.filter((r) => r.external_order_id && r.sku)
+    if (rowsWithExternalSku.length > 0) {
+      const externalIds = [...new Set(rowsWithExternalSku.map((r) => r.external_order_id as string))]
+      const { data: existingRows } = await supabase
+        .from('sales_orders')
+        .select('id, order_line_hash, external_order_id, sku')
+        .eq('created_by', user.id)
+        .in('external_order_id', externalIds)
+      const staleIds = (existingRows || [])
+        .filter((e) => e.sku && !incomingHashes.has(e.order_line_hash))
+        .map((e) => e.id)
+      if (staleIds.length > 0) {
+        await supabase.from('sales_orders').delete().in('id', staleIds)
+        console.log(`[importSalesChunk] Pre-deleted ${staleIds.length} stale rows (hash changed)`)
+      }
+    }
+
     // Upsert with idempotency (safe field updates on conflict)
     let insertedCount = 0
     let updatedCount = 0
