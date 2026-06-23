@@ -430,7 +430,7 @@ function parseRoundDate(dateStr: string): Date | null {
   return isNaN(d.getTime()) ? null : d
 }
 
-interface PlannerRound { id: string; date: string; qty: string }
+interface PlannerRound { id: string; date: string; qty: string; leadDays?: string }
 
 // Warehouse milestone: alternating runout → call_in events
 interface WMilestone {
@@ -472,7 +472,7 @@ function computeUnifiedTimeline(
   callRounds: PlannerRound[],
   prodRounds: PlannerRound[],
   today: Date,
-  minLeadDays: number,
+  defaultLeadDays: number,
 ): UnifiedRow[] {
   if (burnPerDay <= 0) return []
 
@@ -482,11 +482,15 @@ function computeUnifiedTimeline(
     .filter((r): r is { date: Date; qty: number } => r.date !== null && r.qty > 0)
     .sort((a, b) => a.date.getTime() - b.date.getTime())
 
-  // Parse and sort production receives
+  // Parse and sort production receives — use per-round leadDays override if set
   const prods = prodRounds
-    .map(r => ({ date: parseRoundDate(r.date), qty: parseRoundQty(r.qty) }))
-    .filter((r): r is { date: Date; qty: number } => r.date !== null && r.qty > 0)
-    .map(r => ({ date: addDays(r.date, minLeadDays), qty: r.qty }))
+    .map(r => {
+      const date = parseRoundDate(r.date)
+      const qty = parseRoundQty(r.qty)
+      const lead = Math.max(15, parseInt(r.leadDays ?? '') || defaultLeadDays)
+      return date && qty > 0 ? { date: addDays(date, lead), qty } : null
+    })
+    .filter((r): r is { date: Date; qty: number } => r !== null)
     .sort((a, b) => a.date.getTime() - b.date.getTime())
 
   // All discrete events sorted by date
@@ -660,7 +664,7 @@ function FormulaPlanner({
     [fgWarehouse, fgFactory, burn, callRounds, prodRounds, today, formula.lead_time_production_min_days],
   )
 
-  function updateRound(setter: React.Dispatch<React.SetStateAction<PlannerRound[]>>, id: string, field: 'date' | 'qty', val: string) {
+  function updateRound(setter: React.Dispatch<React.SetStateAction<PlannerRound[]>>, id: string, field: 'date' | 'qty' | 'leadDays', val: string) {
     setter(prev => prev.map(r => r.id === id ? { ...r, [field]: val } : r))
   }
   function removeRound(setter: React.Dispatch<React.SetStateAction<PlannerRound[]>>, id: string) {
@@ -716,12 +720,13 @@ function FormulaPlanner({
         {/* Production rounds */}
         <div className="rounded-lg border p-3 space-y-2">
           <p className="text-xs font-medium text-muted-foreground">
-            🏭 สั่งผลิต (วันสั่ง · จำนวน) — รับหลัง {formula.lead_time_production_min_days}–{formula.lead_time_production_max_days} วัน
+            🏭 สั่งผลิต (วันสั่ง · จำนวน · Lead days)
           </p>
           {prodRounds.map((r, idx) => {
             const d = parseRoundDate(r.date)
-            const recvMin = d ? thaiDate(addDays(d, formula.lead_time_production_min_days)) : null
-            const recvMax = d ? thaiDate(addDays(d, formula.lead_time_production_max_days)) : null
+            const effectiveLead = Math.max(15, parseInt(r.leadDays ?? '') || formula.lead_time_production_min_days)
+            const recvDate = d ? thaiDate(addDays(d, effectiveLead)) : null
+            const isCustomLead = r.leadDays && parseInt(r.leadDays) !== formula.lead_time_production_min_days
             return (
               <div key={r.id} className="space-y-0.5">
                 <div className="flex items-center gap-1.5">
@@ -732,13 +737,24 @@ function FormulaPlanner({
                   <input type="text" inputMode="numeric" value={r.qty} placeholder="จำนวน"
                     onChange={e => updateRound(setProdRounds, r.id, 'qty', e.target.value)}
                     className="h-7 text-xs border rounded px-2 w-20 font-mono bg-background" />
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    <input
+                      type="number" min="15" max="90"
+                      value={r.leadDays ?? String(formula.lead_time_production_min_days)}
+                      onChange={e => updateRound(setProdRounds, r.id, 'leadDays', e.target.value)}
+                      className={`h-7 text-xs border rounded px-1.5 w-12 text-center font-mono bg-background ${isCustomLead ? 'border-blue-400 text-blue-700 dark:text-blue-300' : ''}`}
+                      title="Lead time (วัน) — min 15"
+                    />
+                    <span className="text-xs text-muted-foreground">ว</span>
+                  </div>
                   <button onClick={() => removeRound(setProdRounds, r.id)} className="text-muted-foreground hover:text-destructive">
                     <X className="h-3 w-3" />
                   </button>
                 </div>
-                {recvMin && (
+                {recvDate && (
                   <p className="text-xs text-green-600 dark:text-green-400 pl-5">
-                    ↳ รับที่โรงงาน {recvMin}{recvMax && recvMax !== recvMin ? `–${recvMax}` : ''}
+                    ↳ รับที่โรงงาน {recvDate}
+                    {isCustomLead && <span className="ml-1 text-blue-500">(เร่ง {effectiveLead} วัน)</span>}
                   </p>
                 )}
               </div>
