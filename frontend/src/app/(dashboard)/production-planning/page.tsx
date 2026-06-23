@@ -453,96 +453,144 @@ interface FEvent {
   isDeficit: boolean
 }
 
-function computeWarehouseTimeline(
-  startStock: number,
-  burnPerDay: number,
-  callRounds: PlannerRound[],
-  today: Date,
-): WMilestone[] {
-  if (burnPerDay <= 0) return []
-
-  const validCalls = callRounds
-    .map(r => ({ date: parseRoundDate(r.date), qty: parseRoundQty(r.qty) }))
-    .filter((r): r is { date: Date; qty: number } => r.date !== null && r.qty > 0)
-    .sort((a, b) => a.date.getTime() - b.date.getTime())
-
-  const milestones: WMilestone[] = []
-  let stock = startStock
-  let currentDayOffset = 0
-
-  for (let ci = 0; ci <= validCalls.length; ci++) {
-    const nextCall = validCalls[ci] ?? null
-    const daysUntilNextCall = nextCall
-      ? Math.max(0, (nextCall.date.getTime() - addDays(today, currentDayOffset).getTime()) / 86400000)
-      : Infinity
-    const daysUntilEmpty = stock > 0 ? stock / burnPerDay : 0
-
-    if (daysUntilEmpty <= daysUntilNextCall) {
-      // Runs out before (or on same day as) next call
-      const runoutOffset = currentDayOffset + Math.ceil(daysUntilEmpty)
-      milestones.push({ type: 'runout', dayOffset: runoutOffset, date: addDays(today, runoutOffset), stockAfter: 0 })
-      stock = 0
-      if (nextCall) {
-        const callOffset = currentDayOffset + Math.round(daysUntilNextCall)
-        milestones.push({
-          type: 'call_in', dayOffset: callOffset, date: addDays(today, callOffset),
-          qty: nextCall.qty, stockBefore: 0, stockAfter: nextCall.qty,
-        })
-        stock = nextCall.qty
-        currentDayOffset = callOffset
-      } else {
-        break
-      }
-    } else if (nextCall) {
-      // Stock lasts until next call — call arrives with some stock remaining
-      const callOffset = currentDayOffset + Math.round(daysUntilNextCall)
-      const remaining = Math.max(0, stock - burnPerDay * daysUntilNextCall)
-      milestones.push({
-        type: 'call_in', dayOffset: callOffset, date: addDays(today, callOffset),
-        qty: nextCall.qty, stockBefore: remaining, stockAfter: remaining + nextCall.qty,
-      })
-      stock = remaining + nextCall.qty
-      currentDayOffset = callOffset
-    } else {
-      // No more calls — just log final runout
-      const runoutOffset = currentDayOffset + Math.ceil(stock / burnPerDay)
-      milestones.push({ type: 'runout', dayOffset: runoutOffset, date: addDays(today, runoutOffset), stockAfter: 0 })
-      break
-    }
-  }
-
-  return milestones
+// Unified timeline event — one table covers both warehouse and factory
+interface UnifiedRow {
+  dayOffset: number
+  date: Date
+  type: 'start' | 'transfer' | 'warehouse_empty' | 'prod_receive'
+  qty?: number
+  warehouseBeforeCall?: number  // stock in warehouse right before transfer arrives
+  warehouseAfter: number
+  factoryAfter: number
+  factoryDeficit?: boolean
 }
 
-function computeFactoryTimeline(
-  startStock: number,
+function computeUnifiedTimeline(
+  fgWarehouse: number,
+  fgFactory: number,
+  burnPerDay: number,
   callRounds: PlannerRound[],
   prodRounds: PlannerRound[],
   today: Date,
   minLeadDays: number,
-): FEvent[] {
-  type Inp = { date: Date; type: 'call_out' | 'prod_in'; qty: number }
+): UnifiedRow[] {
+  if (burnPerDay <= 0) return []
 
-  const callInputs: Inp[] = callRounds
+  // Parse and sort call rounds (warehouse ← factory transfers)
+  const calls = callRounds
     .map(r => ({ date: parseRoundDate(r.date), qty: parseRoundQty(r.qty) }))
     .filter((r): r is { date: Date; qty: number } => r.date !== null && r.qty > 0)
-    .map(r => ({ date: r.date, qty: r.qty, type: 'call_out' as const }))
-
-  const prodInputs: Inp[] = prodRounds
-    .map(r => ({ date: parseRoundDate(r.date), qty: parseRoundQty(r.qty) }))
-    .filter((r): r is { date: Date; qty: number } => r.date !== null && r.qty > 0)
-    .map(r => ({ date: addDays(r.date, minLeadDays), qty: r.qty, type: 'prod_in' as const }))
-
-  const inputs: Inp[] = [...callInputs, ...prodInputs]
     .sort((a, b) => a.date.getTime() - b.date.getTime())
 
-  let stock = startStock
-  return inputs.map(inp => {
-    const dayOffset = Math.round((inp.date.getTime() - today.getTime()) / 86400000)
-    const before = stock
-    stock = inp.type === 'call_out' ? stock - inp.qty : stock + inp.qty
-    return { type: inp.type, dayOffset, date: inp.date, qty: inp.qty, stockBefore: before, stockAfter: stock, isDeficit: stock < 0 }
-  })
+  // Parse and sort production receives
+  const prods = prodRounds
+    .map(r => ({ date: parseRoundDate(r.date), qty: parseRoundQty(r.qty) }))
+    .filter((r): r is { date: Date; qty: number } => r.date !== null && r.qty > 0)
+    .map(r => ({ date: addDays(r.date, minLeadDays), qty: r.qty }))
+    .sort((a, b) => a.date.getTime() - b.date.getTime())
+
+  // All discrete events sorted by date
+  type DiscreteEvent =
+    | { kind: 'transfer'; date: Date; qty: number }
+    | { kind: 'prod_receive'; date: Date; qty: number }
+
+  const discrete: DiscreteEvent[] = [
+    ...calls.map(c => ({ kind: 'transfer' as const, date: c.date, qty: c.qty })),
+    ...prods.map(p => ({ kind: 'prod_receive' as const, date: p.date, qty: p.qty })),
+  ].sort((a, b) => a.date.getTime() - b.date.getTime())
+
+  const rows: UnifiedRow[] = []
+  let warehouse = fgWarehouse
+  let factory = fgFactory
+  let currentOffset = 0
+
+  const daysToEmpty = (stock: number) => stock > 0 ? stock / burnPerDay : 0
+
+  for (const ev of discrete) {
+    const evOffset = Math.round((ev.date.getTime() - today.getTime()) / 86400000)
+    const daysUntilEvent = evOffset - currentOffset
+
+    if (ev.kind === 'transfer') {
+      // Check if warehouse empties before this transfer arrives
+      const depletionDays = daysToEmpty(warehouse)
+      if (depletionDays < daysUntilEvent) {
+        const emptyOffset = currentOffset + Math.ceil(depletionDays)
+        warehouse = 0
+        rows.push({
+          type: 'warehouse_empty',
+          dayOffset: emptyOffset,
+          date: addDays(today, emptyOffset),
+          warehouseAfter: 0,
+          factoryAfter: factory,
+        })
+        currentOffset = emptyOffset
+      }
+      // Advance warehouse (burn) to event date
+      warehouse = Math.max(0, warehouse - burnPerDay * (evOffset - currentOffset))
+      currentOffset = evOffset
+
+      const warehouseBefore = warehouse
+      warehouse += ev.qty
+      factory = Math.max(factory - ev.qty, factory - ev.qty) // can go negative (deficit)
+      const deficit = factory < 0
+      factory = factory  // keep negative for display
+
+      rows.push({
+        type: 'transfer',
+        dayOffset: evOffset,
+        date: ev.date,
+        qty: ev.qty,
+        warehouseBeforeCall: Math.round(warehouseBefore),
+        warehouseAfter: Math.round(warehouse),
+        factoryAfter: Math.round(factory),
+        factoryDeficit: deficit,
+      })
+    } else {
+      // prod_receive: only affects factory
+      // Advance warehouse burn to event date
+      const depletionDays = daysToEmpty(warehouse)
+      if (depletionDays < daysUntilEvent && warehouse > 0) {
+        const emptyOffset = currentOffset + Math.ceil(depletionDays)
+        if (emptyOffset < evOffset) {
+          warehouse = 0
+          rows.push({
+            type: 'warehouse_empty',
+            dayOffset: emptyOffset,
+            date: addDays(today, emptyOffset),
+            warehouseAfter: 0,
+            factoryAfter: factory,
+          })
+        }
+      }
+      warehouse = Math.max(0, warehouse - burnPerDay * daysUntilEvent)
+      currentOffset = evOffset
+      factory += ev.qty
+
+      rows.push({
+        type: 'prod_receive',
+        dayOffset: evOffset,
+        date: ev.date,
+        qty: ev.qty,
+        warehouseAfter: Math.round(warehouse),
+        factoryAfter: Math.round(factory),
+      })
+    }
+  }
+
+  // After all events: find final warehouse runout (if any stock left)
+  const finalDepletion = daysToEmpty(warehouse)
+  if (warehouse > 0 && finalDepletion < 730) {
+    const emptyOffset = currentOffset + Math.ceil(finalDepletion)
+    rows.push({
+      type: 'warehouse_empty',
+      dayOffset: emptyOffset,
+      date: addDays(today, emptyOffset),
+      warehouseAfter: 0,
+      factoryAfter: factory,
+    })
+  }
+
+  return rows
 }
 
 // ── Section wrapper ───────────────────────────────────────────────────────────
@@ -577,7 +625,7 @@ function StockProjectionSection({
   )
 }
 
-// ── Per-formula 2-layer planner ───────────────────────────────────────────────
+// ── Per-formula planner ───────────────────────────────────────────────────────
 
 function FormulaPlanner({
   fs, pendingOrders, today,
@@ -591,39 +639,29 @@ function FormulaPlanner({
   const fgFactory   = fs.layers['fg_factory']?.quantity   ?? 0
   const burn        = fs.burn_rate_per_day
 
-  // Pre-populate from pending call_fg orders
   const [callRounds, setCallRounds] = useState<PlannerRound[]>(() => {
-    const fromPending = pendingOrders
+    const rows = pendingOrders
       .filter(o => o.formula_id === formula.id && o.expected_at && o.order_type === 'call_fg')
       .map(o => ({ id: o.id, date: o.expected_at!.slice(0, 10), qty: String(o.ordered_qty) }))
-    while (fromPending.length < 3) fromPending.push({ id: genId(), date: '', qty: '' })
-    return fromPending.slice(0, 5)
+    while (rows.length < 3) rows.push({ id: genId(), date: '', qty: '' })
+    return rows.slice(0, 5)
   })
 
-  // Pre-populate from pending production orders (use ordered_at as the "order date")
   const [prodRounds, setProdRounds] = useState<PlannerRound[]>(() => {
-    const fromPending = pendingOrders
+    const rows = pendingOrders
       .filter(o => o.formula_id === formula.id && o.order_type === 'production')
       .map(o => ({ id: o.id, date: o.ordered_at.slice(0, 10), qty: String(o.ordered_qty) }))
-    while (fromPending.length < 2) fromPending.push({ id: genId(), date: '', qty: '' })
-    return fromPending.slice(0, 5)
+    while (rows.length < 2) rows.push({ id: genId(), date: '', qty: '' })
+    return rows.slice(0, 5)
   })
 
-  const warehoneTimeline = useMemo(
-    () => computeWarehouseTimeline(fgWarehouse, burn, callRounds, today),
-    [fgWarehouse, burn, callRounds, today],
+  const timeline = useMemo(
+    () => computeUnifiedTimeline(fgWarehouse, fgFactory, burn, callRounds, prodRounds, today, formula.lead_time_production_min_days),
+    [fgWarehouse, fgFactory, burn, callRounds, prodRounds, today, formula.lead_time_production_min_days],
   )
 
-  const factoryTimeline = useMemo(
-    () => computeFactoryTimeline(fgFactory, callRounds, prodRounds, today, formula.lead_time_production_min_days),
-    [fgFactory, callRounds, prodRounds, today, formula.lead_time_production_min_days],
-  )
-
-  function updateRound(
-    setter: React.Dispatch<React.SetStateAction<PlannerRound[]>>,
-    id: string, field: 'date' | 'qty', value: string,
-  ) {
-    setter(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r))
+  function updateRound(setter: React.Dispatch<React.SetStateAction<PlannerRound[]>>, id: string, field: 'date' | 'qty', val: string) {
+    setter(prev => prev.map(r => r.id === id ? { ...r, [field]: val } : r))
   }
   function removeRound(setter: React.Dispatch<React.SetStateAction<PlannerRound[]>>, id: string) {
     setter(prev => prev.filter(r => r.id !== id))
@@ -633,233 +671,202 @@ function FormulaPlanner({
   }
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <span className="font-semibold text-sm">{formula.formula_name}</span>
-        <span className="text-xs text-muted-foreground">Burn {burn.toFixed(1)} หลอด/วัน</span>
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <span className="font-semibold">{formula.formula_name}</span>
+        <span className="text-xs text-muted-foreground">
+          Burn <span className="font-mono font-medium">{burn.toFixed(1)}</span> หลอด/วัน
+        </span>
+        <span className="text-xs text-muted-foreground">
+          คลังเรา <span className="font-mono font-medium">{fgWarehouse.toLocaleString()}</span>
+          {' · '}
+          โรงงาน <span className="font-mono font-medium">{fgFactory.toLocaleString()}</span>
+        </span>
       </div>
 
+      {/* Input grid: call rounds (left) | production rounds (right) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* ── Layer 1: FG คลังเรา ── */}
-        <div className="rounded-lg border p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium">🏠 FG คลังเรา</span>
-            <Badge variant="outline" className="font-mono text-xs">{fgWarehouse.toLocaleString()} หลอด</Badge>
-          </div>
-
-          {/* Round inputs */}
-          <div className="space-y-2">
-            <p className="text-xs text-muted-foreground font-medium">รอบเรียกจากโรงงาน → คลังเรา</p>
-            {callRounds.map((r, idx) => (
-              <div key={r.id} className="flex items-center gap-1.5">
-                <span className="text-xs text-muted-foreground w-4 text-right">{idx + 1}.</span>
-                <input
-                  type="date"
-                  value={r.date}
-                  onChange={e => updateRound(setCallRounds, r.id, 'date', e.target.value)}
-                  className="h-7 text-xs border rounded px-2 flex-1 min-w-0 bg-background"
-                />
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={r.qty}
-                  onChange={e => updateRound(setCallRounds, r.id, 'qty', e.target.value)}
-                  placeholder="จำนวน"
-                  className="h-7 text-xs border rounded px-2 w-20 font-mono bg-background"
-                />
-                <button
-                  onClick={() => removeRound(setCallRounds, r.id)}
-                  className="text-muted-foreground hover:text-destructive shrink-0"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
-            {callRounds.length < 5 && (
-              <button
-                onClick={() => addRound(setCallRounds)}
-                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-              >
-                <Plus className="h-3 w-3" /> เพิ่มรอบ
+        {/* Call rounds */}
+        <div className="rounded-lg border p-3 space-y-2">
+          <p className="text-xs font-medium text-muted-foreground">
+            🏠→🏭 เรียก FG จากโรงงาน (วันที่รับ · จำนวน)
+          </p>
+          {callRounds.map((r, idx) => (
+            <div key={r.id} className="flex items-center gap-1.5">
+              <span className="text-xs text-muted-foreground w-4 text-right shrink-0">{idx + 1}.</span>
+              <input type="date" value={r.date}
+                onChange={e => updateRound(setCallRounds, r.id, 'date', e.target.value)}
+                className="h-7 text-xs border rounded px-2 flex-1 min-w-0 bg-background" />
+              <input type="text" inputMode="numeric" value={r.qty} placeholder="จำนวน"
+                onChange={e => updateRound(setCallRounds, r.id, 'qty', e.target.value)}
+                className="h-7 text-xs border rounded px-2 w-20 font-mono bg-background" />
+              <button onClick={() => removeRound(setCallRounds, r.id)} className="text-muted-foreground hover:text-destructive">
+                <X className="h-3 w-3" />
               </button>
-            )}
-          </div>
-
-          {/* Warehouse timeline */}
-          <WarehouseTimelineView today={today} startStock={fgWarehouse} burn={burn} milestones={warehoneTimeline} />
+            </div>
+          ))}
+          {callRounds.length < 5 && (
+            <button onClick={() => addRound(setCallRounds)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+              <Plus className="h-3 w-3" /> เพิ่มรอบ
+            </button>
+          )}
         </div>
 
-        {/* ── Layer 2: FG คลังโรงงาน ── */}
-        <div className="rounded-lg border p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium">🏭 FG คลังโรงงาน</span>
-            <Badge variant="outline" className="font-mono text-xs">{fgFactory.toLocaleString()} หลอด</Badge>
-          </div>
-
-          {/* Production round inputs */}
-          <div className="space-y-2">
-            <p className="text-xs text-muted-foreground font-medium">
-              รอบสั่งผลิต (รับหลัง {formula.lead_time_production_min_days}–{formula.lead_time_production_max_days} วัน)
-            </p>
-            {prodRounds.map((r, idx) => {
-              const ordDate = parseRoundDate(r.date)
-              const recvMin = ordDate ? thaiDate(addDays(ordDate, formula.lead_time_production_min_days)) : null
-              const recvMax = ordDate ? thaiDate(addDays(ordDate, formula.lead_time_production_max_days)) : null
-              return (
-                <div key={r.id} className="space-y-0.5">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs text-muted-foreground w-4 text-right">{idx + 1}.</span>
-                    <input
-                      type="date"
-                      value={r.date}
-                      onChange={e => updateRound(setProdRounds, r.id, 'date', e.target.value)}
-                      className="h-7 text-xs border rounded px-2 flex-1 min-w-0 bg-background"
-                    />
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={r.qty}
-                      onChange={e => updateRound(setProdRounds, r.id, 'qty', e.target.value)}
-                      placeholder="จำนวน"
-                      className="h-7 text-xs border rounded px-2 w-20 font-mono bg-background"
-                    />
-                    <button
-                      onClick={() => removeRound(setProdRounds, r.id)}
-                      className="text-muted-foreground hover:text-destructive shrink-0"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-                  {recvMin && (
-                    <p className="text-xs text-blue-600 dark:text-blue-400 pl-5">
-                      ↳ รับได้ {recvMin}{recvMax && recvMax !== recvMin ? `–${recvMax}` : ''}
-                    </p>
-                  )}
+        {/* Production rounds */}
+        <div className="rounded-lg border p-3 space-y-2">
+          <p className="text-xs font-medium text-muted-foreground">
+            🏭 สั่งผลิต (วันสั่ง · จำนวน) — รับหลัง {formula.lead_time_production_min_days}–{formula.lead_time_production_max_days} วัน
+          </p>
+          {prodRounds.map((r, idx) => {
+            const d = parseRoundDate(r.date)
+            const recvMin = d ? thaiDate(addDays(d, formula.lead_time_production_min_days)) : null
+            const recvMax = d ? thaiDate(addDays(d, formula.lead_time_production_max_days)) : null
+            return (
+              <div key={r.id} className="space-y-0.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-muted-foreground w-4 text-right shrink-0">{idx + 1}.</span>
+                  <input type="date" value={r.date}
+                    onChange={e => updateRound(setProdRounds, r.id, 'date', e.target.value)}
+                    className="h-7 text-xs border rounded px-2 flex-1 min-w-0 bg-background" />
+                  <input type="text" inputMode="numeric" value={r.qty} placeholder="จำนวน"
+                    onChange={e => updateRound(setProdRounds, r.id, 'qty', e.target.value)}
+                    className="h-7 text-xs border rounded px-2 w-20 font-mono bg-background" />
+                  <button onClick={() => removeRound(setProdRounds, r.id)} className="text-muted-foreground hover:text-destructive">
+                    <X className="h-3 w-3" />
+                  </button>
                 </div>
-              )
-            })}
-            {prodRounds.length < 5 && (
-              <button
-                onClick={() => addRound(setProdRounds)}
-                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-              >
-                <Plus className="h-3 w-3" /> เพิ่มรอบ
-              </button>
-            )}
-          </div>
-
-          {/* Factory timeline */}
-          <FactoryTimelineView today={today} startStock={fgFactory} events={factoryTimeline} />
+                {recvMin && (
+                  <p className="text-xs text-green-600 dark:text-green-400 pl-5">
+                    ↳ รับที่โรงงาน {recvMin}{recvMax && recvMax !== recvMin ? `–${recvMax}` : ''}
+                  </p>
+                )}
+              </div>
+            )
+          })}
+          {prodRounds.length < 5 && (
+            <button onClick={() => addRound(setProdRounds)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+              <Plus className="h-3 w-3" /> เพิ่มรอบ
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Unified timeline table */}
+      <UnifiedTimelineTable
+        today={today}
+        fgWarehouse={fgWarehouse}
+        fgFactory={fgFactory}
+        burn={burn}
+        rows={timeline}
+      />
     </div>
   )
 }
 
-// ── Warehouse timeline display ────────────────────────────────────────────────
+// ── Unified timeline table ────────────────────────────────────────────────────
 
-function WarehouseTimelineView({ today, startStock, burn, milestones }: {
-  today: Date; startStock: number; burn: number; milestones: WMilestone[]
+function UnifiedTimelineTable({ today, fgWarehouse, fgFactory, burn, rows }: {
+  today: Date
+  fgWarehouse: number
+  fgFactory: number
+  burn: number
+  rows: UnifiedRow[]
 }) {
-  const naturalDays = burn > 0 ? Math.ceil(startStock / burn) : 9999
+  const hasDeficit = rows.some(r => r.factoryDeficit)
 
   return (
-    <div className="border-t pt-3 space-y-1.5">
-      <p className="text-xs text-muted-foreground font-medium mb-2">ประมาณการ</p>
-      {/* Start */}
-      <TLRow dot="gray" label={`วันนี้ (${thaiDate(today)})`} value={`${Math.round(startStock).toLocaleString()} หลอด`} />
-
-      {milestones.length === 0 ? (
-        /* No calls — just natural runout */
-        <TLRow
-          dot="red"
-          label={`หมด ${thaiDate(addDays(today, naturalDays))} (+${naturalDays} วัน)`}
-          value="0 หลอด"
-          danger
-        />
-      ) : (
-        milestones.map((m, i) => (
-          m.type === 'runout' ? (
-            <TLRow
-              key={i}
-              dot="red"
-              label={`หมด ${thaiDate(m.date)} (+${m.dayOffset} วัน)`}
-              value="0 หลอด"
-              danger
-            />
-          ) : (
-            <TLRow
-              key={i}
-              dot="blue"
-              label={`${thaiDate(m.date)} (+${m.dayOffset} วัน) รับ ${m.qty!.toLocaleString()}`}
-              value={`→ ${Math.round(m.stockAfter).toLocaleString()} หลอด`}
-              sub={m.stockBefore !== undefined && m.stockBefore < burn * 3
-                ? `⚠️ คลังเหลือ ${Math.round(m.stockBefore).toLocaleString()} ก่อนรับ`
-                : undefined}
-            />
-          )
-        ))
-      )}
-    </div>
-  )
-}
-
-// ── Factory timeline display ──────────────────────────────────────────────────
-
-function FactoryTimelineView({ today, startStock, events }: {
-  today: Date; startStock: number; events: FEvent[]
-}) {
-  const hasDeficit = events.some(e => e.isDeficit)
-
-  return (
-    <div className="border-t pt-3 space-y-1.5">
-      <p className="text-xs text-muted-foreground font-medium mb-2">
-        ประมาณการโรงงาน{hasDeficit && <span className="text-red-500 ml-2">⚠️ Stock ติดลบ</span>}
-      </p>
-      <TLRow dot="gray" label={`วันนี้ (${thaiDate(today)})`} value={`${Math.round(startStock).toLocaleString()} หลอด`} />
-      {events.length === 0 && (
-        <p className="text-xs text-muted-foreground">ยังไม่มีรอบ</p>
-      )}
-      {events.map((ev, i) => (
-        <TLRow
-          key={i}
-          dot={ev.type === 'prod_in' ? 'green' : ev.isDeficit ? 'red' : 'orange'}
-          label={`${thaiDate(ev.date)} (+${ev.dayOffset} วัน) ${ev.type === 'prod_in' ? `รับผลิต ${ev.qty.toLocaleString()}` : `เรียกไป ${ev.qty.toLocaleString()}`}`}
-          value={`→ ${Math.round(ev.stockAfter).toLocaleString()} หลอด`}
-          danger={ev.isDeficit}
-          sub={ev.isDeficit ? '⚠️ ของไม่พอ ต้องสั่งผลิตเพิ่ม' : undefined}
-        />
-      ))}
-    </div>
-  )
-}
-
-// ── Shared timeline row ───────────────────────────────────────────────────────
-
-function TLRow({ dot, label, value, danger, sub }: {
-  dot: 'gray' | 'blue' | 'red' | 'green' | 'orange'
-  label: string; value: string; danger?: boolean; sub?: string
-}) {
-  const dotClass = {
-    gray:   'bg-gray-400',
-    blue:   'bg-blue-500',
-    red:    'bg-red-500',
-    green:  'bg-green-500',
-    orange: 'bg-orange-400',
-  }[dot]
-
-  return (
-    <div className="space-y-0.5">
-      <div className="flex items-center gap-2 text-xs">
-        <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${dotClass}`} />
-        <span className={danger ? 'text-red-600 dark:text-red-400 font-medium' : 'text-muted-foreground'}>
-          {label}
-        </span>
-        <span className={`ml-auto font-mono shrink-0 ${danger ? 'text-red-600 dark:text-red-400' : ''}`}>
-          {value}
-        </span>
+    <div className="rounded-lg border overflow-hidden text-xs">
+      {/* Table header */}
+      <div className="grid grid-cols-[140px_1fr_100px_100px] bg-muted/50 border-b">
+        <div className="px-3 py-2 font-medium text-muted-foreground">วันที่</div>
+        <div className="px-3 py-2 font-medium text-muted-foreground">เหตุการณ์</div>
+        <div className="px-3 py-2 font-medium text-muted-foreground text-right">🏠 คลังเรา</div>
+        <div className={`px-3 py-2 font-medium text-right ${hasDeficit ? 'text-red-500' : 'text-muted-foreground'}`}>
+          🏭 โรงงาน{hasDeficit ? ' ⚠️' : ''}
+        </div>
       </div>
-      {sub && <p className="text-xs text-orange-500 pl-3.5">{sub}</p>}
+
+      {/* Start row */}
+      <div className="grid grid-cols-[140px_1fr_100px_100px] border-b bg-muted/20">
+        <div className="px-3 py-2 text-muted-foreground">{thaiDate(today)}</div>
+        <div className="px-3 py-2 text-muted-foreground">เริ่มต้น</div>
+        <div className="px-3 py-2 text-right font-mono">{fgWarehouse.toLocaleString()}</div>
+        <div className="px-3 py-2 text-right font-mono">{fgFactory.toLocaleString()}</div>
+      </div>
+
+      {/* Event rows */}
+      {rows.map((row, i) => {
+        const isRunout   = row.type === 'warehouse_empty'
+        const isTransfer = row.type === 'transfer'
+        const isProd     = row.type === 'prod_receive'
+
+        const rowBg = isRunout
+          ? 'bg-red-50 dark:bg-red-950/30'
+          : isProd
+            ? 'bg-green-50 dark:bg-green-950/20'
+            : isTransfer
+              ? 'bg-blue-50 dark:bg-blue-950/20'
+              : ''
+
+        return (
+          <div key={i} className={`border-b last:border-0 ${rowBg}`}>
+            <div className="grid grid-cols-[140px_1fr_100px_100px]">
+              {/* Date */}
+              <div className={`px-3 py-2 ${isRunout ? 'text-red-600 dark:text-red-400 font-medium' : 'text-muted-foreground'}`}>
+                {thaiDate(row.date)}
+                <span className="ml-1 opacity-60 text-[10px]">+{row.dayOffset}ว</span>
+              </div>
+
+              {/* Event description */}
+              <div className="px-3 py-2">
+                {isRunout && (
+                  <span className="text-red-600 dark:text-red-400 font-medium">⛔ FG คลังเราหมด</span>
+                )}
+                {isTransfer && (
+                  <span className="text-blue-700 dark:text-blue-300">
+                    ↕ รับ {row.qty!.toLocaleString()} หลอด (เรียกจากโรงงาน)
+                    {row.warehouseBeforeCall !== undefined && row.warehouseBeforeCall < burn * 2 && (
+                      <span className="ml-2 text-orange-500 text-[10px]">
+                        ⚠️ คลังเหลือ {row.warehouseBeforeCall.toLocaleString()} ก่อนรับ
+                      </span>
+                    )}
+                  </span>
+                )}
+                {isProd && (
+                  <span className="text-green-700 dark:text-green-400">
+                    ↑ รับผลิต {row.qty!.toLocaleString()} หลอด
+                  </span>
+                )}
+              </div>
+
+              {/* FG คลังเรา after */}
+              <div className={`px-3 py-2 text-right font-mono ${isRunout ? 'text-red-600 dark:text-red-400 font-bold' : ''}`}>
+                {isRunout ? '0' : isProd ? <span className="text-muted-foreground">—</span> : row.warehouseAfter.toLocaleString()}
+              </div>
+
+              {/* FG โรงงาน after */}
+              <div className={`px-3 py-2 text-right font-mono ${row.factoryDeficit ? 'text-red-600 dark:text-red-400 font-bold' : isProd ? 'text-green-700 dark:text-green-400' : ''}`}>
+                {row.factoryAfter.toLocaleString()}
+                {row.factoryDeficit && ' ⚠️'}
+              </div>
+            </div>
+
+            {/* Factory deficit warning row */}
+            {row.factoryDeficit && (
+              <div className="px-3 pb-2 text-red-500 text-[10px] col-span-4">
+                ⚠️ โรงงานของไม่พอ — ต้องสั่งผลิตเพิ่ม หรือลดจำนวนเรียก
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      {rows.length === 0 && (
+        <div className="px-3 py-4 text-center text-muted-foreground">
+          ใส่รอบเรียกของเพื่อดูประมาณการ
+        </div>
+      )}
     </div>
   )
 }
