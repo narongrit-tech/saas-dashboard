@@ -6,10 +6,12 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Loader2, AlertTriangle, CheckCircle2, XCircle, RefreshCw, Plus, Settings2, X, Check, TrendingDown } from 'lucide-react'
+import { Loader2, AlertTriangle, CheckCircle2, XCircle, RefreshCw, Plus, Settings2, X, Check, TrendingDown, BookmarkCheck, ChevronDown } from 'lucide-react'
 import Link from 'next/link'
 import type { DashboardData, FormulaStatus, PlanningAlert, AlertLevel, ProdProductionOrder } from '@/types/production-planning'
 import { ORDER_TYPE_LABELS, STOCK_TYPE_LABELS } from '@/types/production-planning'
+import { SaveForecastBar, SavedForecastsList, useSavedForecasts } from './_components/forecast-snapshot'
+import { TubesPlanner } from './_components/tubes-planner'
 
 export default function ProductionPlanningPage() {
   const [data, setData] = useState<DashboardData | null>(null)
@@ -664,6 +666,15 @@ function FormulaPlanner({
     [fgWarehouse, fgFactory, burn, callRounds, prodRounds, today, formula.lead_time_production_min_days],
   )
 
+  // ── Forecast save ──────────────────────────────────────────────────────────
+  const { snapshots, loaded, load: loadSnapshots, addSnapshot, removeSnapshot } = useSavedForecasts(formula.id)
+  const [showHistory, setShowHistory] = useState(false)
+
+  function toggleHistory() {
+    if (!loaded) loadSnapshots()
+    setShowHistory(p => !p)
+  }
+
   function updateRound(setter: React.Dispatch<React.SetStateAction<PlannerRound[]>>, id: string, field: 'date' | 'qty' | 'leadDays', val: string) {
     setter(prev => prev.map(r => r.id === id ? { ...r, [field]: val } : r))
   }
@@ -776,6 +787,36 @@ function FormulaPlanner({
         burn={burn}
         rows={timeline}
       />
+
+      {/* ── Save forecast ───────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-3 pt-1 flex-wrap">
+        <BookmarkCheck className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        <SaveForecastBar
+          payload={{
+            formula_id: formula.id,
+            fg_warehouse_qty: fgWarehouse,
+            fg_factory_qty: fgFactory,
+            burn_rate: burn,
+            call_rounds: callRounds.filter(r => r.date && r.qty),
+            prod_rounds: prodRounds.filter(r => r.date && r.qty),
+          }}
+          onSaved={snap => { addSnapshot(snap); setShowHistory(true) }}
+        />
+        <button
+          onClick={toggleHistory}
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        >
+          ประวัติแผน {snapshots.length > 0 && `(${snapshots.length})`}
+          <ChevronDown className={`h-3 w-3 transition-transform ${showHistory ? 'rotate-180' : ''}`} />
+        </button>
+      </div>
+
+      {showHistory && (
+        <SavedForecastsList snapshots={snapshots} formula={formula} onDelete={removeSnapshot} />
+      )}
+
+      {/* ── Tube runway ─────────────────────────────────────────────────────── */}
+      <TubesPlanner fs={fs} prodRounds={prodRounds} today={today} />
     </div>
   )
 }

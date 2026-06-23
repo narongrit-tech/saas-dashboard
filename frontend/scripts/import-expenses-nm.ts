@@ -142,8 +142,11 @@ function parseSheet(ws: XLSX.WorkSheet): ExpenseRow[] {
 }
 
 async function main() {
-  const filePath = process.argv[2]
-  if (!filePath) throw new Error('Usage: npx tsx scripts/import-expenses-nm.ts <path-to-xlsx>')
+  // Parse --file and --created-by flags
+  const fileIdx = process.argv.indexOf('--file')
+  const filePath = fileIdx >= 0 && fileIdx + 1 < process.argv.length ? process.argv[fileIdx + 1] : process.argv[2]
+  
+  if (!filePath) throw new Error('Usage: npx tsx scripts/import-expenses-nm.ts --file <path-to-xlsx>')
 
   const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(__dirname, filePath)
   if (!fs.existsSync(absPath)) throw new Error(`File not found: ${absPath}`)

@@ -10,7 +10,11 @@ config({ path: path.resolve(__dirname, '../.env.local') })
 
 const USER_ID  = '2c4e254d-c779-4f8a-af93-603dc26e6af0'
 const RAW_DIR  = path.resolve(__dirname, '../../Raw. Data Nimitt Mind')
-const FILE     = path.join(RAW_DIR, 'Order/Shopee/Order.all.20260101_20260131.xlsx')
+
+// Support command line argument for file path, otherwise use May default
+const FILE     = process.argv[2] 
+  ? path.resolve(process.cwd(), process.argv[2])
+  : path.join(RAW_DIR, 'Order/Shopee/Order.all.20260501_20260531.xlsx')
 const BATCH_SZ = 200
 
 function orderLineHash(platform: string, extId: string, product: string, qty: number, amount: number): string {

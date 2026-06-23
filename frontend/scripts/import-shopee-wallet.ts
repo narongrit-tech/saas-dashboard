@@ -9,7 +9,7 @@ config({ path: path.resolve(__dirname, '../.env.local') })
 
 const USER_ID  = '2c4e254d-c779-4f8a-af93-603dc26e6af0'
 const RAW_DIR  = path.resolve(__dirname, '../../Raw. Data Nimitt Mind')
-const FILE     = path.join(RAW_DIR, 'Order/Shopee/Settle/my_balance_transaction_report.shopee.20260101_20260525.xlsx')
+const FILE     = path.join(RAW_DIR, 'Order/Shopee/Settle/my_balance_transaction_report.shopee.20260501_20260531.xlsx')
 const BATCH_SZ = 200
 
 // Same hash algorithm as shopee-wallet-parser.ts (FNV-1a + djb2 + length)

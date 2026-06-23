@@ -7,20 +7,45 @@ const BANGKOK_TZ = 'Asia/Bangkok';
 
 // Column mapping for TikTok Onhold Excel files (case-insensitive)
 const COLUMN_MAPPINGS: Record<string, string[]> = {
-  txn_id: ['order/adjustment id', 'order id', 'adjustment id', 'transaction id'],
-  related_order_id: ['related order id', 'order id'],
-  type: ['type'],
-  estimated_settle_time: ['estimated settle time', 'settle time', 'estimated settlement time'],
+  txn_id: [
+    'order/adjustment id', 'order id', 'adjustment id', 'transaction id',
+    'หมายเลขคำสั่งซื้อ/การปรับ', 'รหัสคำสั่งซื้อ/รายการปรับยอด', 'รหัสคำสั่งซื้อ', 'รหัสการปรับยอด', 'รหัสธุรกรรม',
+  ],
+  related_order_id: [
+    'related order id', 'order id',
+    'หมายเลขคำสั่งซื้อที่เกี่ยวข้อง', 'รหัสคำสั่งซื้อที่เกี่ยวข้อง', 'รหัสคำสั่งซื้อ',
+  ],
+  type: [
+    'type',
+    'ประเภทธุรกรรม', 'ประเภท',
+  ],
+  estimated_settle_time: [
+    'estimated settle time', 'settle time', 'estimated settlement time',
+    'เวลาการชำระเงินโดยประมาณ', 'เวลาชำระเงินโดยประมาณ', 'เวลาชำระเงิน', 'เวลาตัดยอดโดยประมาณ',
+  ],
   estimated_settlement_amount: [
     'total estimated settlement amount',
     'settlement amount',
     'estimated amount',
     'amount',
+    'จำนวนเงินที่ชำระโดยประมาณ', 'ยอดชำระโดยประมาณรวม', 'ยอดชำระ', 'ยอดโดยประมาณ', 'จำนวนเงิน',
   ],
-  unsettled_reason: ['unsettled reason', 'reason'],
-  currency: ['currency'],
-  order_created_date: ['order created time', 'created time', 'order create time'],
-  order_deliver_date: ['order delivered time', 'delivered time', 'deliver time'],
+  unsettled_reason: [
+    'unsettled reason', 'reason',
+    'เหตุผลของการไม่ชำระเงิน', 'สาเหตุที่ยังไม่ชำระ', 'เหตุผล',
+  ],
+  currency: [
+    'currency',
+    'สกุลเงิน',
+  ],
+  order_created_date: [
+    'order created time', 'created time', 'order create time',
+    'เวลาสร้างคำสั่งซื้อ', 'เวลาสร้าง', 'เวลาสร้างออเดอร์',
+  ],
+  order_deliver_date: [
+    'order delivered time', 'delivered time', 'deliver time',
+    'เวลาจัดส่งคำสั่งซื้อ', 'เวลาจัดส่ง', 'เวลาจัดส่งออเดอร์',
+  ],
 };
 
 export interface NormalizedOnholdRow {

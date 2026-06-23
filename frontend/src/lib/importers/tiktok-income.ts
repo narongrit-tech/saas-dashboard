@@ -7,17 +7,36 @@ const BANGKOK_TZ = 'Asia/Bangkok';
 
 // Column mapping for TikTok Income/Settlement Excel files (case-insensitive)
 const COLUMN_MAPPINGS: Record<string, string[]> = {
-  txn_id: ['order/adjustment id', 'transaction id', 'adjustment id'],
-  order_id: ['order id'],
-  type: ['type'],
-  settled_time: ['order settled time', 'settled time', 'settlement time'],
+  txn_id: [
+    'order/adjustment id', 'transaction id', 'adjustment id',
+    'หมายเลขคำสั่งซื้อ/การปรับ', 'รหัสคำสั่งซื้อ/รายการปรับยอด', 'รหัสธุรกรรม', 'รหัสการปรับยอด', 'รหัสคำสั่งซื้อ',
+  ],
+  order_id: [
+    'order id',
+    'รหัสคำสั่งซื้อ',
+  ],
+  type: [
+    'type',
+    'ประเภทธุรกรรม', 'ประเภท',
+  ],
+  settled_time: [
+    'order settled time', 'settled time', 'settlement time',
+    'เวลาที่ชำระคำสั่งซื้อ', 'เวลาที่ชำระเงินสำหรับคำสั่งซื้อ', 'เวลาชำระเงิน', 'เวลาตัดยอด',
+  ],
   settlement_amount: [
     'total settlement amount',
     'settlement amount',
     'total amount',
+    'จำนวนเงินที่ชำระทั้งหมด', 'ยอดชำระรวม', 'ยอดชำระ', 'ยอดรวม',
   ],
-  gross_revenue: ['total revenue', 'gross revenue', 'revenue'],
-  currency: ['currency'],
+  gross_revenue: [
+    'total revenue', 'gross revenue', 'revenue',
+    'รายได้รวม', 'รายได้ขั้นต้น', 'รายได้',
+  ],
+  currency: [
+    'currency',
+    'สกุลเงิน',
+  ],
   // Optional fee columns - will be summed if found
   fees: [
     'platform fee',
@@ -25,6 +44,8 @@ const COLUMN_MAPPINGS: Record<string, string[]> = {
     'transaction fee',
     'commission',
     'fee',
+    'ค่าธรรมเนียมแพลตฟอร์ม', 'ค่าธรรมเนียมการประมวลผลการชำระเงิน',
+    'ค่าธรรมเนียมธุรกรรม', 'ค่าคอมมิชชัน', 'ค่าธรรมเนียม',
   ],
 };
 

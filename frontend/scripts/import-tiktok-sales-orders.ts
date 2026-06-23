@@ -1,7 +1,10 @@
 import path from 'node:path'
 import fs from 'node:fs'
+import { config } from 'dotenv'
 import { parseSalesOrdersExcel, calculateFileHash, computeOrderLineHash } from '../src/lib/importers/tiktok-sales-orders'
 import { createServiceClient } from '../src/lib/supabase/service'
+
+config({ path: path.resolve(__dirname, '../.env.local') })
 
 const BATCH_SIZE = 200
 

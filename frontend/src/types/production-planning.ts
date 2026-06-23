@@ -123,6 +123,19 @@ export interface ReceiveOrderInput {
   notes?: string
 }
 
+export interface ProdForecastSnapshot {
+  id: string
+  formula_id: string
+  created_by: string | null
+  created_at: string
+  label: string | null
+  fg_warehouse_qty: number
+  fg_factory_qty: number
+  burn_rate: number
+  call_rounds: Array<{ id?: string; date: string; qty: string }>
+  prod_rounds: Array<{ id?: string; date: string; qty: string; leadDays?: string }>
+}
+
 export const STOCK_TYPE_LABELS: Record<ProdStockType, string> = {
   fg_warehouse: 'FG คลังเรา',
   fg_factory: 'FG คลังโรงงาน',
