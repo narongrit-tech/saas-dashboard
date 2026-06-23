@@ -1120,17 +1120,31 @@ export async function importSalesChunk(
     const rowsWithExternalSku = salesRows.filter((r) => r.external_order_id && r.sku)
     if (rowsWithExternalSku.length > 0) {
       const externalIds = [...new Set(rowsWithExternalSku.map((r) => r.external_order_id as string))]
-      const { data: existingRows } = await supabase
-        .from('sales_orders')
-        .select('id, order_line_hash, external_order_id, sku')
-        .eq('created_by', workspaceOwnerId)
-        .in('external_order_id', externalIds)
-      const staleIds = (existingRows || [])
+
+      // Batch lookups into groups of 50 to stay under URL length limits.
+      // TikTok order IDs are ~18 chars; 400+ IDs in one .in() would exceed 8 KB.
+      const LOOKUP_BATCH = 50
+      const allExistingRows: Array<{ id: string; order_line_hash: string; sku: string | null }> = []
+      for (let i = 0; i < externalIds.length; i += LOOKUP_BATCH) {
+        const batch = externalIds.slice(i, i + LOOKUP_BATCH)
+        const { data: batchRows, error: batchErr } = await supabase
+          .from('sales_orders')
+          .select('id, order_line_hash, sku')
+          .eq('created_by', workspaceOwnerId)
+          .in('external_order_id', batch)
+        if (batchErr) {
+          console.warn(`[importSalesChunk] Pre-delete lookup batch ${i / LOOKUP_BATCH + 1} error:`, batchErr.message)
+        } else if (batchRows) {
+          allExistingRows.push(...batchRows)
+        }
+      }
+
+      const staleIds = allExistingRows
         .filter((e) => e.sku && !incomingHashes.has(e.order_line_hash))
         .map((e) => e.id)
       if (staleIds.length > 0) {
         await supabase.from('sales_orders').delete().in('id', staleIds)
-        console.log(`[importSalesChunk] Pre-deleted ${staleIds.length} stale rows (hash changed, workspaceOwner=${workspaceOwnerId.slice(0, 8)})`)
+        console.log(`[importSalesChunk] Pre-deleted ${staleIds.length} stale rows (hash changed, owner=${workspaceOwnerId.slice(0, 8)})`)
       }
     }
 
