@@ -13,6 +13,7 @@ import { ORDER_TYPE_LABELS, STOCK_TYPE_LABELS } from '@/types/production-plannin
 import { SaveForecastBar, SavedForecastsList, useSavedForecasts } from './_components/forecast-snapshot'
 import { TubesPlanner, makeEmptyRound } from './_components/tubes-planner'
 import { OilPlanner } from './_components/oil-planner'
+import { PendingOrdersWidget } from './_components/pending-orders-widget'
 
 export default function ProductionPlanningPage() {
   const [data, setData] = useState<DashboardData | null>(null)
@@ -89,36 +90,14 @@ export default function ProductionPlanningPage() {
             <Card>
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
-                  <CardTitle className="text-base">คำสั่งซื้อที่รอรับของ</CardTitle>
+                  <CardTitle className="text-base">คำสั่งซื้อที่รอรับของ ({data.pending_orders.length})</CardTitle>
                   <Link href="/production-planning/orders">
-                    <Button variant="ghost" size="sm">ดูทั้งหมด →</Button>
+                    <Button variant="ghost" size="sm">จัดการทั้งหมด →</Button>
                   </Link>
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="space-y-2">
-                  {data.pending_orders.slice(0, 5).map(order => (
-                    <div key={order.id} className="flex items-center justify-between text-sm py-2 border-b last:border-0">
-                      <div className="flex items-center gap-2">
-                        <Badge variant="outline">{ORDER_TYPE_LABELS[order.order_type]}</Badge>
-                        <span className="text-muted-foreground">{order.formula_name ?? '—'}</span>
-                      </div>
-                      <div className="flex items-center gap-3 text-right">
-                        <span className="font-mono font-medium">
-                          {order.order_type === 'oil'
-                            ? `${Number(order.ordered_qty).toFixed(1)} kg`
-                            : Number(order.ordered_qty).toLocaleString()
-                          }
-                        </span>
-                        {order.expected_at && (
-                          <span className="text-muted-foreground text-xs">
-                            คาดรับ {new Date(order.expected_at).toLocaleDateString('th-TH')}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <PendingOrdersWidget initialOrders={data.pending_orders} />
               </CardContent>
             </Card>
           )}
