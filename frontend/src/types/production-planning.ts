@@ -134,6 +134,12 @@ export interface ProdForecastSnapshot {
   burn_rate: number
   call_rounds: Array<{ id?: string; date: string; qty: string }>
   prod_rounds: Array<{ id?: string; date: string; qty: string; leadDays?: string }>
+  tubes_warehouse_qty: number | null
+  tubes_factory_qty: number | null
+  tube_sent_rounds: Array<{ id?: string; date: string; qty: string }>
+  tube_new_rounds: Array<{ id?: string; date: string; qty: string }>
+  oil_qty_kg: number | null
+  oil_rounds: Array<{ id?: string; date: string; qty: string }>
 }
 
 export const STOCK_TYPE_LABELS: Record<ProdStockType, string> = {

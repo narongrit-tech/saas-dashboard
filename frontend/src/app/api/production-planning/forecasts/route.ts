@@ -35,7 +35,12 @@ export async function POST(request: Request) {
     if (authError || !user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
     const body = await request.json()
-    const { formula_id, label, fg_warehouse_qty, fg_factory_qty, burn_rate, call_rounds, prod_rounds } = body
+    const {
+      formula_id, label,
+      fg_warehouse_qty, fg_factory_qty, burn_rate, call_rounds, prod_rounds,
+      tubes_warehouse_qty, tubes_factory_qty, tube_sent_rounds, tube_new_rounds,
+      oil_qty_kg, oil_rounds,
+    } = body
 
     if (!formula_id) return NextResponse.json({ success: false, error: 'formula_id required' }, { status: 400 })
 
@@ -50,6 +55,12 @@ export async function POST(request: Request) {
         burn_rate: Number(burn_rate),
         call_rounds: call_rounds ?? [],
         prod_rounds: prod_rounds ?? [],
+        tubes_warehouse_qty: tubes_warehouse_qty != null ? Number(tubes_warehouse_qty) : null,
+        tubes_factory_qty:   tubes_factory_qty   != null ? Number(tubes_factory_qty)   : null,
+        tube_sent_rounds:    tube_sent_rounds    ?? [],
+        tube_new_rounds:     tube_new_rounds     ?? [],
+        oil_qty_kg:          oil_qty_kg          != null ? Number(oil_qty_kg)           : null,
+        oil_rounds:          oil_rounds          ?? [],
       })
       .select()
       .single()

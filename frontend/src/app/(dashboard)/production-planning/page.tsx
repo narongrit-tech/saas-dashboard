@@ -11,7 +11,8 @@ import Link from 'next/link'
 import type { DashboardData, FormulaStatus, PlanningAlert, AlertLevel, ProdProductionOrder } from '@/types/production-planning'
 import { ORDER_TYPE_LABELS, STOCK_TYPE_LABELS } from '@/types/production-planning'
 import { SaveForecastBar, SavedForecastsList, useSavedForecasts } from './_components/forecast-snapshot'
-import { TubesPlanner } from './_components/tubes-planner'
+import { TubesPlanner, makeEmptyRound } from './_components/tubes-planner'
+import { OilPlanner } from './_components/oil-planner'
 
 export default function ProductionPlanningPage() {
   const [data, setData] = useState<DashboardData | null>(null)
@@ -631,6 +632,59 @@ function StockProjectionSection({
   )
 }
 
+// ── Stock summary grid ────────────────────────────────────────────────────────
+
+function StockSummaryGrid({ fs, burn }: { fs: FormulaStatus; burn: number }) {
+  const formula = fs.formula
+  const fgW  = fs.layers['fg_warehouse']?.quantity   ?? 0
+  const fgF  = fs.layers['fg_factory']?.quantity     ?? 0
+  const tbW  = fs.layers['tubes_warehouse']?.quantity ?? 0
+  const tbF  = fs.layers['tubes_factory']?.quantity   ?? 0
+  const oil  = formula.uses_oil ? (fs.layers['oil_kg']?.quantity ?? null) : null
+
+  function dosTag(qty: number, b: number) {
+    if (b <= 0 || qty <= 0) return null
+    const d = Math.floor(qty / b)
+    if (d >= 999) return null
+    return <span className="text-[10px] text-muted-foreground block">{d} วัน</span>
+  }
+
+  return (
+    <div className="rounded-lg bg-muted/20 border p-3 space-y-2">
+      <div className="flex items-center gap-3">
+        <span className="font-semibold">{formula.formula_name}</span>
+        <span className="text-xs text-muted-foreground">Burn <span className="font-mono font-medium">{burn.toFixed(1)}</span> หลอด/วัน</span>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+        <div className={`rounded p-2 bg-background border ${fgW > 0 && fgW < burn * 7 ? 'border-orange-300' : ''}`}>
+          <div className="text-muted-foreground">FG คลังเรา</div>
+          <div className={`font-mono font-semibold ${fgW > 0 && fgW < burn * 7 ? 'text-orange-600 dark:text-orange-400' : ''}`}>{fgW.toLocaleString()}</div>
+          {dosTag(fgW, burn)}
+        </div>
+        <div className="rounded p-2 bg-background border">
+          <div className="text-muted-foreground">FG โรงงาน</div>
+          <div className="font-mono font-semibold">{fgF.toLocaleString()}</div>
+          {dosTag(fgF, burn)}
+        </div>
+        <div className="rounded p-2 bg-background border">
+          <div className="text-muted-foreground">หลอด คลังเรา</div>
+          <div className="font-mono font-semibold">{tbW.toLocaleString()}</div>
+        </div>
+        <div className="rounded p-2 bg-background border">
+          <div className="text-muted-foreground">หลอด โรงงาน</div>
+          <div className="font-mono font-semibold">{tbF.toLocaleString()}</div>
+        </div>
+        {oil !== null && (
+          <div className={`rounded p-2 bg-background border ${oil < 5 ? 'border-orange-300' : ''}`}>
+            <div className="text-muted-foreground">Essential Oil</div>
+            <div className={`font-mono font-semibold ${oil < 5 ? 'text-orange-600 dark:text-orange-400' : ''}`}>{oil.toFixed(2)} kg</div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Per-formula planner ───────────────────────────────────────────────────────
 
 function FormulaPlanner({
@@ -650,7 +704,7 @@ function FormulaPlanner({
       .filter(o => o.formula_id === formula.id && o.expected_at && o.order_type === 'call_fg')
       .map(o => ({ id: o.id, date: o.expected_at!.slice(0, 10), qty: String(o.ordered_qty) }))
     while (rows.length < 3) rows.push({ id: genId(), date: '', qty: '' })
-    return rows.slice(0, 5)
+    return rows.slice(0, 10)
   })
 
   const [prodRounds, setProdRounds] = useState<PlannerRound[]>(() => {
@@ -660,6 +714,11 @@ function FormulaPlanner({
     while (rows.length < 2) rows.push({ id: genId(), date: '', qty: '' })
     return rows.slice(0, 5)
   })
+
+  // ── Tube & Oil state lifted here for save ──────────────────────────────────
+  const [tubeSentRounds, setTubeSentRounds] = useState<PlannerRound[]>([makeEmptyRound(), makeEmptyRound()])
+  const [tubeNewRounds, setTubeNewRounds]   = useState<PlannerRound[]>([makeEmptyRound()])
+  const [oilRounds, setOilRounds]           = useState<PlannerRound[]>([makeEmptyRound()])
 
   const timeline = useMemo(
     () => computeUnifiedTimeline(fgWarehouse, fgFactory, burn, callRounds, prodRounds, today, formula.lead_time_production_min_days),
@@ -687,18 +746,8 @@ function FormulaPlanner({
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <span className="font-semibold">{formula.formula_name}</span>
-        <span className="text-xs text-muted-foreground">
-          Burn <span className="font-mono font-medium">{burn.toFixed(1)}</span> หลอด/วัน
-        </span>
-        <span className="text-xs text-muted-foreground">
-          คลังเรา <span className="font-mono font-medium">{fgWarehouse.toLocaleString()}</span>
-          {' · '}
-          โรงงาน <span className="font-mono font-medium">{fgFactory.toLocaleString()}</span>
-        </span>
-      </div>
+      {/* ── Stock summary grid ──────────────────────────────────────────────── */}
+      <StockSummaryGrid fs={fs} burn={burn} />
 
       {/* Input grid: call rounds (left) | production rounds (right) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -721,7 +770,7 @@ function FormulaPlanner({
               </button>
             </div>
           ))}
-          {callRounds.length < 5 && (
+          {callRounds.length < 10 && (
             <button onClick={() => addRound(setCallRounds)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
               <Plus className="h-3 w-3" /> เพิ่มรอบ
             </button>
@@ -799,6 +848,12 @@ function FormulaPlanner({
             burn_rate: burn,
             call_rounds: callRounds.filter(r => r.date && r.qty),
             prod_rounds: prodRounds.filter(r => r.date && r.qty),
+            tubes_warehouse_qty: fs.layers['tubes_warehouse']?.quantity ?? null,
+            tubes_factory_qty:   fs.layers['tubes_factory']?.quantity   ?? null,
+            tube_sent_rounds:    tubeSentRounds.filter(r => r.date && r.qty),
+            tube_new_rounds:     tubeNewRounds.filter(r => r.date && r.qty),
+            oil_qty_kg:          fs.layers['oil_kg']?.quantity ?? null,
+            oil_rounds:          oilRounds.filter(r => r.date && r.qty),
           }}
           onSaved={snap => { addSnapshot(snap); setShowHistory(true) }}
         />
@@ -816,7 +871,17 @@ function FormulaPlanner({
       )}
 
       {/* ── Tube runway ─────────────────────────────────────────────────────── */}
-      <TubesPlanner fs={fs} prodRounds={prodRounds} today={today} />
+      <TubesPlanner
+        fs={fs} prodRounds={prodRounds} today={today}
+        tubeSentRounds={tubeSentRounds} setTubeSentRounds={setTubeSentRounds}
+        tubeNewRounds={tubeNewRounds} setTubeNewRounds={setTubeNewRounds}
+      />
+
+      {/* ── Oil runway ──────────────────────────────────────────────────────── */}
+      <OilPlanner
+        fs={fs} prodRounds={prodRounds} today={today}
+        oilRounds={oilRounds} setOilRounds={setOilRounds}
+      />
     </div>
   )
 }
