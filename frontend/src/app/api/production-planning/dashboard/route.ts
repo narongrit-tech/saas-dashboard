@@ -1,0 +1,199 @@
+import { NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
+import type {
+  DashboardData,
+  FormulaStatus,
+  PlanningAlert,
+  ProdFormulaConfig,
+  ProdStockType,
+  StockLayer,
+} from '@/types/production-planning'
+
+// GET /api/production-planning/dashboard
+export async function GET() {
+  try {
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+    }
+
+    // 1. Load formula configs
+    const { data: configs, error: cfgErr } = await supabase
+      .from('prod_formula_config')
+      .select('*')
+      .eq('active', true)
+      .order('formula_name')
+    if (cfgErr) throw cfgErr
+
+    // 2. Latest stock per formula+type
+    const { data: stockRows, error: stockErr } = await supabase
+      .from('prod_stock_ledger')
+      .select('*')
+      .order('recorded_at', { ascending: false })
+    if (stockErr) throw stockErr
+
+    // Build map: formula_id -> stock_type -> latest row
+    const latestStock = new Map<string, Map<ProdStockType, StockLayer>>()
+    for (const row of stockRows ?? []) {
+      const fid = row.formula_id ?? '__oil__'
+      if (!latestStock.has(fid)) latestStock.set(fid, new Map())
+      const typeMap = latestStock.get(fid)!
+      if (!typeMap.has(row.stock_type)) {
+        typeMap.set(row.stock_type, {
+          stock_type: row.stock_type,
+          quantity: Number(row.quantity),
+          snapshot_date: row.snapshot_date,
+          recorded_at: row.recorded_at,
+        })
+      }
+    }
+
+    // 3. Burn rate: avg daily sales (shipped orders) last 7 days per SKU
+    const sevenDaysAgo = new Date()
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
+    const { data: salesRows, error: salesErr } = await supabase
+      .from('sales_orders')
+      .select('sku, quantity, order_date')
+      .in('status', ['delivered', 'completed', 'shipped', 'Delivered', 'Completed'])
+      .gte('order_date', sevenDaysAgo.toISOString())
+    if (salesErr) throw salesErr
+
+    const skuQty: Record<string, number> = {}
+    for (const row of salesRows ?? []) {
+      if (!row.sku) continue
+      skuQty[row.sku] = (skuQty[row.sku] ?? 0) + (row.quantity ?? 1)
+    }
+
+    // 4. Pending orders
+    const { data: pendingOrders, error: ordErr } = await supabase
+      .from('prod_production_orders')
+      .select('*, prod_formula_config(formula_name)')
+      .eq('status', 'pending')
+      .order('ordered_at', { ascending: false })
+    if (ordErr) throw ordErr
+
+    // 5. Build FormulaStatus per formula
+    const formulas: FormulaStatus[] = (configs ?? []).map((cfg: ProdFormulaConfig) => {
+      const typeMap = latestStock.get(cfg.id) ?? new Map<ProdStockType, StockLayer>()
+
+      const layers: Partial<Record<ProdStockType, StockLayer>> = {}
+      for (const [k, v] of typeMap.entries()) layers[k] = v
+
+      // Oil is keyed separately (formula_id-based for oil rows)
+      if (cfg.uses_oil) {
+        const oilMap = latestStock.get(cfg.id)
+        if (oilMap?.has('oil_kg')) layers['oil_kg'] = oilMap.get('oil_kg')!
+      }
+
+      const burnRatePerDay = (skuQty[cfg.sku_internal] ?? 0) / 7
+
+      const dos = {
+        fg_warehouse: calcDos(layers['fg_warehouse']?.quantity, burnRatePerDay),
+        fg_factory: calcDos(layers['fg_factory']?.quantity, burnRatePerDay),
+        tubes_factory: calcDos(layers['tubes_factory']?.quantity, burnRatePerDay),
+        tubes_warehouse: calcDos(layers['tubes_warehouse']?.quantity, burnRatePerDay),
+        oil_kg: cfg.uses_oil
+          ? calcOilDos(layers['oil_kg']?.quantity, burnRatePerDay, cfg.oil_per_1000_tubes_kg)
+          : null,
+      }
+
+      const alerts = buildAlerts(cfg, dos, burnRatePerDay)
+
+      return { formula: cfg, layers, burn_rate_per_day: burnRatePerDay, days_of_supply: dos, alerts }
+    })
+
+    const data: DashboardData = {
+      formulas,
+      pending_orders: (pendingOrders ?? []).map((o: any) => ({
+        ...o,
+        formula_name: o.prod_formula_config?.formula_name ?? null,
+        prod_formula_config: undefined,
+      })),
+      last_updated: new Date().toISOString(),
+    }
+
+    return NextResponse.json({ success: true, data })
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    return NextResponse.json({ success: false, error: msg }, { status: 500 })
+  }
+}
+
+function calcDos(qty: number | undefined, burnRate: number): number | null {
+  if (qty === undefined || qty === null) return null
+  if (burnRate <= 0) return null
+  return Math.floor(qty / burnRate)
+}
+
+function calcOilDos(
+  oilKg: number | undefined,
+  burnRatePerDay: number,
+  oilPer1000: number,
+): number | null {
+  if (oilKg === undefined || oilKg === null) return null
+  if (burnRatePerDay <= 0) return null
+  const oilPerTube = oilPer1000 / 1000
+  const oilBurnPerDay = burnRatePerDay * oilPerTube
+  return Math.floor(oilKg / oilBurnPerDay)
+}
+
+function buildAlerts(
+  cfg: ProdFormulaConfig,
+  dos: FormulaStatus['days_of_supply'],
+  burnRate: number,
+): PlanningAlert[] {
+  const alerts: PlanningAlert[] = []
+
+  // FG warehouse → call from factory
+  if (dos.fg_warehouse !== null && dos.fg_warehouse <= cfg.alert_fg_days) {
+    alerts.push({
+      level: dos.fg_warehouse <= 3 ? 'critical' : 'warning',
+      action: 'call_fg',
+      message: `FG คลังเรา ${dos.fg_warehouse} วัน — เรียก FG จากโรงงาน`,
+      days_remaining: dos.fg_warehouse,
+      suggested_qty: Math.max(cfg.min_production_qty, Math.ceil(burnRate * 30)),
+    })
+  }
+
+  // Production run
+  const fgTotal = (dos.fg_warehouse ?? 0) + (dos.fg_factory ?? 0)
+  if (dos.fg_warehouse !== null && fgTotal <= cfg.alert_production_days) {
+    alerts.push({
+      level: fgTotal <= 20 ? 'critical' : 'warning',
+      action: 'production',
+      message: `FG รวม ${fgTotal} วัน — ควรสั่งผลิต (lead time ${cfg.lead_time_production_max_days} วัน)`,
+      days_remaining: fgTotal,
+      suggested_qty: Math.max(cfg.min_production_qty, Math.ceil(burnRate * 60)),
+    })
+  }
+
+  // Empty tubes
+  const tubesTotal = (dos.tubes_factory ?? 0) + (dos.tubes_warehouse ?? 0)
+  if (dos.tubes_factory !== null && tubesTotal <= cfg.alert_tubes_days) {
+    alerts.push({
+      level: tubesTotal <= 45 ? 'critical' : 'warning',
+      action: 'tubes',
+      message: `หลอดเปล่ารวม ${tubesTotal} วัน — ควรสั่ง (lead time ${cfg.lead_time_tubes_days} วัน)`,
+      days_remaining: tubesTotal,
+      suggested_qty: Math.max(cfg.min_tubes_qty, Math.ceil(burnRate * 90)),
+    })
+  }
+
+  // Essential oil
+  if (cfg.uses_oil && dos.oil_kg !== null && dos.oil_kg <= cfg.alert_oil_days) {
+    const kgNeeded = Math.max(
+      cfg.min_oil_kg,
+      Math.ceil(((burnRate * 90 * cfg.oil_per_1000_tubes_kg) / 1000) * 10) / 10,
+    )
+    alerts.push({
+      level: dos.oil_kg <= 45 ? 'critical' : 'warning',
+      action: 'oil',
+      message: `Essential Oil ${dos.oil_kg} วัน — ควรสั่ง (lead time ${cfg.lead_time_oil_days} วัน)`,
+      days_remaining: dos.oil_kg,
+      suggested_qty: kgNeeded,
+    })
+  }
+
+  return alerts
+}

@@ -42,6 +42,7 @@ import {
   Video,
   GitMerge,
   Film,
+  Factory,
 } from 'lucide-react'
 
 interface MenuItem {
@@ -177,6 +178,11 @@ const menuGroups: MenuGroup[] = [
         title: 'SKU Mappings',
         href: '/sku-mappings',
         icon: Tags,
+      },
+      {
+        title: 'Production Planning',
+        href: '/production-planning',
+        icon: Factory,
       },
     ],
   },
