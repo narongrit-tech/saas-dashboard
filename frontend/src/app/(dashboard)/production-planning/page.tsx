@@ -50,6 +50,11 @@ export default function ProductionPlanningPage() {
             <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
             รีเฟรช
           </Button>
+          <Link href="/production-planning/procurement">
+            <Button size="sm" variant="outline">
+              📄 เอกสาร QT/IV
+            </Button>
+          </Link>
           <Link href="/production-planning/stock">
             <Button size="sm">
               <Plus className="h-4 w-4 mr-2" />
