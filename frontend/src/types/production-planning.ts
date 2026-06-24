@@ -83,6 +83,7 @@ export interface FormulaStatus {
     oil_kg: number | null
   }
   alerts: PlanningAlert[]
+  use_ledger?: boolean            // true = balance from prod_stock_transactions
 }
 
 export interface PlanningAlert {

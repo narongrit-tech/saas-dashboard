@@ -9,6 +9,8 @@ import type {
   StockLayer,
 } from '@/types/production-planning'
 
+const CANCELLED_STATUSES = ['cancelled', 'Cancelled', 'ยกเลิกคำสั่งซื้อ', 'ยกเลิกแล้ว']
+
 // GET /api/production-planning/dashboard?as_of=YYYY-MM-DD
 export async function GET(request: NextRequest) {
   try {
@@ -18,15 +20,15 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
     }
 
-    // as_of defaults to today Bangkok
+    // as_of: default = now Bangkok; we treat it as end-of-day BKK
     const { searchParams } = new URL(request.url)
     const asOfParam = searchParams.get('as_of')
     const asOf = asOfParam
-      ? new Date(`${asOfParam}T23:59:59+07:00`)   // end of selected day BKK
+      ? new Date(`${asOfParam}T23:59:59+07:00`)
       : new Date()
-    const asOfDateStr = asOf.toISOString().slice(0, 10)   // YYYY-MM-DD for stock filter
+    const asOfDateStr = asOf.toISOString().slice(0, 10)
 
-    // 1. Load formula configs
+    // ── 1. Formula configs ──────────────────────────────────────────────────
     const { data: configs, error: cfgErr } = await supabase
       .from('prod_formula_config')
       .select('*')
@@ -34,32 +36,39 @@ export async function GET(request: NextRequest) {
       .order('formula_name')
     if (cfgErr) throw cfgErr
 
-    // 2. Stock as-of: all rows with snapshot_date <= asOf, then take latest per formula+type
-    const { data: stockRows, error: stockErr } = await supabase
-      .from('prod_stock_ledger')
-      .select('*')
-      .lte('snapshot_date', asOfDateStr)
-      .order('snapshot_date', { ascending: false })
-      .order('recorded_at',   { ascending: false })
-    if (stockErr) throw stockErr
+    // ── 2. Ledger transactions (new) ────────────────────────────────────────
+    const { data: txRows } = await supabase
+      .from('prod_stock_transactions')
+      .select('formula_id, stock_type, quantity_delta, transaction_date')
+      .lte('transaction_date', asOfDateStr)
 
-    // Build map: formula_id -> stock_type -> latest row on or before asOf
-    const latestStock = new Map<string, Map<ProdStockType, StockLayer>>()
-    for (const row of stockRows ?? []) {
-      const fid = row.formula_id ?? '__oil__'
-      if (!latestStock.has(fid)) latestStock.set(fid, new Map())
-      const typeMap = latestStock.get(fid)!
-      if (!typeMap.has(row.stock_type)) {
-        typeMap.set(row.stock_type, {
-          stock_type: row.stock_type,
-          quantity: Number(row.quantity),
-          snapshot_date: row.snapshot_date,
-          recorded_at: row.recorded_at,
-        })
-      }
+    // formula_id -> stock_type -> sum of deltas
+    const txBalance = new Map<string, Map<ProdStockType, number>>()
+    const formulasWithTx = new Set<string>()
+    for (const tx of txRows ?? []) {
+      formulasWithTx.add(tx.formula_id)
+      if (!txBalance.has(tx.formula_id)) txBalance.set(tx.formula_id, new Map())
+      const typeMap = txBalance.get(tx.formula_id)!
+      const prev = typeMap.get(tx.stock_type as ProdStockType) ?? 0
+      typeMap.set(tx.stock_type as ProdStockType, prev + Number(tx.quantity_delta))
     }
 
-    // 3. Burn rate: sales in window ending at asOf
+    // ── 3. Production orders received — auto credit to fg_factory ───────────
+    const { data: receivedOrders } = await supabase
+      .from('prod_production_orders')
+      .select('formula_id, received_qty')
+      .eq('status', 'received')
+      .lte('received_at', asOf.toISOString())
+      .not('received_qty', 'is', null)
+
+    // formula_id -> total received (adds to fg_factory)
+    const productionReceived = new Map<string, number>()
+    for (const o of receivedOrders ?? []) {
+      if (!o.received_qty) continue
+      productionReceived.set(o.formula_id, (productionReceived.get(o.formula_id) ?? 0) + Number(o.received_qty))
+    }
+
+    // ── 4. SKU mappings + cumulative sales up to asOf (auto debit fg_warehouse) ─
     const { data: mappingRows } = await supabase
       .from('inventory_sku_mappings')
       .select('marketplace_sku, sku_internal')
@@ -68,11 +77,25 @@ export async function GET(request: NextRequest) {
       if (m.marketplace_sku && m.sku_internal) skuMap[m.marketplace_sku] = m.sku_internal
     }
 
+    // internalSku -> total sold up to asOf
+    const { data: allSalesUpToDate } = await supabase
+      .from('sales_orders')
+      .select('sku, quantity, status')
+      .not('status', 'in', `(${CANCELLED_STATUSES.map(s => `"${s}"`).join(',')})`)
+      .lte('order_date', asOf.toISOString())
+
+    const totalSoldBySku: Record<string, number> = {}
+    for (const row of allSalesUpToDate ?? []) {
+      if (!row.sku) continue
+      const internal = skuMap[row.sku] ?? row.sku
+      totalSoldBySku[internal] = (totalSoldBySku[internal] ?? 0) + (row.quantity ?? 1)
+    }
+
+    // ── 5. Burn rate: sales in window ending at asOf ────────────────────────
     const maxWindow = Math.max(...(configs ?? []).map((c: ProdFormulaConfig) => c.burn_rate_window_days ?? 7), 7)
     const windowStart = new Date(asOf)
     windowStart.setDate(windowStart.getDate() - maxWindow)
 
-    const CANCELLED_STATUSES = ['cancelled', 'Cancelled', 'ยกเลิกคำสั่งซื้อ', 'ยกเลิกแล้ว']
     const { data: salesRows, error: salesErr } = await supabase
       .from('sales_orders')
       .select('sku, quantity, order_date, status')
@@ -81,7 +104,6 @@ export async function GET(request: NextRequest) {
       .lte('order_date', asOf.toISOString())
     if (salesErr) throw salesErr
 
-    // Build per-sku daily rows: { internalSku -> [{ date, qty }] }
     type DailyRow = { date: string; qty: number }
     const skuDailyRows: Record<string, DailyRow[]> = {}
     for (const row of salesRows ?? []) {
@@ -92,7 +114,31 @@ export async function GET(request: NextRequest) {
       skuDailyRows[internalSku].push({ date, qty: row.quantity ?? 1 })
     }
 
-    // 4. Pending orders
+    // ── 6. Snapshot fallback (for formulas without transactions) ────────────
+    const { data: stockRows, error: stockErr } = await supabase
+      .from('prod_stock_ledger')
+      .select('*')
+      .lte('snapshot_date', asOfDateStr)
+      .order('snapshot_date', { ascending: false })
+      .order('recorded_at',   { ascending: false })
+    if (stockErr) throw stockErr
+
+    const latestSnapshot = new Map<string, Map<ProdStockType, StockLayer>>()
+    for (const row of stockRows ?? []) {
+      const fid = row.formula_id ?? '__oil__'
+      if (!latestSnapshot.has(fid)) latestSnapshot.set(fid, new Map())
+      const typeMap = latestSnapshot.get(fid)!
+      if (!typeMap.has(row.stock_type)) {
+        typeMap.set(row.stock_type, {
+          stock_type: row.stock_type,
+          quantity: Number(row.quantity),
+          snapshot_date: row.snapshot_date,
+          recorded_at: row.recorded_at,
+        })
+      }
+    }
+
+    // ── 7. Pending production orders ────────────────────────────────────────
     const { data: pendingOrders, error: ordErr } = await supabase
       .from('prod_production_orders')
       .select('*, prod_formula_config(formula_name)')
@@ -100,25 +146,57 @@ export async function GET(request: NextRequest) {
       .order('ordered_at', { ascending: false })
     if (ordErr) throw ordErr
 
-    // 5. Build FormulaStatus per formula
+    // ── 8. Build FormulaStatus per formula ───────────────────────────────────
     const formulas: FormulaStatus[] = (configs ?? []).map((cfg: ProdFormulaConfig) => {
-      const typeMap = latestStock.get(cfg.id) ?? new Map<ProdStockType, StockLayer>()
+      const useLedger = formulasWithTx.has(cfg.id)
 
-      const layers: Partial<Record<ProdStockType, StockLayer>> = {}
-      for (const [k, v] of typeMap.entries()) layers[k] = v
+      let layers: Partial<Record<ProdStockType, StockLayer>>
 
-      if (cfg.uses_oil) {
-        const oilMap = latestStock.get(cfg.id)
-        if (oilMap?.has('oil_kg')) layers['oil_kg'] = oilMap.get('oil_kg')!
+      if (useLedger) {
+        // Compute each type from ledger transactions
+        const typeMap = txBalance.get(cfg.id) ?? new Map<ProdStockType, number>()
+
+        const makeLayer = (type: ProdStockType, extra: number = 0): StockLayer | undefined => {
+          const base = typeMap.get(type) ?? 0
+          const qty  = base + extra
+          // only return a layer if there's a transaction entry for this type (or extra > 0)
+          if (!typeMap.has(type) && extra === 0) return undefined
+          return { stock_type: type, quantity: qty, snapshot_date: asOfDateStr, recorded_at: asOf.toISOString() }
+        }
+
+        const prodReceived = productionReceived.get(cfg.id) ?? 0
+        const totalSold    = totalSoldBySku[cfg.sku_internal] ?? 0
+
+        layers = {
+          fg_factory:      makeLayer('fg_factory',      prodReceived),
+          fg_warehouse:    makeLayer('fg_warehouse',    -totalSold),
+          tubes_factory:   makeLayer('tubes_factory'),
+          tubes_warehouse: makeLayer('tubes_warehouse'),
+          oil_kg:          cfg.uses_oil ? makeLayer('oil_kg') : undefined,
+        }
+
+        // Remove undefined keys
+        for (const k of Object.keys(layers) as ProdStockType[]) {
+          if (layers[k] === undefined) delete layers[k]
+        }
+      } else {
+        // Fallback: latest snapshot
+        const typeMap = latestSnapshot.get(cfg.id) ?? new Map<ProdStockType, StockLayer>()
+        layers = {}
+        for (const [k, v] of typeMap.entries()) layers[k] = v
+        if (cfg.uses_oil) {
+          const oilMap = latestSnapshot.get(cfg.id)
+          if (oilMap?.has('oil_kg')) layers['oil_kg'] = oilMap.get('oil_kg')!
+        }
       }
 
-      // Burn rate: override wins; otherwise avg over this formula's window
+      // Burn rate
       let burnRatePerDay: number
       if (cfg.burn_rate_override !== null && cfg.burn_rate_override !== undefined) {
         burnRatePerDay = Number(cfg.burn_rate_override)
       } else {
         const windowDays = cfg.burn_rate_window_days ?? 7
-        const cutoff = new Date(now)
+        const cutoff = new Date(asOf)
         cutoff.setDate(cutoff.getDate() - windowDays)
         const cutoffStr = cutoff.toISOString().slice(0, 10)
         const totalQty = (skuDailyRows[cfg.sku_internal] ?? [])
@@ -128,9 +206,9 @@ export async function GET(request: NextRequest) {
       }
 
       const dos = {
-        fg_warehouse: calcDos(layers['fg_warehouse']?.quantity, burnRatePerDay),
-        fg_factory: calcDos(layers['fg_factory']?.quantity, burnRatePerDay),
-        tubes_factory: calcDos(layers['tubes_factory']?.quantity, burnRatePerDay),
+        fg_warehouse:    calcDos(layers['fg_warehouse']?.quantity,    burnRatePerDay),
+        fg_factory:      calcDos(layers['fg_factory']?.quantity,      burnRatePerDay),
+        tubes_factory:   calcDos(layers['tubes_factory']?.quantity,   burnRatePerDay),
         tubes_warehouse: calcDos(layers['tubes_warehouse']?.quantity, burnRatePerDay),
         oil_kg: cfg.uses_oil
           ? calcOilDos(layers['oil_kg']?.quantity, burnRatePerDay, cfg.oil_per_1000_tubes_kg)
@@ -138,8 +216,7 @@ export async function GET(request: NextRequest) {
       }
 
       const alerts = buildAlerts(cfg, dos, burnRatePerDay)
-
-      return { formula: cfg, layers, burn_rate_per_day: burnRatePerDay, days_of_supply: dos, alerts }
+      return { formula: cfg, layers, burn_rate_per_day: burnRatePerDay, days_of_supply: dos, alerts, use_ledger: useLedger }
     })
 
     const data: DashboardData = {
@@ -165,23 +242,13 @@ function calcDos(qty: number | undefined, burnRate: number): number | null {
   return Math.floor(qty / burnRate)
 }
 
-function calcOilDos(
-  oilKg: number | undefined,
-  burnRatePerDay: number,
-  oilPer1000: number,
-): number | null {
+function calcOilDos(oilKg: number | undefined, burnRatePerDay: number, oilPer1000: number): number | null {
   if (oilKg === undefined || oilKg === null) return null
   if (burnRatePerDay <= 0) return null
-  const oilPerTube = oilPer1000 / 1000
-  const oilBurnPerDay = burnRatePerDay * oilPerTube
-  return Math.floor(oilKg / oilBurnPerDay)
+  return Math.floor(oilKg / (burnRatePerDay * oilPer1000 / 1000))
 }
 
-function buildAlerts(
-  cfg: ProdFormulaConfig,
-  dos: FormulaStatus['days_of_supply'],
-  burnRate: number,
-): PlanningAlert[] {
+function buildAlerts(cfg: ProdFormulaConfig, dos: FormulaStatus['days_of_supply'], burnRate: number): PlanningAlert[] {
   const alerts: PlanningAlert[] = []
 
   if (dos.fg_warehouse !== null && dos.fg_warehouse <= cfg.alert_fg_days) {
@@ -217,10 +284,7 @@ function buildAlerts(
   }
 
   if (cfg.uses_oil && dos.oil_kg !== null && dos.oil_kg <= cfg.alert_oil_days) {
-    const kgNeeded = Math.max(
-      cfg.min_oil_kg,
-      Math.ceil(((burnRate * 90 * cfg.oil_per_1000_tubes_kg) / 1000) * 10) / 10,
-    )
+    const kgNeeded = Math.max(cfg.min_oil_kg, Math.ceil(((burnRate * 90 * cfg.oil_per_1000_tubes_kg) / 1000) * 10) / 10)
     alerts.push({
       level: dos.oil_kg <= 45 ? 'critical' : 'warning',
       action: 'oil',
