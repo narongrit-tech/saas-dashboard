@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { CashflowPlanner } from '@/components/company-cashflow/CashflowPlanner'
 import {
   Table,
   TableBody,
@@ -121,9 +123,21 @@ export default function CompanyCashflowPage() {
       <div>
         <h1 className="text-xl font-bold leading-tight sm:text-2xl">Company Cashflow</h1>
         <p className="text-sm text-muted-foreground">
-          เงินสดคงเหลือระดับบริษัท - แสดงเงินเข้า/ออกจริง (Actual Cash Movements)
+          กระแสเงินสดระดับบริษัท — ประวัติจริงและคาดการณ์ 30 วัน
         </p>
       </div>
+
+      <Tabs defaultValue="history">
+        <TabsList className="mb-4">
+          <TabsTrigger value="history">ประวัติ (Actual)</TabsTrigger>
+          <TabsTrigger value="planner">แผน Cashflow (30 วัน)</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="planner">
+          <CashflowPlanner />
+        </TabsContent>
+
+        <TabsContent value="history">
 
       {/* Source Toggle */}
       <div className="flex items-center gap-2">
@@ -405,6 +419,8 @@ export default function CompanyCashflowPage() {
           </Card>
         </>
       )}
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

@@ -91,6 +91,17 @@ export async function GET(request: NextRequest) {
       totalSoldBySku[internal] = (totalSoldBySku[internal] ?? 0) + (row.quantity ?? 1)
     }
 
+    // ── 4b. Promotional/non-sales withdrawals up to asOf (debit fg_warehouse) ─
+    const { data: withdrawalRows } = await supabase
+      .from('inventory_stock_withdrawals')
+      .select('sku_internal, qty')
+      .lte('doc_date', asOfDateStr)
+
+    const totalWithdrawnBySku: Record<string, number> = {}
+    for (const row of withdrawalRows ?? []) {
+      totalWithdrawnBySku[row.sku_internal] = (totalWithdrawnBySku[row.sku_internal] ?? 0) + Number(row.qty)
+    }
+
     // ── 5. Burn rate: sales in window ending at asOf ────────────────────────
     const maxWindow = Math.max(...(configs ?? []).map((c: ProdFormulaConfig) => c.burn_rate_window_days ?? 7), 7)
     const windowStart = new Date(asOf)
@@ -164,12 +175,13 @@ export async function GET(request: NextRequest) {
           return { stock_type: type, quantity: qty, snapshot_date: asOfDateStr, recorded_at: asOf.toISOString() }
         }
 
-        const prodReceived = productionReceived.get(cfg.id) ?? 0
-        const totalSold    = totalSoldBySku[cfg.sku_internal] ?? 0
+        const prodReceived  = productionReceived.get(cfg.id) ?? 0
+        const totalSold     = totalSoldBySku[cfg.sku_internal] ?? 0
+        const totalWithdrawn = totalWithdrawnBySku[cfg.sku_internal] ?? 0
 
         layers = {
           fg_factory:      makeLayer('fg_factory',      prodReceived),
-          fg_warehouse:    makeLayer('fg_warehouse',    -totalSold),
+          fg_warehouse:    makeLayer('fg_warehouse',    -totalSold - totalWithdrawn),
           tubes_factory:   makeLayer('tubes_factory'),
           tubes_warehouse: makeLayer('tubes_warehouse'),
           oil_kg:          cfg.uses_oil ? makeLayer('oil_kg') : undefined,

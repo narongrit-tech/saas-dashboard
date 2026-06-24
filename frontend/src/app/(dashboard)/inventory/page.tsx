@@ -5,6 +5,7 @@ import { ProductsTab } from '@/components/inventory/ProductsTab'
 import { OpeningBalanceTab } from '@/components/inventory/OpeningBalanceTab'
 import { BundlesTab } from '@/components/inventory/BundlesTab'
 import { MovementsTab } from '@/components/inventory/MovementsTab'
+import { WithdrawalsTab } from '@/components/inventory/WithdrawalsTab'
 
 export default function InventoryPage() {
   return (
@@ -22,6 +23,7 @@ export default function InventoryPage() {
           <TabsTrigger value="opening-balance">Opening Balance</TabsTrigger>
           <TabsTrigger value="bundles">Bundles</TabsTrigger>
           <TabsTrigger value="movements">Movements</TabsTrigger>
+          <TabsTrigger value="withdrawals">ใบเบิกสินค้า</TabsTrigger>
         </TabsList>
 
         <TabsContent value="products" className="space-y-4">
@@ -38,6 +40,10 @@ export default function InventoryPage() {
 
         <TabsContent value="movements" className="space-y-4">
           <MovementsTab />
+        </TabsContent>
+
+        <TabsContent value="withdrawals" className="space-y-4">
+          <WithdrawalsTab />
         </TabsContent>
       </Tabs>
     </div>
