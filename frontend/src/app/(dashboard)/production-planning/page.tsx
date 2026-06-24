@@ -15,16 +15,27 @@ import { TubesPlanner, makeEmptyRound } from './_components/tubes-planner'
 import { OilPlanner } from './_components/oil-planner'
 import { PendingOrdersWidget } from './_components/pending-orders-widget'
 
+function todayBkk(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' }) // YYYY-MM-DD
+}
+
 export default function ProductionPlanningPage() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [asOfDate, setAsOfDate] = useState<string>(todayBkk())
 
-  const load = useCallback(async () => {
+  const isHistorical = asOfDate !== todayBkk()
+
+  const load = useCallback(async (date?: string) => {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/production-planning/dashboard')
+      const d = date ?? asOfDate
+      const url = d !== todayBkk()
+        ? `/api/production-planning/dashboard?as_of=${d}`
+        : '/api/production-planning/dashboard'
+      const res = await fetch(url)
       const json = await res.json()
       if (!json.success) throw new Error(json.error)
       setData(json.data)
@@ -33,9 +44,21 @@ export default function ProductionPlanningPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [asOfDate])
 
-  useEffect(() => { load() }, [load])
+  const handleDateChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const d = e.target.value
+    setAsOfDate(d)
+    load(d)
+  }, [load])
+
+  const resetToToday = useCallback(() => {
+    const today = todayBkk()
+    setAsOfDate(today)
+    load(today)
+  }, [load])
+
+  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="p-6 space-y-6 max-w-6xl">
@@ -45,8 +68,24 @@ export default function ProductionPlanningPage() {
           <h1 className="text-2xl font-bold">Production Planning</h1>
           <p className="text-sm text-muted-foreground mt-1">วางแผนการผลิตและ stock ทุก layer</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+        <div className="flex gap-2 items-center">
+          {/* Date picker */}
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-muted-foreground whitespace-nowrap">ณ วันที่</span>
+            <Input
+              type="date"
+              value={asOfDate}
+              max={todayBkk()}
+              onChange={handleDateChange}
+              className="h-8 w-36 text-sm"
+            />
+            {isHistorical && (
+              <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={resetToToday}>
+                <X className="h-3 w-3 mr-1" />วันนี้
+              </Button>
+            )}
+          </div>
+          <Button variant="outline" size="sm" onClick={() => load()} disabled={loading}>
             <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
             รีเฟรช
           </Button>
@@ -77,6 +116,16 @@ export default function ProductionPlanningPage() {
             <p className="text-destructive text-sm">{error}</p>
           </CardContent>
         </Card>
+      )}
+
+      {isHistorical && !loading && (
+        <div className="flex items-center gap-2 px-4 py-2 rounded-md bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>
+            กำลังดูข้อมูล <strong>ณ วันที่ {new Date(asOfDate + 'T00:00:00+07:00').toLocaleDateString('th-TH', { dateStyle: 'long' })}</strong>
+            {' '}— ยอดคงเหลือและ burn rate คำนวณจากข้อมูล ณ วันนั้น
+          </span>
+        </div>
       )}
 
       {data && (

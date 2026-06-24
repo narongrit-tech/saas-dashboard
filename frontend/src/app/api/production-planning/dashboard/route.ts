@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import type {
   DashboardData,
@@ -9,14 +9,22 @@ import type {
   StockLayer,
 } from '@/types/production-planning'
 
-// GET /api/production-planning/dashboard
-export async function GET() {
+// GET /api/production-planning/dashboard?as_of=YYYY-MM-DD
+export async function GET(request: NextRequest) {
   try {
     const supabase = await createClient()
     const { data: { user }, error: authError } = await supabase.auth.getUser()
     if (authError || !user) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
     }
+
+    // as_of defaults to today Bangkok
+    const { searchParams } = new URL(request.url)
+    const asOfParam = searchParams.get('as_of')
+    const asOf = asOfParam
+      ? new Date(`${asOfParam}T23:59:59+07:00`)   // end of selected day BKK
+      : new Date()
+    const asOfDateStr = asOf.toISOString().slice(0, 10)   // YYYY-MM-DD for stock filter
 
     // 1. Load formula configs
     const { data: configs, error: cfgErr } = await supabase
@@ -26,14 +34,16 @@ export async function GET() {
       .order('formula_name')
     if (cfgErr) throw cfgErr
 
-    // 2. Latest stock per formula+type
+    // 2. Stock as-of: all rows with snapshot_date <= asOf, then take latest per formula+type
     const { data: stockRows, error: stockErr } = await supabase
       .from('prod_stock_ledger')
       .select('*')
-      .order('recorded_at', { ascending: false })
+      .lte('snapshot_date', asOfDateStr)
+      .order('snapshot_date', { ascending: false })
+      .order('recorded_at',   { ascending: false })
     if (stockErr) throw stockErr
 
-    // Build map: formula_id -> stock_type -> latest row
+    // Build map: formula_id -> stock_type -> latest row on or before asOf
     const latestStock = new Map<string, Map<ProdStockType, StockLayer>>()
     for (const row of stockRows ?? []) {
       const fid = row.formula_id ?? '__oil__'
@@ -49,9 +59,7 @@ export async function GET() {
       }
     }
 
-    // 3. Burn rate: load sku mappings then fetch all non-cancelled orders
-    //    Use the largest window across all formulas for a single DB query,
-    //    then aggregate per formula using each formula's own window.
+    // 3. Burn rate: sales in window ending at asOf
     const { data: mappingRows } = await supabase
       .from('inventory_sku_mappings')
       .select('marketplace_sku, sku_internal')
@@ -60,20 +68,17 @@ export async function GET() {
       if (m.marketplace_sku && m.sku_internal) skuMap[m.marketplace_sku] = m.sku_internal
     }
 
-    const now = new Date()
     const maxWindow = Math.max(...(configs ?? []).map((c: ProdFormulaConfig) => c.burn_rate_window_days ?? 7), 7)
-    const windowStart = new Date(now)
+    const windowStart = new Date(asOf)
     windowStart.setDate(windowStart.getDate() - maxWindow)
 
-    // Exclude cancelled only — count all other statuses (pending-shipped orders are real demand)
-    // Cap at now to exclude future-dated import errors
     const CANCELLED_STATUSES = ['cancelled', 'Cancelled', 'ยกเลิกคำสั่งซื้อ', 'ยกเลิกแล้ว']
     const { data: salesRows, error: salesErr } = await supabase
       .from('sales_orders')
       .select('sku, quantity, order_date, status')
       .not('status', 'in', `(${CANCELLED_STATUSES.map(s => `"${s}"`).join(',')})`)
       .gte('order_date', windowStart.toISOString())
-      .lte('order_date', now.toISOString())
+      .lte('order_date', asOf.toISOString())
     if (salesErr) throw salesErr
 
     // Build per-sku daily rows: { internalSku -> [{ date, qty }] }
