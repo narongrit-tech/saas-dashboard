@@ -269,8 +269,8 @@ export function ProductsTab() {
                   <TableCell className="text-right font-semibold">
                     {onHand.toFixed(4)}
                     {reserved > 0 && (
-                      <span className="ml-2 text-xs text-muted-foreground">
-                        (-{reserved.toFixed(4)} reserved)
+                      <span className="ml-2 text-xs text-orange-500">
+                        (-{reserved.toFixed(0)} จัดส่งแล้ว+รอ)
                       </span>
                     )}
                   </TableCell>
