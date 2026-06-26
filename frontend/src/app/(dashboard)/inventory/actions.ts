@@ -2156,12 +2156,14 @@ export async function getInventoryAvailabilityMaps(): Promise<{
     // ============================================
     // 2. GET RESERVED (from sales_orders)
     // ============================================
-    // Query: all in-flight orders — pending (unshipped) + จัดส่งแล้ว (shipped, not yet confirmed)
-    // Excludes: ยกเลิกแล้ว (cancelled) and เสร็จสมบูรณ์ (delivered+COGS'd)
+    // Query: only unshipped orders (still in warehouse, not yet handed to courier)
+    // Excludes shipped (จัดส่งแล้ว) — stock already left warehouse, handled by daily COGS
+    // Excludes cancelled and completed statuses
     const { data: orders, error: ordersError } = await supabase
       .from('sales_orders')
       .select('seller_sku, quantity')
-      .not('status_group', 'in', '("ยกเลิกแล้ว","เสร็จสมบูรณ์")')
+      .is('shipped_at', null)
+      .not('status_group', 'in', '("ยกเลิกแล้ว","เสร็จสมบูรณ์","ยกเลิก","สำเร็จแล้ว","จัดส่งสำเร็จแล้ว")')
 
     if (ordersError) {
       console.error('Error fetching reserved orders:', ordersError)
